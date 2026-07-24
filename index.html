@@ -302,7 +302,10 @@
       <button class="tab" data-v="skills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 8h6l-3 12"/></svg>Скиллы</button>
       <button class="tab" data-v="mcp" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>MCP</button>
     </div>
+    <button id="ctxLabel" class="ctx-label" type="button" title="Открыть контекст в Deck" hidden></button>
     <div class="spacer"></div>
+    <button id="newSessionBtn" class="new-sess-btn" type="button" title="Новая сессия">＋ Новая</button>
+    <button id="usageInd" class="usage-ind" type="button" title="Использование лимитов Claude"><span class="ui-bar"><i id="usageBarFill"></i></span><span class="ui-pct" id="usagePct">—</span></button>
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       <input id="q" type="text" placeholder="фильтр задач…" autocomplete="off" spellcheck="false">
@@ -1315,18 +1318,21 @@ async function runPrompt(payload){
   const clearLive = () => { if (liveMd && liveMd.parentElement) liveMd.parentElement.classList.remove('cx-live'); liveMd = null; };
   const finalizeThink = () => { if (liveThink && liveThink.parentElement) liveThink.parentElement.classList.remove('cx-live'); liveThink = null; };
 
-  // URL потока: без вложений — обычный GET-query (+режим); с вложениями/длинным промтом — POST-стадирование → token
+  const isNewRun = !!payload.newSessionCwd;
+  // URL потока: без вложений/новой сессии — обычный GET-query (+режим); иначе — POST-стадирование → token
   let streamUrl;
-  if (attachments.length){
+  if (attachments.length || isNewRun){
     try {
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
-      const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ prompt: text, mode, sessionFile: currentFile, attachments: slim }) });
+      const body = isNewRun
+        ? { prompt: text, mode, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
+        : { prompt: text, mode, sessionFile: currentFile, attachments: slim };
+      const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.token) throw new Error(d && d.error ? d.error : 'stage failed');
       streamUrl = '/api/chat?token=' + encodeURIComponent(d.token);
     } catch (e){
-      appendHTML(cons, '<div class="cx-note">Ошибка вложения: ' + esc(String(e.message||e)) + '</div>');
+      appendHTML(cons, '<div class="cx-note">Ошибка запуска: ' + esc(String(e.message||e)) + '</div>');
       setComposerBusy(false); scrollBottom();
       if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
       const ridx = cons.querySelector('.cx-run-chat'); if (ridx) ridx.remove();
@@ -1353,14 +1359,18 @@ async function runPrompt(payload){
     const ta2 = document.getElementById('composer-ta'); if (ta2) ta2.focus();
     scrollBottom();
     if (!(opts && opts.silent)) notifyDone(doneFile, doneTitle, 'Claude закончил');   // done/error → уведомление
-    // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление),
-    // чтобы tail не продублировал только что стримленный ход; затем возобновляем tail
     const f = doneFile;
     stopTail();
-    setTimeout(async () => {
-      if (currentFile !== f || streaming) return;
-      try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') tailCount = dd.count; if (dd.active) startTail(f); } catch {}
-    }, 600);
+    if (isNewRun && currentFile){
+      // новая сессия завершилась — .jsonl уже на диске: полноценно открываем её (рейл/сборки/tail)
+      setTimeout(() => { if (currentFile === f) openSession(f); }, 700);
+    } else {
+      // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление)
+      setTimeout(async () => {
+        if (currentFile !== f || streaming) return;
+        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') tailCount = dd.count; if (dd.active) startTail(f); } catch {}
+      }, 600);
+    }
     if (opts && opts.stopped) clearQueue();          // Стоп → чистим очередь (не сыпем дальше)
     else if (opts && opts.done) drainQueue();        // штатное завершение → следующий из очереди
   };
@@ -1392,6 +1402,10 @@ async function runPrompt(payload){
       const el = addBlock(approvalCardHTML(d));
       wireApproval(el, d);
       if (stick) scrollBottom();
+    } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
+      currentFile = d.file; streamingFile = d.file; tailCount = 0;
+      const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = 'Новая сессия';
+      updateCtxLabel();
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
@@ -1721,6 +1735,44 @@ function injectCSS(){
     .cx-run-chat{ display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px; color:var(--text-muted); padding:2px 0; }
     .cx-run-chat .cx-run-txt{ animation:cxPulse 1.4s ease-in-out infinite; }
     @keyframes cxPulse{ 50%{ opacity:.55; } }
+
+    /* топбар: лейбл контекста, индикатор usage, кнопка «Новая» */
+    .ctx-label{ display:inline-flex; align-items:center; gap:7px; max-width:280px; height:30px; padding:0 11px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); cursor:pointer; font-family:var(--ui); transition:.13s; overflow:hidden; }
+    .ctx-label:hover{ border-color:var(--accent); background:var(--surface); }
+    .ctx-label .cl-dot{ width:6px; height:6px; border-radius:50%; background:var(--good); flex:none; animation:pulse 2.4s infinite; }
+    .ctx-label .cl-proj{ font-size:11px; font-weight:700; color:var(--text-muted); flex:none; }
+    .ctx-label .cl-title{ font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .usage-ind{ display:inline-flex; align-items:center; gap:7px; height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); cursor:pointer; transition:.13s; }
+    .usage-ind:hover{ border-color:var(--border-strong); background:var(--surface); }
+    .usage-ind .ui-bar{ width:54px; height:6px; border-radius:4px; background:var(--border); overflow:hidden; }
+    .usage-ind .ui-bar > i{ display:block; height:100%; width:0; border-radius:4px; background:var(--good); transition:width .3s; }
+    .usage-ind .ui-pct{ font-family:var(--mono); font-size:11.5px; font-weight:700; color:var(--text-muted); }
+    .new-sess-btn{ height:30px; padding:0 12px; border-radius:8px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent-ink); font-family:var(--ui); font-size:12.5px; font-weight:600; cursor:pointer; transition:.13s; }
+    .new-sess-btn:hover{ background:var(--surface); }
+
+    /* модалки Deck (usage / новая сессия) */
+    .deck-modal-back{ position:fixed; inset:0; background:rgba(0,0,0,.42); display:none; align-items:flex-start; justify-content:center; z-index:60; padding-top:9vh; }
+    .deck-modal-back.open{ display:flex; }
+    .deck-modal{ width:min(520px,92vw); background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:14px; box-shadow:var(--shadow-lift); overflow:hidden; animation:rise .18s both; }
+    .dm-head{ display:flex; align-items:center; justify-content:space-between; padding:13px 16px; border-bottom:1px solid var(--border); font-weight:640; font-size:14px; }
+    .dm-x{ border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:14px; }
+    .dm-x:hover{ color:var(--text); }
+    .dm-body{ padding:15px 16px; max-height:70vh; overflow-y:auto; }
+    .um-win{ margin-bottom:13px; }
+    .um-row{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:5px 0; }
+    .um-k{ font-size:12.5px; color:var(--text-muted); } .um-ell{ max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .um-v{ font-family:var(--mono); font-size:12px; color:var(--text); }
+    .um-bar{ height:7px; border-radius:4px; background:var(--border); overflow:hidden; margin-top:4px; }
+    .um-bar > i{ display:block; height:100%; border-radius:4px; }
+    .um-warn{ background:var(--warn-soft); color:var(--warn); border:1px solid var(--warn); border-radius:8px; padding:9px 12px; font-size:12.5px; margin-bottom:10px; }
+    .um-sub{ font-size:12px; color:var(--text-muted); margin:8px 0 6px; }
+    .um-note{ font-size:11.5px; color:var(--text-faint); margin-top:10px; }
+    .ns-lbl{ display:block; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); margin:12px 0 5px; }
+    .ns-inp{ width:100%; box-sizing:border-box; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px 11px; color:var(--text); font-family:var(--ui); font-size:13px; }
+    textarea.ns-inp{ resize:vertical; font-family:var(--mono); }
+    .ns-actions{ display:flex; justify-content:flex-end; margin-top:15px; }
+    .ns-start{ height:34px; padding:0 16px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-weight:600; font-size:13px; cursor:pointer; }
+    .ns-start:hover{ filter:brightness(1.06); }
   `;
   (document.head || document.documentElement).appendChild(st);
 }
@@ -1784,9 +1836,139 @@ async function pollSessions(){
   }
   prevWorkingFiles = nowSet;
   if (activeView==='board' || activeView==='status'){ renderNow(); renderBoard(false); hydrateMrs(); hydrateJira(); }  // session-view не трогаем
+  updateCtxLabel(); renderUsageBar();
   polling = false;
 }
 function startPolling(){ if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(pollSessions, 7000); }
+
+/* ---------- аккаунт-лимиты Claude: индикатор в баре + окно usage ---------- */
+let USAGE = null, usageTimer = null;
+async function loadUsage(){
+  try { const r = await fetch('/api/usage', { cache:'no-store' }); USAGE = await r.json(); }
+  catch { USAGE = { available:false, reason:'сеть' }; }
+  renderUsageBar();
+}
+function usageBarPct(){
+  if (USAGE && USAGE.available){          // более узкое из 5ч/нед = более израсходованное
+    const a = USAGE.fiveHour && USAGE.fiveHour.utilization!=null ? USAGE.fiveHour.utilization : 0;
+    const b = USAGE.sevenDay && USAGE.sevenDay.utilization!=null ? USAGE.sevenDay.utilization : 0;
+    return { pct: Math.max(a,b), src:'limits' };
+  }
+  const s = contextSession();             // фолбэк: контекст открытой/свежей сессии
+  return { pct: s ? Math.round((s.ctxPct||0)*100) : 0, src:'context' };
+}
+function renderUsageBar(){
+  const fill = document.getElementById('usageBarFill'), lbl = document.getElementById('usagePct'), ind = document.getElementById('usageInd');
+  if (!fill || !lbl) return;
+  const { pct, src } = usageBarPct();
+  fill.style.width = Math.min(pct,100) + '%';
+  fill.style.background = pct>=80?'var(--bad)':pct>=50?'var(--warn)':'var(--good)';
+  lbl.textContent = pct + '%';
+  if (ind) ind.title = src==='limits' ? 'Лимиты Claude (5ч/нед) — клик для деталей' : 'Контекст сессии (лимиты недоступны) — клик для деталей';
+}
+function fmtReset(iso){
+  if (!iso) return '—';
+  const d = new Date(iso); if (isNaN(+d)) return '—';
+  const mins = Math.round((d - Date.now())/60000);
+  if (mins <= 0) return 'скоро';
+  if (mins < 60) return 'через ' + mins + ' мин';
+  const h = Math.round(mins/60); if (h < 48) return 'через ' + h + ' ч';
+  return d.toLocaleString('ru-RU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+function modalBack(id){
+  let back = document.getElementById(id);
+  if (!back){ back = document.createElement('div'); back.id = id; back.className = 'deck-modal-back'; document.body.appendChild(back);
+    back.addEventListener('click', e => { if (e.target === back) back.classList.remove('open'); }); }
+  return back;
+}
+function openUsageModal(){
+  const back = modalBack('usageBack');
+  const u = USAGE || {};
+  const win = (w, title) => {
+    if (!w) return `<div class="um-row"><span class="um-k">${title}</span><span class="um-v">—</span></div>`;
+    const p = w.utilization==null?0:w.utilization;
+    return `<div class="um-win"><div class="um-row"><span class="um-k">${title}</span><span class="um-v">${p}% · сброс ${esc(fmtReset(w.resetsAt))}</span></div><div class="um-bar"><i style="width:${Math.min(p,100)}%;background:${p>=80?'var(--bad)':p>=50?'var(--warn)':'var(--good)'}"></i></div></div>`;
+  };
+  let body;
+  if (u.available){
+    const extra = u.extra ? `<div class="um-row"><span class="um-k">Доп. кредиты</span><span class="um-v">${esc(String(u.extra.usedCredits))}/${esc(String(u.extra.monthlyLimit))} ${esc(u.extra.currency||'')} · ${Math.round(u.extra.utilization||0)}%</span></div>` : '';
+    body = `${win(u.fiveHour,'5-часовое окно')}${win(u.sevenDay,'Недельное окно')}${extra}<div class="um-note">Подписка: ${esc(u.subscriptionType||'—')} · источник: Claude usage (тот же логин)</div>`;
+  } else {
+    const top = [...SESSIONS].sort((a,b)=>(b.winTokens||0)-(a.winTokens||0)).slice(0,8);
+    const rows = top.map(s=>`<div class="um-row"><span class="um-k um-ell">${esc(s.title||s.project||'—')}</span><span class="um-v">${kTok(s.winTokens)} · ${Math.round((s.ctxPct||0)*100)}%</span></div>`).join('');
+    body = `<div class="um-warn">Аккаунт-лимиты недоступны из Deck: ${esc(u.reason||'нет данных')}</div><div class="um-sub">Контекст открытых сессий (то, что доступно):</div>${rows||'<div class="um-note">нет сессий</div>'}`;
+  }
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Использование и лимиты</span><button class="dm-x" type="button">✕</button></div><div class="dm-body">${body}</div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+  back.classList.add('open');
+}
+
+/* ---------- лейбл текущего контекста (клик → открыть внутри Deck) ---------- */
+function contextSession(){
+  if (currentFile) return SESSION_CACHE[currentFile] || SESSIONS.find(s=>s.file===currentFile) || null;
+  return SESSIONS.find(isWorking) || SESSIONS.find(s=>s.active) || SESSIONS[0] || null;
+}
+function updateCtxLabel(){
+  const el = document.getElementById('ctxLabel'); if (!el) return;
+  const s = contextSession();
+  if (!s || !s.file){ el.hidden = true; return; }
+  el.hidden = false;
+  el.dataset.file = s.file;
+  const dot = isWorking(s) ? '<span class="cl-dot"></span>' : '';
+  el.innerHTML = `${dot}<span class="cl-proj">${esc(s.project||'')}</span><span class="cl-title">${esc(String(s.title||'').slice(0,44))}</span>`;
+}
+
+/* ---------- новая сессия ---------- */
+function openNewSessionDialog(){
+  const back = modalBack('nsBack');
+  const cwds = [...new Set(SESSIONS.map(s=>s.cwd).filter(Boolean))].sort();
+  const opts = cwds.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Новая сессия</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <label class="ns-lbl">Рабочая папка (cwd)</label>
+      <select id="nsCwd" class="ns-inp">${opts || '<option value="">нет известных папок</option>'}</select>
+      <label class="ns-lbl">Первый промпт</label>
+      <textarea id="nsPrompt" class="ns-inp" rows="4" placeholder="Что сделать в новой сессии…"></textarea>
+      <label class="ns-lbl">Режим разрешений</label>
+      <select id="nsMode" class="ns-inp">${modeOpts}</select>
+      <div class="ns-actions"><button id="nsStart" class="ns-start" type="button">Создать и отправить</button></div>
+    </div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('#nsStart').addEventListener('click', ()=>{
+    const cwd = back.querySelector('#nsCwd').value;
+    const prompt = back.querySelector('#nsPrompt').value.trim();
+    const mode = back.querySelector('#nsMode').value;
+    if (!cwd || !prompt){ back.querySelector('#nsPrompt').focus(); return; }
+    back.classList.remove('open');
+    openNewSession(cwd, prompt, mode);
+  });
+  back.classList.add('open');
+  setTimeout(()=>{ const p = back.querySelector('#nsPrompt'); if (p) p.focus(); }, 60);
+}
+function openNewSession(cwd, prompt, mode){
+  stopStream();
+  currentFile = null;
+  returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
+  document.getElementById('viewBoard').style.display='none';
+  document.getElementById('viewSkills').style.display='none';
+  document.getElementById('viewMcp').style.display='none';
+  document.getElementById('viewSession').style.display='flex';
+  document.getElementById('filters').style.display='none';
+  document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
+  const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
+  const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">Новая сессия…</span>`;
+  document.getElementById('backBtn').addEventListener('click', ()=>setView(returnView));
+  document.getElementById('sessionSide').innerHTML = '<div class="sec"><div class="rail-hint">Новая сессия создаётся…</div></div>';
+  document.getElementById('thread').innerHTML = '<div class="cx-console"></div>';
+  wireConsole();
+  sessionMode = mode;
+  renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:'Новая сессия', project: proj });
+  paintMode();
+  loadSkills(cwd);
+  runPrompt({ text: prompt, mode, attachments: [], newSessionCwd: cwd });
+}
 
 /* ---------- загрузка реальных сессий ---------- */
 async function load(){
@@ -1802,10 +1984,19 @@ async function load(){
   startPolling();
   hydrateMrs();        // фоново подтянуть live-MR для карточек
   hydrateJira();       // фоново подтянуть live-статусы Jira
+  updateCtxLabel();
+  loadUsage();
+  if (!usageTimer) usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
+}
+function wireTopbar(){
+  const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
+  const n = document.getElementById('newSessionBtn'); if (n) n.addEventListener('click', openNewSessionDialog);
+  const c = document.getElementById('ctxLabel'); if (c) c.addEventListener('click', () => { if (c.dataset.file) openSession(c.dataset.file); });
 }
 injectCSS();
 ensureStatusTab();
 initNotifyToggle();
+wireTopbar();
 load();
 
 </script>

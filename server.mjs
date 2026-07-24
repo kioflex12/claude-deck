@@ -520,6 +520,46 @@ async function getSdkQuery() {
   return _sdkQuery;
 }
 
+// -------- Аккаунт-лимиты Claude (5ч / 7д) через control-request usage() SDK — тот же OAuth-логин, без инференса. --------
+let _usage = { ts: 0, data: null };
+const USAGE_TTL = 45000;
+async function fetchUsageRaw() {
+  const query = await getSdkQuery();
+  const ac = new AbortController();
+  async function* openInput() { await new Promise((r) => setTimeout(r, 30000)); }   // держим ввод открытым, НЕ шлём turn
+  const q = query({ prompt: openInput(), options: { permissionMode: 'plan', settingSources: [], abortController: ac } });
+  (async () => { try { for await (const _ of q) { /* keep-alive drain */ } } catch {} })();
+  try {
+    let lastErr;
+    for (const delay of [1800, 2500, 4000]) {   // CLI холодный старт — даём подняться, ретраим control-request
+      await new Promise((r) => setTimeout(r, delay));
+      try { return await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(); }
+      catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('usage unavailable');
+  } finally { try { ac.abort(); } catch {} }
+}
+function mapUsage(u) {
+  if (!u || !u.rate_limits_available || !u.rate_limits) return { available: false, reason: 'аккаунт-лимиты недоступны для этого логина/сессии' };
+  const rl = u.rate_limits;
+  const win = (w) => (w ? { utilization: (w.utilization == null ? null : Math.round(w.utilization)), resetsAt: w.resets_at || null } : null);
+  const ex = rl.extra_usage;
+  const extra = ex && ex.is_enabled ? { usedCredits: ex.used_credits, monthlyLimit: ex.monthly_limit, utilization: ex.utilization, currency: ex.currency } : null;
+  return { available: true, subscriptionType: u.subscription_type || null, fiveHour: win(rl.five_hour), sevenDay: win(rl.seven_day), extra };
+}
+async function apiUsage(res) {
+  if (_usage.data && Date.now() - _usage.ts < USAGE_TTL) { sendJSON(res, _usage.data); return; }
+  try {
+    const data = mapUsage(await fetchUsageRaw());
+    _usage = { ts: Date.now(), data };
+    sendJSON(res, data);
+  } catch (e) {
+    const data = { available: false, reason: (e && e.message) || String(e) };
+    _usage = { ts: Date.now(), data };
+    sendJSON(res, data);
+  }
+}
+
 // -------- P2: аппрув инструментов (canUseTool). Читающее — молча allow; пишущее/выполняющее — спросить. --------
 const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
 const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
@@ -592,13 +632,15 @@ async function apiChatPrepare(req, res) {
   const prompt = String(body.prompt || '');
   let mode = String(body.mode || 'default'); if (!VALID_MODES.has(mode)) mode = 'default';
   const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 20) : [];
+  const newSession = body.newSession === true;         // Part 3: создать НОВУЮ сессию (без resume) в cwd
+  const cwd = String(body.cwd || '');
   let bytes = 0;
   for (const a of attachments) bytes += (a && a.dataB64 ? a.dataB64.length : 0) + (a && a.text ? a.text.length : 0);
   if (bytes > STAGE_MAX_BYTES) { sendJSON(res, { error: 'attachments too large (~18MB limit)' }, 413); return; }
   const now = Date.now();
   for (const [k, v] of stagedRequests) if (now - v.ts > 5 * 60 * 1000) stagedRequests.delete(k);   // sweep старьё
   const token = 'st_' + now.toString(36) + Math.random().toString(36).slice(2, 10);
-  stagedRequests.set(token, { sessionFile, prompt, mode, attachments, ts: now });
+  stagedRequests.set(token, { sessionFile, prompt, mode, attachments, newSession, cwd, ts: now });
   sendJSON(res, { token });
 }
 
@@ -612,8 +654,8 @@ async function apiChat(req, res, u) {
   const send = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch { /* поток закрыт */ } };
   const fail = (msg) => { send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };
 
-  // Источник запроса: одноразовый token (P4-стадирование с вложениями/длинным текстом) ИЛИ прямые query-параметры (P1/P3)
-  let relFile, prompt, mode, attachments = [];
+  // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
+  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '';
   const token = u.searchParams.get('token');
   if (token) {
     const staged = stagedRequests.get(token);
@@ -623,22 +665,32 @@ async function apiChat(req, res, u) {
     prompt = staged.prompt || '';
     mode = staged.mode || 'default';
     attachments = Array.isArray(staged.attachments) ? staged.attachments : [];
+    isNew = staged.newSession === true;                             // Part 3: новая сессия без resume
+    newCwd = staged.cwd || '';
   } else {
     relFile = u.searchParams.get('file') || '';
     prompt = u.searchParams.get('prompt') || '';
     mode = u.searchParams.get('mode') || 'default';                 // P3: режим разрешений из чата (shift-tab)
   }
   if (!VALID_MODES.has(mode)) mode = 'default';                     // неизвестное → безопасный default
-  const base = path.resolve(PROJECTS_DIR);
-  const resolved = path.resolve(base, relFile);
-  if (resolved !== base && !resolved.startsWith(base + path.sep)) return fail('traversal');
-  if (!resolved.endsWith('.jsonl')) return fail('not a session file');
   if (!prompt.trim() && !attachments.length) return fail('empty prompt');
 
-  let text = '';
-  try { text = readFileSync(resolved, 'utf8'); } catch { return fail('session not found'); }
-  const sessionId = path.basename(resolved).replace(/\.jsonl$/, '');
-  const cwd = firstString(text, 'cwd') || undefined;
+  // Резолв контекста: новая сессия → cwd напрямую (файла ещё нет); иначе — из файла существующей сессии.
+  let sessionId = null, cwd;
+  if (isNew) {
+    if (!newCwd) return fail('no cwd for new session');
+    cwd = newCwd;
+  } else {
+    const base = path.resolve(PROJECTS_DIR);
+    const resolved = path.resolve(base, relFile);
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) return fail('traversal');
+    if (!resolved.endsWith('.jsonl')) return fail('not a session file');
+    let text = '';
+    try { text = readFileSync(resolved, 'utf8'); } catch { return fail('session not found'); }
+    sessionId = path.basename(resolved).replace(/\.jsonl$/, '');
+    cwd = firstString(text, 'cwd') || undefined;
+  }
+  let sessionKey = sessionId;                                       // для новой сессии станет известен на init
 
   const ac = new AbortController();
   let closed = false;
@@ -647,14 +699,14 @@ async function apiChat(req, res, u) {
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
-    const set = sessionAllow.get(sessionId);
+    const set = sessionKey && sessionAllow.get(sessionKey);
     if (set && set.has(toolName)) return { behavior: 'allow', updatedInput: input };
     const id = 'ap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     send({ type: 'approval', id, tool: toolName, input });
     return await new Promise((resolve) => {
       const finalize = (result) => { pendingApprovals.delete(id); resolve(result); };
       const decide = (decision) => {
-        if (decision === 'always') { addSessionAllow(sessionId, toolName); finalize({ behavior: 'allow', updatedInput: input }); }
+        if (decision === 'always') { if (sessionKey) addSessionAllow(sessionKey, toolName); finalize({ behavior: 'allow', updatedInput: input }); }
         else if (decision === 'allow') { finalize({ behavior: 'allow', updatedInput: input }); }
         else finalize({ behavior: 'deny', message: 'Запрещено пользователем' });
       };
@@ -691,11 +743,10 @@ async function apiChat(req, res, u) {
     sdkPrompt = combinedText || prompt;
   }
 
-  send({ type: 'start', sessionId, cwd: cwd || '' });
+  send({ type: 'start', sessionId: sessionId || '', cwd: cwd || '', isNew });
   try {
     const query = await getSdkQuery();
     const options = {
-      resume: sessionId,
       cwd,
       permissionMode: mode,           // P3: default | acceptEdits | plan | bypassPermissions (из &mode=)
       canUseTool,                     // read-only → авто-allow; мутирующее → SSE approval + ожидание решения
@@ -705,6 +756,7 @@ async function apiChat(req, res, u) {
       abortController: ac,
       maxTurns: 24,
     };
+    if (!isNew) options.resume = sessionId;   // существующая сессия — продолжаем; новая — без resume
     // claude_code-preset + append: дефолтный системный промпт Claude Code ПЛЮС правила проекта (вместо CLAUDE.md-автозагрузки)
     options.systemPrompt = projectInstructions
       ? { type: 'preset', preset: 'claude_code', append: projectInstructions }
@@ -714,6 +766,11 @@ async function apiChat(req, res, u) {
       if (closed) break;
       if (m.type === 'system' && m.subtype === 'init') {
         send({ type: 'system', model: m.model, apiKeySource: m.apiKeySource });
+        if (isNew && m.session_id) {                    // Part 3: узнали id новой сессии — сообщаем клиенту файл, чтобы открыть/тейлить
+          sessionKey = m.session_id;
+          const rel = String(cwd).replace(/[^a-zA-Z0-9]/g, '-') + '/' + m.session_id + '.jsonl';
+          send({ type: 'session', id: m.session_id, file: rel });
+        }
       } else if (m.type === 'stream_event') {
         const ev = m.event;
         if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
@@ -906,6 +963,7 @@ const server = http.createServer((req, res) => {
     sendJSON(res, { cwd, count: skills.length, skills });
     return;
   }
+  if (u.pathname === '/api/usage') { apiUsage(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }
