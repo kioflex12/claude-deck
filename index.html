@@ -514,10 +514,21 @@ function scopeChipsHTML(s){   // полные метки скоупа: клие�
   else if (s.targetEnv) out.push(`<span class="chip sc-env">→ ${esc(s.targetEnv)}</span>`);
   return out.join('');
 }
+// Статус для статус-бара сверху карточки: Jira-карточки — реальный текст Jira; остальные — локальная стадия.
+function cardStatus(s){
+  const jira = (s.wo && JIRA_CACHE[s.wo] && JIRA_CACHE[s.wo].available) ? JIRA_CACHE[s.wo] : null;
+  if (jira && jira.status){
+    const m = jiraColumn(jira.status, jira.category, s);
+    return { text: jira.status, col: m.col || s.wfColumn || 'todo', blocked: m.blocked };
+  }
+  return { text: WF_LABEL[s.wfColumn] || 'Ждёт', col: s.wfColumn || 'todo', blocked: false };
+}
 function cardHTML(s){
   const working = isWorking(s);
-  const jira = (s.wo && JIRA_CACHE[s.wo] && JIRA_CACHE[s.wo].available) ? JIRA_CACHE[s.wo] : null;
-  const blocked = jira ? jiraColumn(jira.status, jira.category, s).blocked : false;
+  const st = cardStatus(s);
+  const blocked = st.blocked;
+  const barCls = 'card-status cs-' + esc(st.col) + (blocked ? ' cs-blocked' : '');
+  const statusBar = `<div class="${barCls}">${blocked ? 'Заблокировано' : esc(st.text)}</div>`;
   const stripe = working ? `class="card stripe" style="--st:var(--good)"` : s.active ? `class="card stripe" style="--st:var(--accent)"` : 'class="card"';
   const pulse = working ? '<span class="pulse"></span>' : '';
   const wfChips = activeView==='status' ? [
@@ -530,13 +541,10 @@ function cardHTML(s){
     `<span class="chip">${esc(s.model)}</span>`,
     `<span class="chip">${s.msgs} сообщ.</span>`,
     s.wo ? `<span class="chip">${esc(s.wo)}</span>` : '',
-    jira ? jiraChipHTML(jira) : '',
     scopeChipsHTML(s),
     wfChips,
   ].join('');
-  const flag = blocked
-    ? `<div class="flag blocked"><span class="dot"></span>blocked</div>`
-    : working
+  const flag = working
     ? `<div class="flag working"><span class="dot"></span>работает</div>`
     : s.active ? `<div class="flag attention"><span class="dot"></span>активна · ${timeAgo(s.mtime)}</div>` : '';
   const buildPill = (s.wfBuildState && s.wfBuildState!=='none')
@@ -554,7 +562,7 @@ function cardHTML(s){
     mrPill = `<a class="pill mr-${s.wfMrState}" href="${esc(s.wfMrUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><span class="d ${s.wfMrState==='merged'?'pass':''}"></span>MR</a>`;
   }
   const foot = `<div class="card-foot">${buildPill}${mrPill}<span class="mini-ctx">${timeAgo(s.mtime)}</span><span class="foot-sep"></span>${ctxMini(s)}</div>`;
-  return `<article ${stripe} tabindex="0" role="button" data-file="${esc(s.file)}"><div class="card-top">${pulse}<span class="wo">${esc(s.project)}</span></div><h3 class="card-title">${esc(s.title)}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
+  return `<article ${stripe} tabindex="0" role="button" data-file="${esc(s.file)}">${statusBar}<div class="card-top">${pulse}<span class="wo">${esc(s.project)}</span></div><h3 class="card-title">${esc(s.title)}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
 }
 function renderBoard(animate){
   const board = document.getElementById('board');
@@ -785,9 +793,13 @@ function buildDot(b){
   if (status==='FAILURE'||status==='ERROR') return { cls:'fail', label:'упал' };
   return { cls:'none', label: status || state || '—' };
 }
+const BASE_BRANCHES = new Set(['preprod','preupdate','master','main','develop','dev','prod','release','head','']);
+function isBaseBranch(b){ return BASE_BRANCHES.has(String(b||'').trim().toLowerCase()); }
 async function loadBuilds(t){
   if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
-  if (!document.getElementById('buildBox') || !t.gitBranch) return;
+  const box0 = document.getElementById('buildBox'); if (!box0 || !t.gitBranch) return;
+  // базовая ветка без WO не идентифицирует сборки контекста — сразу «нет», без мигания «проверяю…» и без фетча
+  if (isBaseBranch(t.gitBranch) && !t.wo){ box0.innerHTML = `<div class="rail-empty">— сборок нет —</div>`; return; }
   const url = '/api/build?branch=' + encodeURIComponent(t.gitBranch) + '&wo=' + encodeURIComponent(t.wo||'');
   const render = async () => {
     let d; try { const r = await fetch(url, { cache:'no-store' }); d = await r.json(); } catch { return false; }
@@ -1665,6 +1677,15 @@ function injectCSS(){
     .chip.jira-new{ color:var(--text-muted); border-color:var(--border-strong); }
     .chip.jira-indeterminate{ color:var(--info); border-color:var(--info-soft); background:var(--info-soft); }
     .chip.jira-done{ color:var(--good); border-color:var(--good-soft); background:var(--good-soft); }
+
+    /* статус-бар сверху карточки — полоса на всю ширину, цвет по колонке */
+    .card-status{ margin:-13px -14px 10px; padding:3px 11px; font-family:var(--mono); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; line-height:1.7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-top-left-radius:var(--radius); border-top-right-radius:var(--radius); }
+    .cs-todo{ background:var(--surface-2); color:var(--text-muted); box-shadow:inset 0 -1px 0 var(--border); }
+    .cs-active{ background:var(--accent-soft); color:var(--accent-ink); }
+    .cs-build{ background:var(--warn-soft); color:var(--warn); }
+    .cs-qa{ background:var(--info-soft); color:var(--info); }
+    .cs-merge{ background:var(--good-soft); color:var(--good); }
+    .cs-blocked{ background:var(--bad-soft); color:var(--bad); }
 
     /* карточка «работает сейчас» (зелёная) + тумблер уведомлений в топбаре */
     .flag.working{ background:var(--good-soft); color:var(--good); }

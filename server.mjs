@@ -65,7 +65,8 @@ function allStrings(text, key) {
 }
 // Рабочая ветка сессии: в файле gitBranch часто скачет (старт/после cleanup — базовая preprod/preupdate).
 // Берём НЕ-базовую, предпочитая WO-ветку; если несколько не-базовых — последнюю; если только базовые — последнюю.
-const BASE_BRANCHES = new Set(['preprod', 'preupdate', 'master', 'main', 'develop']);
+const BASE_BRANCHES = new Set(['preprod', 'preupdate', 'master', 'main', 'develop', 'dev', 'prod', 'release', 'head', '']);
+function isBaseBranch(b) { return BASE_BRANCHES.has(String(b || '').trim().toLowerCase()); }
 function pickWorkingBranch(branches) {
   const uniq = [];
   for (const b of branches) { if (b && !uniq.includes(b)) uniq.push(b); }
@@ -749,10 +750,14 @@ async function tcJson(pathq) {
   return r.json();
 }
 async function tcLatestBuild(btId, branch, wo) {
-  let j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(name:' + encodeURIComponent(branch) + ',default:any),count:1&' + TC_FIELDS);
-  if (j.count && j.build && j.build[0]) return j.build[0];
+  // Точный матч по ветке — ТОЛЬКО для реальной фича/WO-ветки. У базовой (preprod/preupdate/…) он вернул бы
+  // чужой неродственный dev-билд, крутившийся на этой ветке (баг «сборки упали» на контексте без сборок).
+  if (branch && !isBaseBranch(branch)) {
+    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(name:' + encodeURIComponent(branch) + ',default:any),count:1&' + TC_FIELDS);
+    if (j.count && j.build && j.build[0]) return j.build[0];
+  }
   if (wo) {
-    j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(default:any),count:40&' + TC_FIELDS);
+    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(default:any),count:40&' + TC_FIELDS);
     const hit = (j.build || []).find((b) => b.branchName && b.branchName.indexOf(wo) === 0);
     if (hit) return hit;
   }
@@ -763,6 +768,8 @@ async function apiBuild(res, u) {
   const wo = u.searchParams.get('wo') || '';
   if (!TC_TOKEN) { sendJSON(res, { available: false, reason: 'no TEAMCITY_TOKEN in server env', host: TC_HOST }); return; }
   if (!branch) { sendJSON(res, { available: true, host: TC_HOST, branch, builds: [] }); return; }
+  // Базовая ветка без WO не идентифицирует сборки контекста — не дёргаем TeamCity впустую.
+  if (isBaseBranch(branch) && !wo) { sendJSON(res, { available: true, host: TC_HOST, branch, builds: [], reason: 'base-branch' }); return; }
   const cached = _tcCache.get(branch);
   if (cached && Date.now() - cached.ts < TC_TTL) { sendJSON(res, cached.data); return; }
   try {
