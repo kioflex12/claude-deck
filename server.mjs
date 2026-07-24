@@ -313,6 +313,19 @@ function briefResult(content) {
 // Разбор транскрипта в ЛЕНТУ отдельных блоков. Каждый content-элемент каждой user/assistant-строки
 // jsonl = свой блок (kind: user | assistant | thinking | tool) — ничего не склеиваем. Токены хода
 // (message.usage) вешаются метой на последний текст/thinking-блок сообщения.
+// Классификация user-текста по происхождению: не всякая user-строка jsonl — человек. Служебные инжекты
+// (загрузка скиллов помечены ev.isMeta — фильтруется выше), task-notification, вызовы команд, interrupt,
+// Caveat/local-command-stdout — это шум, который нельзя рисовать как «Ты».
+function classifyUserBlock(rawText) {
+  const t = String(rawText || '').replace(SYSREM, '').trim();
+  if (!t) return null;
+  if (t.startsWith('Caveat:') || t.includes('<local-command-stdout>')) return null;   // чистый шум — пропускаем
+  if (t.includes('<task-notification>')) return { kind: 'system', text: '⚙ фоновая задача' };
+  if (t.startsWith('[Request interrupted')) return { kind: 'system', text: '⛔ прервано пользователем' };
+  const cmd = t.match(/<command-name>([\s\S]*?)<\/command-name>/);
+  if (cmd) { const name = cmd[1].trim().replace(/^\//, ''); return { kind: 'command', text: '/' + name }; }
+  return { kind: 'user', text: cap(t) };
+}
 function buildSessionBlocks(text) {
   const blocks = [];
   const toolById = {};
@@ -328,16 +341,21 @@ function buildSessionBlocks(text) {
     if (ev.gitBranch) branches.push(ev.gitBranch);
     msgCount++;
     const role = ev.type === 'assistant' ? 'assistant' : 'user';
+    // Служебная вставка (загрузка скилла / ре-инвок) — не человек, блок не создаём.
+    if (role === 'user' && ev.isMeta === true) continue;
     if (role === 'assistant' && msg.model) model = msg.model;
     const start = blocks.length;
     const content = msg.content;
     if (typeof content === 'string') {
-      const t = content.replace(SYSREM, '').trim();
-      if (t) blocks.push({ kind: role, text: cap(t) });
+      if (role === 'user') { const c = classifyUserBlock(content); if (c) blocks.push(c); }
+      else { const t = content.replace(SYSREM, '').trim(); if (t) blocks.push({ kind: role, text: cap(t) }); }
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (!b || typeof b !== 'object') continue;
-        if (b.type === 'text' && b.text && b.text.trim()) blocks.push({ kind: role, text: cap(b.text.trim()) });
+        if (b.type === 'text' && b.text && b.text.trim()) {
+          if (role === 'user') { const c = classifyUserBlock(b.text); if (c) blocks.push(c); }
+          else blocks.push({ kind: role, text: cap(b.text.trim()) });
+        }
         else if (b.type === 'thinking' && b.thinking && b.thinking.trim()) blocks.push({ kind: 'thinking', text: cap(b.thinking.trim()) });
         else if (b.type === 'tool_use') { const blk = { kind: 'tool', name: b.name || 'tool', arg: briefArg(b.input), result: '' }; if (b.id) toolById[b.id] = blk; blocks.push(blk); }
         else if (b.type === 'tool_result') { const blk = b.tool_use_id && toolById[b.tool_use_id]; if (blk) blk.result = briefResult(b.content); }

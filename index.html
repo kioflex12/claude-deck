@@ -930,6 +930,8 @@ function blockHTML(b){
     const pre = hasRes ? `<pre class="cx-res" hidden>${esc(b.result)}</pre>` : '';
     return `<div class="cx-msg cx-twrap">${row}${pre}</div>`;
   }
+  if (b.kind==='system') return `<div class="cx-msg cx-sys">${esc(b.text||'')}</div>`;         // служебное — приглушённо, не «Ты»
+  if (b.kind==='command') return `<div class="cx-msg cx-cmd"><span class="cx-cmd-ico">⌘</span>${esc(b.text||'')}</div>`;   // вызов команды человеком
   return '';
 }
 function wireConsole(){
@@ -1569,6 +1571,9 @@ function injectCSS(){
     .cx-asst{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 13px; color:var(--text); }
     .cx-asst .cx-role{ color:var(--accent-ink); }
     .cx-meta{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:3px; }
+    .cx-sys{ font-family:var(--mono); font-size:11px; color:var(--text-faint); background:var(--surface-2); border:1px dashed var(--border); border-radius:7px; padding:4px 10px; align-self:flex-start; }
+    .cx-cmd{ display:inline-flex; align-items:center; gap:6px; align-self:flex-start; font-family:var(--mono); font-size:12px; color:var(--text-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:4px 10px; }
+    .cx-cmd .cx-cmd-ico{ color:var(--text-faint); }
     .cx-think{ border:1px dashed var(--border-strong); border-radius:8px; padding:7px 11px; }
     .cx-think-h{ display:inline-flex; align-items:center; gap:6px; background:none; border:0; padding:0; cursor:pointer; font-family:var(--ui); font-size:12px; font-style:italic; color:var(--text-muted); }
     .cx-think-h .cx-tw{ color:var(--text-faint); font-weight:700; }
