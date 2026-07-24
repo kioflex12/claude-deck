@@ -1,0 +1,804 @@
+<title>Deck — доска контекстов</title>
+<style>
+  :root {
+    --bg: #F5F6F8; --bg-elev: #FFFFFF; --surface: #FFFFFF; --surface-2: #FBFBFD;
+    --border: #E4E7EC; --border-strong: #D2D7DF;
+    --text: #1B1E26; --text-muted: #5E6774; --text-faint: #97A0AD;
+    --accent: #C15F3C; --accent-ink: #A34C2E; --accent-soft: rgba(193,95,60,0.10);
+    --good: #1F9D55; --good-soft: rgba(31,157,85,0.12);
+    --warn: #B0740C; --warn-soft: rgba(176,116,12,0.13);
+    --bad:  #D23B3B; --bad-soft:  rgba(210,59,59,0.12);
+    --info: #2F6FEB; --info-soft: rgba(47,111,235,0.12);
+    --shadow: 0 1px 2px rgba(16,20,28,.06), 0 6px 20px rgba(16,20,28,.06);
+    --shadow-lift: 0 2px 4px rgba(16,20,28,.08), 0 14px 34px rgba(16,20,28,.14);
+    --ui: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, monospace;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0E1014; --bg-elev:#14171D; --surface:#171B22; --surface-2:#1C212B;
+      --border:#262C36; --border-strong:#343C48;
+      --text:#E7E9ED; --text-muted:#939BA8; --text-faint:#646E7D;
+      --accent:#E5845E; --accent-ink:#F0A382; --accent-soft:rgba(229,132,94,0.14);
+      --good:#45B871; --good-soft:rgba(69,184,113,0.15);
+      --warn:#E0A93B; --warn-soft:rgba(224,169,59,0.15);
+      --bad:#F0574F; --bad-soft:rgba(240,87,79,0.15);
+      --info:#5C93F0; --info-soft:rgba(92,147,240,0.15);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.34);
+      --shadow-lift:0 2px 6px rgba(0,0,0,.5), 0 16px 40px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#F5F6F8; --bg-elev:#FFFFFF; --surface:#FFFFFF; --surface-2:#FBFBFD;
+    --border:#E4E7EC; --border-strong:#D2D7DF; --text:#1B1E26; --text-muted:#5E6774;
+    --text-faint:#97A0AD; --accent:#C15F3C; --accent-ink:#A34C2E; --accent-soft:rgba(193,95,60,0.10);
+    --good:#1F9D55; --good-soft:rgba(31,157,85,0.12); --warn:#B0740C; --warn-soft:rgba(176,116,12,0.13);
+    --bad:#D23B3B; --bad-soft:rgba(210,59,59,0.12); --info:#2F6FEB; --info-soft:rgba(47,111,235,0.12);
+    --shadow:0 1px 2px rgba(16,20,28,.06), 0 6px 20px rgba(16,20,28,.06);
+    --shadow-lift:0 2px 4px rgba(16,20,28,.08), 0 14px 34px rgba(16,20,28,.14);
+  }
+  :root[data-theme="dark"] {
+    --bg:#0E1014; --bg-elev:#14171D; --surface:#171B22; --surface-2:#1C212B;
+    --border:#262C36; --border-strong:#343C48; --text:#E7E9ED; --text-muted:#939BA8;
+    --text-faint:#646E7D; --accent:#E5845E; --accent-ink:#F0A382; --accent-soft:rgba(229,132,94,0.14);
+    --good:#45B871; --good-soft:rgba(69,184,113,0.15); --warn:#E0A93B; --warn-soft:rgba(224,169,59,0.15);
+    --bad:#F0574F; --bad-soft:rgba(240,87,79,0.15); --info:#5C93F0; --info-soft:rgba(92,147,240,0.15);
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.34);
+    --shadow-lift:0 2px 6px rgba(0,0,0,.5), 0 16px 40px rgba(0,0,0,.5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--ui); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  a { color: inherit; }
+
+  /* topbar */
+  .topbar { display: flex; align-items: center; gap: 16px; padding: 11px 22px; background: var(--bg-elev); border-bottom: 1px solid var(--border); flex: none; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 7px; flex: none; background: linear-gradient(150deg, var(--accent), var(--accent-ink)); display: grid; place-items: center; color: #fff; font-family: var(--mono); font-weight: 700; font-size: 15px; box-shadow: 0 2px 8px var(--accent-soft); }
+  .brand-name { font-weight: 680; font-size: 16px; letter-spacing: -0.01em; }
+  .tag-concept { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 20px; align-self: center; }
+  .tabs { display: flex; gap: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; margin-left: 4px; }
+  .tab { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; cursor: pointer; font-family: var(--ui); font-size: 13px; font-weight: 560; color: var(--text-muted); padding: 6px 13px; border-radius: 7px; transition: .14s; }
+  .tab svg { width: 14px; height: 14px; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  .spacer { flex: 1; }
+  .search { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; min-width: 230px; }
+  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .search svg { color: var(--text-faint); flex: none; }
+  .search input { border: 0; background: transparent; color: var(--text); font-family: var(--mono); font-size: 12.5px; width: 100%; outline: none; }
+  .search input::placeholder { color: var(--text-faint); }
+  .kbd { font-family: var(--mono); font-size: 10px; color: var(--text-faint); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; cursor: pointer; flex: none; }
+  .kbd:hover { color: var(--text); }
+  .filters { display: flex; gap: 6px; }
+  .fchip { font-family: var(--mono); font-size: 12px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; transition: .14s; }
+  .fchip:hover { border-color: var(--border-strong); color: var(--text); }
+  .fchip[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--accent-ink); font-weight: 600; }
+
+  /* now-strip */
+  .now { display: flex; align-items: center; gap: 16px; flex: none; padding: 11px 22px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .now-label { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); display: flex; align-items: center; gap: 7px; }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--good); animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--good-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+  .now-id { font-family: var(--mono); font-weight: 700; color: var(--accent); font-size: 13px; }
+  .now-title { font-weight: 600; }
+  .now-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); display: flex; gap: 14px; align-items: center; }
+  .now-meta b { color: var(--text); font-weight: 600; }
+  .ctxbar { height: 6px; border-radius: 4px; background: var(--border); overflow: hidden; }
+  .ctxbar > i { display: block; height: 100%; border-radius: 4px; }
+  .btn-resume { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 15px; font-family: var(--ui); font-weight: 640; font-size: 13px; cursor: pointer; transition: .14s; box-shadow: 0 2px 10px var(--accent-soft); }
+  .btn-resume.now-btn { margin-left: auto; }
+  .btn-resume:hover { filter: brightness(1.06); transform: translateY(-1px); }
+
+  /* board */
+  .board { flex: 1; display: flex; gap: 16px; padding: 18px 22px 26px; overflow-x: auto; overflow-y: hidden; }
+  .col { flex: 0 0 314px; display: flex; flex-direction: column; min-height: 0; }
+  .col-head { display: flex; align-items: center; gap: 9px; padding: 4px 4px 11px; position: relative; }
+  .col-head::before { content: ""; position: absolute; left: 4px; top: 0; width: 28px; height: 3px; border-radius: 3px; background: var(--dot); }
+  .col-title { font-weight: 660; font-size: 13.5px; margin-top: 6px; }
+  .col-count { font-family: var(--mono); font-size: 11px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px; margin-top: 6px; }
+  .col-body { display: flex; flex-direction: column; gap: 11px; overflow-y: auto; padding: 3px 4px 40px; margin: 0 -4px; flex: 1; }
+  .col-body::-webkit-scrollbar { width: 8px; }
+  .col-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 13px 14px 12px; cursor: pointer; position: relative; overflow: hidden; box-shadow: var(--shadow); transition: transform .14s, box-shadow .14s, border-color .14s; animation: rise .4s both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); border-color: var(--border-strong); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card.stripe::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--st); }
+  .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .wo { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+  .card-title { font-weight: 570; font-size: 13.5px; line-height: 1.32; margin: 0 0 10px; letter-spacing: -0.005em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+  .chip { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .chip.repo { color: var(--text); }
+  .flag { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 560; padding: 5px 9px; border-radius: 7px; margin-bottom: 10px; width: 100%; }
+  .flag.paused { background: var(--warn-soft); color: var(--warn); }
+  .flag.attention { background: var(--accent-soft); color: var(--accent-ink); }
+  .flag.blocked { background: var(--bad-soft); color: var(--bad); }
+  .flag .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+  .card-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px 2px 5px; border-radius: 20px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted); }
+  .pill .d { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .d.pass { background: var(--good); } .d.fail { background: var(--bad); }
+  .d.run { background: var(--warn); animation: blink 1.1s infinite; } @keyframes blink { 50% { opacity: .3; } }
+  .d.none { background: var(--text-faint); }
+  .pill.mr-open { color: var(--info); border-color: var(--info-soft); background: var(--info-soft); }
+  .pill.mr-merged { color: var(--good); border-color: var(--good-soft); background: var(--good-soft); }
+  .foot-sep { flex: 1; }
+  .mini-ctx { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+  .mini-bar { width: 40px; height: 4px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .mini-bar > i { display: block; height: 100%; }
+
+  /* skills */
+  .skills-wrap { flex: 1; display: flex; min-height: 0; }
+  .skills-rail { flex: 0 0 216px; border-right: 1px solid var(--border); background: var(--bg-elev); padding: 16px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+  .rail-label { font-family: var(--mono); font-size: 10px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-faint); padding: 4px 10px 8px; }
+  .cat { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; cursor: pointer; text-align: left; width: 100%; padding: 7px 10px; border-radius: 8px; color: var(--text-muted); font-family: var(--ui); font-size: 13px; transition: .12s; }
+  .cat:hover { background: var(--surface-2); color: var(--text); }
+  .cat[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+  .cat .c-count { margin-left: auto; font-family: var(--mono); font-size: 11px; opacity: .7; }
+  .skills-main { flex: 1; overflow-y: auto; padding: 20px 24px 40px; }
+  .skills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 13px; }
+  .skill-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 15px 13px; box-shadow: var(--shadow); transition: .14s; animation: rise .4s both; }
+  .skill-card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+  .skill-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+  .skill-cmd-tag { font-family: var(--mono); font-size: 12.5px; font-weight: 700; color: var(--accent); }
+  .skill-cat-chip { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-faint); background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; }
+  .skill-does { font-size: 13px; color: var(--text); line-height: 1.45; margin-bottom: 10px; }
+  .skill-trig { font-family: var(--mono); font-size: 11px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 9px; }
+  .skill-trig b { color: var(--text-faint); font-weight: 500; text-transform: uppercase; letter-spacing: .06em; font-size: 9.5px; display: block; margin-bottom: 4px; }
+  .skill-foot { display: flex; align-items: center; gap: 9px; margin-top: 11px; }
+  .skill-run { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; transition: .12s; }
+  .skill-run:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+  .skill-file { font-family: var(--mono); font-size: 10.5px; }
+
+  /* mcp view */
+  #viewMcp { flex-direction: column; }
+  .mcp-main { flex: 1; overflow-y: auto; padding: 22px 24px 40px; }
+  .mcp-head { display: flex; align-items: baseline; gap: 12px; margin: 0 auto 16px; max-width: 1120px; }
+  .mcp-head h2 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+  .mcp-head .sub { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); }
+  .mcp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 13px; max-width: 1120px; margin: 0 auto; }
+  .mcp-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; animation: rise .4s both; }
+  .mcp-card.authwait { border-style: dashed; }
+  .mcp-top { display: flex; align-items: center; gap: 9px; }
+  .mcp-name { font-family: var(--mono); font-weight: 700; font-size: 13.5px; color: var(--text); }
+  .mcp-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; padding: 3px 9px; border-radius: 20px; }
+  .mcp-status.on { color: var(--good); background: var(--good-soft); }
+  .mcp-status.off { color: var(--warn); background: var(--warn-soft); }
+  .mcp-desc { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; flex: 1; }
+  .mcp-foot { display: flex; align-items: center; gap: 10px; }
+  .mcp-cat { font-family: var(--mono); font-size: 10px; color: var(--text-faint); background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; }
+  .mcp-tools { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .mcp-btn { margin-left: auto; font-family: var(--ui); font-size: 12px; font-weight: 560; border-radius: 8px; padding: 6px 12px; cursor: pointer; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); transition: .12s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .mcp-btn:hover { border-color: var(--border-strong); }
+  .mcp-btn.activate { background: var(--accent); color: #fff; border-color: transparent; }
+  .mcp-btn.activate:hover { filter: brightness(1.06); }
+
+  /* session view */
+  #viewSession { flex-direction: column; }
+  .session-bar { display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: var(--bg-elev); border-bottom: 1px solid var(--border); flex: none; }
+  .back { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); border-radius: 8px; padding: 6px 11px; font-family: var(--ui); font-size: 12.5px; cursor: pointer; transition: .14s; }
+  .back:hover { color: var(--text); border-color: var(--border-strong); }
+  .sb-wo { font-family: var(--mono); font-weight: 700; color: var(--accent); font-size: 13px; }
+  .sb-title { font-weight: 620; font-size: 14px; }
+  .sb-jira { font-family: var(--mono); font-size: 10.5px; padding: 3px 9px; border-radius: 20px; background: var(--surface-2); border: 1px solid var(--border); }
+  .session-body { flex: 1; display: flex; min-height: 0; }
+  .session-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .transcript { flex: 1; overflow-y: auto; padding: 26px 28px 8px; }
+  .thread { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  .msg { display: flex; flex-direction: column; gap: 7px; animation: rise .3s both; }
+  .msg-head { display: flex; align-items: center; gap: 9px; }
+  .ava { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 700; flex: none; }
+  .ava.u { background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text-muted); }
+  .ava.a { background: linear-gradient(150deg, var(--accent), var(--accent-ink)); color: #fff; }
+  .who { font-size: 12px; font-weight: 640; color: var(--text-muted); }
+  .msg-body { font-size: 14px; line-height: 1.62; color: var(--text); padding-left: 31px; }
+  .msg.u .msg-body { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; margin-left: 31px; }
+  .msg-body code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+  .msg.u .msg-body code { background: var(--bg-elev); }
+  .tool-row { margin-left: 31px; display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; animation: rise .3s both; }
+  .tool-row .tn { color: var(--accent-ink); font-weight: 700; }
+  .tool-row .ta { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool-row .tstat { color: var(--good); border-left: 1px solid var(--border-strong); padding-left: 8px; }
+  .typing span { display: inline-block; width: 6px; height: 6px; margin: 0 1px; border-radius: 50%; background: var(--text-faint); animation: bounce 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .15s; } .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%,60%,100%{ transform: translateY(0); opacity:.4 } 30%{ transform: translateY(-4px); opacity:1 } }
+
+  .composer { flex: none; padding: 12px 20px 18px; background: var(--bg-elev); border-top: 1px solid var(--border); }
+  .composer-inner { max-width: 820px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 10px 13px 9px; transition: .14s; }
+  .composer-inner:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .composer textarea { border: 0; background: transparent; resize: none; outline: none; color: var(--text); font-family: var(--ui); font-size: 14px; line-height: 1.5; width: 100%; min-height: 22px; max-height: 150px; display: block; }
+  .composer textarea::placeholder { color: var(--text-faint); }
+  .composer-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .model-tag { font-family: var(--mono); font-size: 11px; color: var(--text-faint); display: inline-flex; align-items: center; gap: 6px; }
+  .send-btn { margin-left: auto; width: 30px; height: 30px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; cursor: pointer; display: grid; place-items: center; transition: .14s; }
+  .send-btn:hover { filter: brightness(1.08); }
+  .send-btn:disabled { opacity: .4; cursor: default; filter: none; }
+  .archived-note { max-width: 820px; margin: 0 auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-muted); background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: 11px; padding: 13px 16px; }
+  .empty-session { max-width: 640px; margin: 60px auto; text-align: center; color: var(--text-muted); }
+  .empty-session .es-ic { width: 46px; height: 46px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; margin: 0 auto 16px; color: var(--text-faint); }
+  .empty-session h3 { margin: 0 0 6px; color: var(--text); font-size: 16px; }
+
+  /* right info rail */
+  .session-side { flex: 0 0 322px; border-left: 1px solid var(--border); background: var(--bg-elev); overflow-y: auto; padding: 4px 18px 40px; }
+  .sec { padding: 16px 0; border-bottom: 1px solid var(--border); }
+  .sec:last-child { border-bottom: 0; }
+  .sec-label { font-family: var(--mono); font-size: 10px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 11px; display: flex; align-items: center; gap: 8px; }
+  .sec-label .ll { flex: 1; }
+  .sec-label .st-note { text-transform: none; letter-spacing: 0; font-family: var(--mono); }
+  .desc { font-size: 13px; color: var(--text); line-height: 1.55; }
+  .desc code { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  .stat .k { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 3px; }
+  .stat .v { font-family: var(--mono); font-size: 12.5px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ctx-row { display: flex; align-items: center; gap: 10px; margin-top: 13px; }
+  .ctx-row .ctxbar { flex: 1; height: 7px; }
+  .ctx-pct { font-family: var(--mono); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .k-line { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+  .row-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); margin-bottom: 7px; }
+  .row-item .ri-k { font-family: var(--mono); font-size: 10px; color: var(--text-faint); min-width: 74px; }
+  .row-item .ri-v { font-family: var(--mono); font-size: 11.5px; color: var(--text); word-break: break-all; }
+  .row-item .ri-badge { margin-left: auto; }
+  .build-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 8px; }
+  .plat { font-family: var(--mono); font-weight: 700; font-size: 11.5px; letter-spacing: .04em; min-width: 38px; }
+  .build-state { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; }
+  .side-actions { display: flex; flex-direction: column; gap: 8px; padding: 14px 0 2px; }
+  .btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 13px; font-family: var(--ui); font-weight: 560; font-size: 12.5px; cursor: pointer; transition: .14s; text-decoration: none; }
+  .btn-ghost:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  .notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .notes li { position: relative; padding-left: 15px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+  .notes li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .notes li b { color: var(--text); font-weight: 620; }
+  .notes li.warn::before { background: var(--bad); }
+  .notes code { font-family: var(--mono); font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 4px; border-radius: 5px; }
+
+  /* link */
+  .lnk { color: var(--info); text-decoration: none; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; }
+  .lnk:hover { text-decoration: underline; }
+  .lnk.plain { color: var(--text); }
+  .lnk.plain:hover { color: var(--info); }
+  .ei { width: 10px; height: 10px; opacity: .7; flex: none; }
+
+  /* command palette */
+  .pal-back { position: fixed; inset: 0; background: rgba(10,12,16,.45); backdrop-filter: blur(3px); z-index: 80; display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+  .pal-back.open { display: flex; }
+  .pal { width: min(640px, 92vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lift); overflow: hidden; animation: rise .18s both; }
+  .pal-in { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .pal-in svg { color: var(--text-faint); flex: none; }
+  .pal-in input { border: 0; background: transparent; outline: none; color: var(--text); font-size: 15px; width: 100%; font-family: var(--ui); }
+  .pal-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+  .pal-item { display: flex; align-items: center; gap: 11px; padding: 9px 11px; border-radius: 9px; cursor: pointer; }
+  .pal-item.sel { background: var(--accent-soft); }
+  .pal-type { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 7px; min-width: 54px; text-align: center; flex: none; }
+  .pal-item.sel .pal-type { color: var(--accent-ink); }
+  .pal-label { font-size: 13.5px; color: var(--text); font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pal-sub { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42%; }
+  .pal-empty { padding: 26px; text-align: center; color: var(--text-faint); font-family: var(--mono); font-size: 12px; }
+  .pal-foot { display: flex; gap: 16px; padding: 9px 15px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+
+  .foot-note { flex: none; padding: 9px 22px; border-top: 1px solid var(--border); background: var(--bg-elev); font-family: var(--mono); font-size: 11px; color: var(--text-faint); display: flex; align-items: center; gap: 8px; }
+  .empty { color: var(--text-faint); font-family: var(--mono); font-size: 12px; padding: 20px 6px; text-align: center; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  @media (max-width: 900px) {
+    .session-body { flex-direction: column; }
+    .session-side { flex: none; border-left: 0; border-top: 1px solid var(--border); max-height: 42vh; }
+    .skills-rail { display: none; }
+  }
+  @media (max-width: 720px) { .now-title, .now-meta .hide-sm, .sb-title { display: none; } .search { min-width: 120px; } }
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">D</div><div class="brand-name">Deck</div></div>
+    <span class="tag-concept">концепт</span>
+    <div class="tabs" id="tabs">
+      <button class="tab" data-v="board" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10" y="3" width="6" height="12" rx="1.5"/><rect x="17" y="3" width="4" height="8" rx="1.5"/></svg>Доска</button>
+      <button class="tab" data-v="skills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 8h6l-3 12"/></svg>Скиллы</button>
+      <button class="tab" data-v="mcp" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>MCP</button>
+    </div>
+    <div class="spacer"></div>
+    <label class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="q" type="text" placeholder="фильтр задач…" autocomplete="off" spellcheck="false">
+      <kbd class="kbd" id="palTrigger" title="Командная палитра">Ctrl K</kbd>
+    </label>
+    <div class="filters" id="filters">
+      <button class="fchip" data-f="all" aria-pressed="true">Все</button>
+      <button class="fchip" data-f="client" aria-pressed="false">Клиент</button>
+      <button class="fchip" data-f="backend" aria-pressed="false">Бэкенд</button>
+      <button class="fchip" data-f="statics" aria-pressed="false">Статика</button>
+    </div>
+  </header>
+
+  <div id="viewBoard" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="now" id="now"></div>
+    <main class="board" id="board"></main>
+  </div>
+
+  <div id="viewSkills" style="display:none;flex:1;min-height:0">
+    <div class="skills-wrap"><nav class="skills-rail" id="rail"></nav><div class="skills-main"><div class="skills-grid" id="skillsGrid"></div></div></div>
+  </div>
+
+  <div id="viewMcp" style="display:none;flex-direction:column;flex:1;min-height:0"></div>
+
+  <div id="viewSession" style="display:none;flex:1;min-height:0">
+    <div class="session-bar" id="sessionBar"></div>
+    <div class="session-body">
+      <div class="session-main">
+        <div class="transcript" id="transcript"><div class="thread" id="thread"></div></div>
+        <div class="composer" id="composer"></div>
+      </div>
+      <aside class="session-side" id="sessionSide"></aside>
+    </div>
+  </div>
+
+  <footer class="foot-note">
+    <span>◆</span>
+    <span>Прототип. Ctrl K — командная палитра. Всё обвязано ссылками: ветка → GitLab, MR → страница MR, сборка → TeamCity, задача → Jira. В макете ссылки иллюстративны (наведи — виден адрес), в приложении ведут в реальные системы.</span>
+  </footer>
+</div>
+
+<div class="pal-back" id="palBack">
+  <div class="pal">
+    <div class="pal-in"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><input id="palInput" type="text" placeholder="Перейти к задаче, скиллу, MCP или виду…" autocomplete="off" spellcheck="false"></div>
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span>↑↓ навигация</span><span>↵ выбрать</span><span>esc закрыть</span></div>
+  </div>
+</div>
+
+<script>
+/* base URLs — иллюстративные для GitLab/TeamCity, реальный домен для Jira/коннекторов */
+const JIRA = "https://example.atlassian.net/browse/";
+const GL = "https://gitlab.wo/";
+const TC = "https://teamcity.wo/viewLog.html?buildId=";
+const CONN = "https://claude.ai/settings/connectors";
+const EI = '<svg class="ei" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M7 17 17 7M9 7h8v8"/></svg>';
+const aReal = (href, text, cls='') => `<a class="lnk ${cls}" href="${href}" target="_blank" rel="noopener" title="${href}">${text}${EI}</a>`;
+const aStub = (href, text, cls='') => `<a class="lnk ${cls}" href="#" onclick="return false" title="${href}">${text}${EI}</a>`;
+const repoSlug = r => r.replace(/\s.*$/, '');
+const mrRepo = m => m.target === 'backend' ? 'backend-services' : 'client-unity';
+
+const COLUMNS = [
+  { key:'backlog',  title:'Бэклог',       dot:'var(--text-faint)' },
+  { key:'progress', title:'В работе',      dot:'var(--accent)' },
+  { key:'review',   title:'На ревью / QA', dot:'var(--info)' },
+  { key:'done',     title:'Готово',        dot:'var(--good)' },
+];
+
+const TASKS = [
+  { id:'WO-13848', col:'backlog', title:'Снаряжение — серверная логика Enhance / Reforge', groups:['backend'], scope:['backend','opType 323 / 324'], jira:'TODO',
+    flag:{type:'blocked',label:'Ждёт возобновления WO-13774'},
+    desc:'Серверные обработчики операций усиления и перековки снаряжения (op 323 / 324) — пара к клиентской WO-13774.',
+    session:{state:'none',last:'—',ctx:0,tokens:'— / 1M',msgs:0,model:'—'}, branches:[], mrs:[], builds:[], chat:[],
+    notes:[{t:'Ждёт, пока клиентская часть выйдет из паузы — иначе номера op могут разъехаться.'}] },
+
+  { id:'WO-13891', col:'backlog', title:'Кнопка создания анонса залезает под клавиатуру', groups:['client'], scope:['client · cu1'], jira:'TODO',
+    flag:null, desc:'Кнопка «Создать анонс» уезжает под экранную клавиатуру при открытом поле ввода.',
+    session:{state:'none',last:'—',ctx:0,tokens:'— / 1M',msgs:0,model:'—'}, branches:[], mrs:[], builds:[], chat:[],
+    notes:[{t:'Сосед <b>WO-13890</b> (клавиатура в окнах анонсов) — общий модуль ввода.'},{t:'Спека готова, контекст ещё не заводился.'}] },
+
+  { id:'WO-14019', col:'progress', title:'Невозможно захватить Трон', groups:['backend'], scope:['backend','Map.Service'], jira:'In Progress', current:true,
+    flag:{type:'attention',label:'Проверить деплой follow-up на preupdate'},
+    desc:'Игроки не могут захватить Трон королевства — точка остаётся занятой даже после победного марша.',
+    session:{state:'active',last:'активна · 4 мин назад',ctx:0.42,tokens:'420k / 1M',msgs:96,model:'Opus 4.8'},
+    branches:[{repo:'диагностика',name:'код не трогали'}], mrs:[], builds:[],
+    chat:[
+      {k:'u',t:'Игрок жалуется — не может захватить Трон королевства. Разберись.'},
+      {k:'a',t:'Трон живёт в Map.Service, захват идёт через марш и последующее освобождение точки. Смотрю, что происходит на победном марше.'},
+      {k:'tool',n:'Read',a:'Map.Service/Systems/ThroneCaptureSystem.cs',s:'готово'},
+      {k:'tool',n:'Grep',a:'"CorruptService"',s:'7 совпадений'},
+      {k:'a',t:'Вижу причину. <code>CorruptService.GetCorruptedMarches()</code> возвращает <b>все</b> марши на точке как испорченные — система освобождения считает трон занятым и откатывает захват. Тот же класс бага, что WO-13353 / 13354.'},
+      {k:'u',t:'код пока не трогай. сначала проверь, доехал ли фикс на preupdate'},
+      {k:'a',t:'Резонно — возможно, уже чинилось. Проверяю последний деплой Map.Service.'},
+      {k:'tool',n:'k8s',a:'recent deploys · Map.Service @ preupdate',s:'2 коммита назад'},
+      {k:'a',t:'Follow-up <code>4c525348a</code> (фикс corrupt-цикла) на preupdate <b>ещё не выкачен</b> — последний деплой на 2 коммита старше. Симптом воспроизводится, скорее всего, поэтому. Предлагаю дождаться выката и перепроверить до правок в коде.'} ],
+    notes:[{t:'<b>Root cause:</b> ECS corrupt-цикл трона — CorruptService возвращает все марши.'},{t:'Это <b>не</b> альянс и <b>не</b> клиент — scope backend.'},{t:'TODO: проверить деплой <code>4c525348a</code> на preupdate.',warn:true}] },
+
+  { id:'WO-14010', col:'progress', title:'Кнопка перевода описания альянса', groups:['client'], scope:['client · cu2','preupdate'], jira:'In Progress',
+    flag:{type:'attention',label:'Не закоммичен · ждёт ретеста на preupdate'},
+    desc:'В окне альянса нет кнопки перевода описания — игроки из других языков не понимают текст.',
+    session:{state:'idle',last:'2 ч назад',ctx:0.28,tokens:'210k / 1M',msgs:54,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-2',name:'WO-14010-alliance-translate'}], mrs:[], builds:[],
+    chat:[
+      {k:'u',t:'нужна кнопка перевода описания альянса, как в чате'},
+      {k:'a',t:'Фича вообще не была реализована — делаю client-only в cu2: <code>UiToggleView</code> + <code>TranslateTextRequestCommand</code>.'},
+      {k:'a',t:'<code>translate_text</code> падает 500 на preprod (это не chat <code>translate_message</code>). Дособеру на preupdate, там ретест.'} ],
+    notes:[{t:'<b>Root cause:</b> фича не была реализована — дореализация client-only.'},{t:'Правки в Unity ещё не в git — <b>не откатывать</b> рабочую копию.',warn:true}] },
+
+  { id:'WO-13774', col:'progress', title:'Снаряжение: Enhance / Reforge', groups:['client','statics'], scope:['client · cu1','статика'], jira:'In Progress',
+    flag:{type:'paused',label:'На паузе · C1 готов, C2 в остатке'},
+    desc:'Система улучшения снаряжения: усиление (Enhance) и перековка (Reforge) с предиктами на клиенте.',
+    session:{state:'idle',last:'вчера',ctx:0.66,tokens:'660k / 1M',msgs:184,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-1',name:'WO-13774-gear-enhance-reforge'}], mrs:[], builds:[],
+    chat:[
+      {k:'u',t:'продолжим снаряжение'},
+      {k:'a',t:'Этап C1 (enhance) готов. Остаток — C2 предикты и экран героя C1-5. Окно уже 66% — предлагаю форкнуть чистую сессию, прежде чем продолжать.'} ],
+    notes:[{t:'Клиент (cu1) + статика; серверная часть — <b>WO-13848</b> (op 323 / 324).'},{t:'Контекст крупный (66%) — при возобновлении форкнуть сессию.'}] },
+
+  { id:'WO-13890', col:'review', title:'Клавиатура перекрывает окна анонсов и голосований', groups:['client'], scope:['client · cu1'], jira:'Ready To QA',
+    flag:{type:'attention',label:'Ждёт device-verify смены поля'},
+    desc:'Экранная клавиатура перекрывает поля ввода в окнах анонсов и голосований.',
+    session:{state:'idle',last:'3 ч назад',ctx:0.51,tokens:'510k / 1M',msgs:118,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-1',name:'WO-13914-emyashev-bugs'}], mrs:[{id:'!3050',num:'3050',state:'open',target:'preprod'}],
+    builds:[{platform:'AND',state:'run',num:'в очереди',id:''},{platform:'iOS',state:'none',num:'—',id:''}],
+    chat:[
+      {k:'u',t:'клавиатура перекрывает окно анонса'},
+      {k:'a',t:'Root cause — сырой <code>TMP_InputField</code> в root тянет фокус. Фикс через <code>KeyboardVisibilityTracker</code> + <code>restoreOriginalTextOnEscape=false</code>. Основные симптомы ушли, нужен device-verify.'} ],
+    notes:[{t:'<b>Root cause:</b> сырой TMP_InputField в root окна тянул фокус.'},{t:'Сборку под device-verify ставит разработчик.'}] },
+
+  { id:'WO-13675', col:'review', title:'Кнопка авто-перевода наезжает на бабл', groups:['client'], scope:['client · cu3'], jira:'Ready To QA',
+    flag:null, desc:'Кнопка авто-перевода в чате наезжает на пузырь сообщения на узких темах.',
+    session:{state:'idle',last:'2 дня назад',ctx:0.34,tokens:'340k / 1M',msgs:71,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-3',name:'WO-13914-from-preupdate'}], mrs:[{id:'!3088',num:'3088',state:'draft',target:'preupdate'}],
+    builds:[{platform:'AND',state:'pass',num:'163812',id:'163812'},{platform:'iOS',state:'pass',num:'163813',id:'163813'}],
+    chat:[{k:'a',t:'Фикс: <code>HorizontalPaddingFromBubble</code> 110 → 33 + <code>NeedsIconsRow</code>. Перенёс на сборную WO-13914.'}],
+    notes:[{t:'MR на preprod (!3038 / !3050) закрыты в пользу preupdate.'}] },
+
+  { id:'WO-12712', col:'review', title:'Reply-ник в чате', groups:['client'], scope:['client · cu1'], jira:'Ready To QA',
+    flag:null, desc:'В превью ответа (reply) не отображается ник автора исходного сообщения.',
+    session:{state:'archived',last:'архив',ctx:0.22,tokens:'220k / 1M',msgs:44,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-1',name:'WO-12712-chat-reply-nickname'}], mrs:[{id:'!2684',num:'2684',state:'open',target:'preprod'}],
+    builds:[{platform:'AND',state:'pass',num:'162901',id:'162901'},{platform:'iOS',state:'pass',num:'162902',id:'162902'}],
+    chat:[{k:'a',t:'Добавил ник автора в reply-превью. MR !2684 открыт, задача в Ready To QA.'}], notes:[{t:'Отображение ника автора в reply-превью сообщения.'}] },
+
+  { id:'WO-12476', col:'review', title:'Аналитика по аватаркам', groups:['client','backend'], scope:['client · cu2','backend'], jira:'Blocked',
+    flag:{type:'blocked',label:'Заблокирована апрувом сервера'},
+    desc:'Сбор аналитики по использованию аватарок игроками (клиентские факты + серверная приёмка).',
+    session:{state:'idle',last:'5 дней назад',ctx:0.47,tokens:'470k / 1M',msgs:132,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-2',name:'WO-12476-avatar-analytics'}], mrs:[{id:'!2833',num:'2833',state:'open',target:'preprod'},{id:'!1099',num:'1099',state:'open',target:'backend'}],
+    builds:[{platform:'AND',state:'pass',num:'161540',id:'161540'},{platform:'iOS',state:'fail',num:'161541',id:'161541'}],
+    chat:[{k:'a',t:'Код-комплит, факты льются на preprod. Дальше — ждём апрув серверного MR, двигать нельзя.'}],
+    notes:[{t:'Код-комплит, факты уже льются на preprod.'},{t:'<b>Блокер:</b> ждёт апрув серверного MR.',warn:true},{t:'iOS-сборка красная — перезапустить перед мержем.',warn:true}] },
+
+  { id:'WO-13919', col:'done', title:'Дубляж и вёрстка анонсов после пересоздания', groups:['client'], scope:['client · cu1'], jira:'Done',
+    flag:null, desc:'После пересоздания анонс дублируется и ломается вёрстка закреплённой шапки.',
+    session:{state:'archived',last:'архив',ctx:0.58,tokens:'580k / 1M',msgs:161,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-1',name:'WO-13919-announcement-recreate'}], mrs:[{id:'!3050',num:'3050',state:'merged',target:'preprod'}],
+    builds:[{platform:'AND',state:'pass',num:'163906',id:'163906'},{platform:'iOS',state:'pass',num:'163907',id:'163907'}],
+    chat:[{k:'a',t:'Оба бага в одном MR !3050. Высота шапки — size-helper по своим cell-view. Play-verify прошёл, dev-сборки 163906 / 163907.'}],
+    notes:[{t:'Высота закреп-шапки — через size-helper по собственным cell-view карточки.'}] },
+
+  { id:'WO-13302', col:'done', title:'Комментарии в анонсах и голосованиях', groups:['client'], scope:['client · cu3'], jira:'Done',
+    flag:null, desc:'Добавить комментарии к анонсам и голосованиям в альянс-чате.',
+    session:{state:'archived',last:'архив',ctx:0.39,tokens:'390k / 1M',msgs:88,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-3',name:'WO-13302-announcement-comments'}], mrs:[{id:'!2884',num:'2884',state:'merged',target:'preprod'}],
+    builds:[{platform:'AND',state:'pass',num:'162210',id:'162210'},{platform:'iOS',state:'pass',num:'162211',id:'162211'}],
+    chat:[{k:'a',t:'Высота карточки + рефреш скроллера. MR !2884 влит.'}], notes:[{t:'Высота карточки + рефреш скроллера. MR влит.'}] },
+
+  { id:'WO-13463', col:'done', title:'Quick Join — окно вступления в альянс', groups:['client'], scope:['client · cu2→cu3'], jira:'Done',
+    flag:null, desc:'Окно быстрого вступления в альянс (Quick Join) с реальным альянсом и спиннером.',
+    session:{state:'archived',last:'архив',ctx:0.44,tokens:'440k / 1M',msgs:109,model:'Opus 4.8'},
+    branches:[{repo:'client-unity-3',name:'WO-13463-quick-join-window'}], mrs:[{id:'!2953',num:'2953',state:'merged',target:'preprod'},{id:'!2968',num:'2968',state:'merged',target:'preprod'}],
+    builds:[{platform:'AND',state:'pass',num:'161980',id:'161980'},{platform:'iOS',state:'pass',num:'161981',id:'161981'}],
+    chat:[{k:'a',t:'Готово. Попутно чинили краш <code>City.Map null</code> → guard <code>IsMapCityValid()</code>. MR !2953 + !2968 влиты.'}], notes:[{t:'Попутно чинили краш <code>City.Map null</code> → guard <code>IsMapCityValid()</code>.'}] },
+];
+
+const SKILLS = [
+  { cmd:'next-task', cat:'workflow', does:'Взять верхнюю TODO-задачу с готовой AI-спекой, перевести в InProgress и провести clarify-сессию.', trig:'«следующая задача», «дай задачу в работу»' },
+  { cmd:'dev-workflow', cat:'workflow', does:'Оркестратор задач: start / next / status / list по WO-XXXX.', trig:'«/dev-workflow next», «статус задачи»' },
+  { cmd:'commit-work-result', cat:'workflow', does:'Собрать корректный commit message по правилам проекта и закоммитить результат.', trig:'«закоммить результат», «оформи коммит»' },
+  { cmd:'estimate-task', cat:'workflow', does:'Предварительная оценка трудозатрат (T-shirt + диапазон) с калибровкой под AI-разработку.', trig:'«оцени задачу», «сколько займёт WO-XXXX»' },
+  { cmd:'bugfix', cat:'bugfix', does:'Структурный багфикс: гипотезы, диагностические логи, документация в docs/specs/fixes.', trig:'«почини баг», «разберись почему падает»' },
+  { cmd:'bugfix-preprod', cat:'bugfix', does:'Тихий флоу починки от актуального preprod: ветка → фикс → MR → Ready To QA → Jira → Discord.', trig:'«багфикс препрод <WO> <target>»' },
+  { cmd:'already-fixed', cat:'bugfix', does:'Проверить, не починил ли кто-то уже — скан связанных задач Jira + свежих мержей.', trig:'«уже пофикшено?», перед гипотезами' },
+  { cmd:'batchfix', cat:'bugfix', does:'Эпик-пакет багфиксов: один эпик + общая ветка вместо per-task MR.', trig:'«создай эпик багов», «добавь баг в батчфикс»' },
+  { cmd:'jira-report', cat:'jira', does:'Компактный комментарий в Jira: track / qa / done / bug / blocker / plan.', trig:'«отпиши в jira», «отчёт по задаче»' },
+  { cmd:'jira-link', cat:'jira', does:'Привязать личный аккаунт Jira через OAuth — тикеты и комментарии от твоего имени.', trig:'«привяжи jira», «тикеты от моего имени»' },
+  { cmd:'daily-report', cat:'jira', does:'Дейли «Делал / В планах» по вчерашним коммитам и багам в работе.', trig:'«сделай дейли», «что я делал вчера»' },
+  { cmd:'sql-patch', cat:'statics', does:'Создать SQL-патч к статика-БД (идемпотентно + GRANT/OWNER для новых таблиц).', trig:'«новый sql патч», «добавь колонку в статику»' },
+  { cmd:'apply-sql-patch', cat:'statics', does:'Накатить db-patches.sql на статика-БД окружения (v<version>-<env>).', trig:'«накатить патч на статику»' },
+  { cmd:'statics-explorer', cat:'statics', does:'Читать игровую статику (герои, здания, эффекты, цены) с CDN любой версии.', trig:'«покажи статику героя», «цена здания»' },
+  { cmd:'create-mapper', cat:'statics', does:'Полный пайплайн маппера статики по управляющей Google-таблице.', trig:'«создай маппер», «смаппь таблицу»' },
+  { cmd:'create-window', cat:'client', does:'Скаффолд нового Unity-окна: код, префаб, addressable, DI-биндинг.', trig:'«создай окно», «новое окно»' },
+  { cmd:'prefab-builder', cat:'client', does:'Свёрстать uGUI по макету через Unity MCP, переиспользуя UIKit-префабы.', trig:'«свёрстай по макету», «собери панель»' },
+  { cmd:'create-operation', cat:'client', does:'Создать op/команду клиент↔сервер, подобрать opType по Confluence-реестру.', trig:'«новая операция», «новый opType»' },
+  { cmd:'deploy', cat:'infra', does:'Запустить деплой бэкенд-сервиса или клиентской сборки в TeamCity.', trig:'«/deploy client-android squad-6»' },
+  { cmd:'gitlab-mr', cat:'infra', does:'Создать / смёржить / проверить MR в GitLab для sub-repos.', trig:'«/gitlab-mr WO-XXXX», «создай MR»' },
+  { cmd:'merge', cat:'infra', does:'Интерактивный git merge с активным разрешением конфликтов.', trig:'«смёржи ветку», «разреши конфликты»' },
+  { cmd:'fix-squad', cat:'infra', does:'Диагностика и починка типовых пост-wipe поломок squad-окружения.', trig:'«почини сквад N», «что не так со squad-N»' },
+  { cmd:'db-investigator', cat:'data', does:'Read-only SQL по игровым БД (town/map/shared), статике и ClickHouse на любом окружении.', trig:'«посмотри в town/map», «стейт игрока»' },
+  { cmd:'get-user', cat:'data', does:'Найти активного игрока по уровню водокачки на окружении.', trig:'«найди игрока», «дай юзера с водокачкой N»' },
+  { cmd:'e2e-game-play', cat:'e2e', does:'Автономный прогон игровых сценариев в живом Unity-клиенте.', trig:'«пройди сценарий», «сыграй до X»' },
+  { cmd:'google-sheets', cat:'sheets', does:'Чтение / запись Google Sheets под личным аккаунтом (ADC, корпоративный OAuth).', trig:'«работа с таблицами», «выгрузи лист»' },
+  { cmd:'skills-wiki', cat:'nav', does:'Каталог, поиск и рекомендация по скиллам, командам и агентам проекта.', trig:'«найди скилл», «подскажи скилл для X»' },
+];
+const CATS = [
+  { key:'all', label:'Все скиллы' }, { key:'workflow', label:'Dev-workflow' }, { key:'bugfix', label:'Багфиксы' },
+  { key:'jira', label:'Jira / отчёты' }, { key:'statics', label:'Статика' }, { key:'client', label:'Клиент / UI' },
+  { key:'infra', label:'Деплой / инфра' }, { key:'data', label:'БД / данные' }, { key:'e2e', label:'E2E' },
+  { key:'sheets', label:'Google Sheets' }, { key:'nav', label:'Навигация' },
+];
+
+const MCP_SERVERS = [
+  {name:'mcp-tools', status:'active', tools:'120+', cat:'Проект WO', desc:'Jira, Confluence, GitLab, TeamCity, k8s, статика, игровые БД, ClickHouse, метрики, RAG-поиск по knowledge.'},
+  {name:'unity-mcp', status:'active', tools:'60+', cat:'Unity', desc:'Управление Unity-редактором: сцены, префабы, компоненты, скрипты, тесты, билды. Мульти-инстанс cu1–cu4.'},
+  {name:'discord', status:'active', tools:'90+', cat:'Коммуникация', desc:'Каналы, сообщения, роли, вебхуки, багрепорты команды (preprod / preupdate / prod).'},
+  {name:'Atlassian', status:'active', tools:'40', cat:'claude.ai · Atlassian', desc:'Jira и Confluence через коннектор claude.ai.'},
+  {name:'Figma', status:'active', tools:'35', cat:'claude.ai · Дизайн', desc:'Чтение и генерация макетов, Code Connect, ассеты, диаграммы.'},
+  {name:'Miro', status:'active', tools:'40', cat:'claude.ai · Дизайн', desc:'Доски, диаграммы, таблицы, макеты, прототипы.'},
+  {name:'Context7', status:'auth', tools:'—', cat:'claude.ai · Документация', desc:'Актуальная документация библиотек. Нужна авторизация коннектора в настройках claude.ai.'},
+  {name:'Gmail', status:'auth', tools:'—', cat:'claude.ai · Почта', desc:'Черновики и письма (напр. скилл отпусков). Требует авторизации коннектора.'},
+  {name:'Google Calendar', status:'auth', tools:'—', cat:'claude.ai · Календарь', desc:'События и встречи. Требует авторизации коннектора.'},
+  {name:'Google Drive', status:'auth', tools:'—', cat:'claude.ai · Хранилище', desc:'Файлы и документы. Требует авторизации коннектора.'},
+  {name:'Krisp', status:'auth', tools:'—', cat:'claude.ai · Встречи', desc:'Транскрипты созвонов. Требует авторизации коннектора.'},
+];
+
+const ctxColor = v => v >= 0.8 ? 'var(--bad)' : v >= 0.5 ? 'var(--warn)' : 'var(--good)';
+const escHtml = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+let activeView = 'board', filter = 'all', query = '', skillCat = 'all', currentSessionId = null;
+
+/* ---------- board ---------- */
+function boardMatch(t) {
+  if (filter !== 'all' && !t.groups.includes(filter)) return false;
+  if (query && !(t.id + ' ' + t.title).toLowerCase().includes(query)) return false;
+  return true;
+}
+function cardHTML(t) {
+  const stripe = t.flag ? `class="card stripe" style="--st:${t.flag.type==='blocked'?'var(--bad)':t.flag.type==='paused'?'var(--warn)':'var(--accent)'}"` : 'class="card"';
+  const chips = t.scope.map((s,i)=>`<span class="chip${i===0?' repo':''}">${s}</span>`).join('');
+  const flag = t.flag ? `<div class="flag ${t.flag.type}"><span class="dot"></span>${t.flag.label}</div>` : '';
+  const mrs = t.mrs.map(m=>`<span class="pill mr-${m.state}"><span class="d ${m.state==='merged'?'pass':m.state==='draft'?'none':''}"></span>${m.id}</span>`).join('');
+  const builds = t.builds.map(b=>`<span class="pill"><span class="d ${b.state}"></span>${b.platform}</span>`).join('');
+  let ctx = '';
+  const st = t.session.state;
+  if (st!=='none' && st!=='archived') ctx = `<span class="mini-ctx"><span class="mini-bar"><i style="width:${Math.round(t.session.ctx*100)}%;background:${ctxColor(t.session.ctx)}"></i></span>${Math.round(t.session.ctx*100)}%</span>`;
+  else if (st==='archived') ctx = `<span class="mini-ctx">архив</span>`;
+  const foot = (mrs||builds||ctx) ? `<div class="card-foot">${mrs}${builds}<span class="foot-sep"></span>${ctx}</div>` : '';
+  return `<article ${stripe} tabindex="0" role="button" data-id="${t.id}"><div class="card-top"><span class="wo">${t.id}</span></div><h3 class="card-title">${t.title}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
+}
+function renderBoard() {
+  const board = document.getElementById('board');
+  board.innerHTML = COLUMNS.map(c => {
+    const items = TASKS.filter(t => t.col===c.key && boardMatch(t));
+    const body = items.length ? items.map((t,i)=>cardHTML(t).replace('<article ',`<article style="animation-delay:${i*40}ms" `)).join('') : `<div class="empty">— пусто —</div>`;
+    return `<section class="col"><div class="col-head" style="--dot:${c.dot}"><span class="col-title">${c.title}</span><span class="col-count">${items.length}</span></div><div class="col-body">${body}</div></section>`;
+  }).join('');
+  board.querySelectorAll('.card').forEach(el => {
+    el.addEventListener('click', () => openSession(el.dataset.id));
+    el.addEventListener('keydown', e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); openSession(el.dataset.id); } });
+  });
+}
+function renderNow() {
+  const t = TASKS.find(x=>x.current) || TASKS.find(x=>x.col==='progress'); const s = t.session;
+  document.getElementById('now').innerHTML = `
+    <span class="now-label"><span class="pulse"></span>текущий контекст</span>
+    <span class="now-id">${t.id}</span><span class="now-title">${t.title}</span>
+    <span class="now-meta hide-sm"><span>${s.model}</span><span><b>${s.msgs}</b> сообщ.</span><span>${s.last}</span>
+      <span style="display:flex;align-items:center;gap:8px">окно<span class="ctxbar" style="width:120px"><i style="width:${Math.round(s.ctx*100)}%;background:${ctxColor(s.ctx)}"></i></span><b style="font-family:var(--mono)">${Math.round(s.ctx*100)}%</b></span></span>
+    <button class="btn-resume now-btn" data-id="${t.id}"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> Продолжить сессию</button>`;
+  document.querySelector('.now-btn').addEventListener('click', e => openSession(e.currentTarget.dataset.id));
+}
+
+/* ---------- skills ---------- */
+function skillMatch(sk) {
+  if (skillCat !== 'all' && sk.cat !== skillCat) return false;
+  if (query && !(sk.cmd + ' ' + sk.does + ' ' + sk.trig).toLowerCase().includes(query)) return false;
+  return true;
+}
+function renderSkills() {
+  const rail = document.getElementById('rail');
+  rail.innerHTML = `<div class="rail-label">Категории</div>` + CATS.map(c => {
+    const n = c.key==='all' ? SKILLS.length : SKILLS.filter(s=>s.cat===c.key).length;
+    return `<button class="cat" data-c="${c.key}" aria-pressed="${c.key===skillCat}">${c.label}<span class="c-count">${n}</span></button>`;
+  }).join('');
+  rail.querySelectorAll('.cat').forEach(b => b.addEventListener('click', () => { skillCat = b.dataset.c; renderSkills(); }));
+  const grid = document.getElementById('skillsGrid');
+  const items = SKILLS.filter(skillMatch);
+  const catLabel = k => (CATS.find(c=>c.key===k)||{}).label || k;
+  grid.innerHTML = items.length ? items.map((s,i)=>`
+    <div class="skill-card" style="animation-delay:${i*25}ms">
+      <div class="skill-head"><span class="skill-cmd-tag">/${s.cmd}</span><span class="skill-cat-chip">${catLabel(s.cat)}</span></div>
+      <div class="skill-does">${s.does}</div>
+      <div class="skill-trig"><b>когда зовётся</b>${s.trig}</div>
+      <div class="skill-foot"><button class="skill-run"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${s.cmd}</button>${aStub(GL+'vibecode/-/blob/preprod/.claude/skills/'+s.cmd+'/SKILL.md', 'SKILL.md', 'skill-file')}</div>
+    </div>`).join('') : `<div class="empty">Ничего не найдено</div>`;
+}
+
+/* ---------- mcp ---------- */
+function mcpMatch(m){ return !query || (m.name+' '+m.desc+' '+m.cat).toLowerCase().includes(query); }
+function renderMcp(){
+  const active = MCP_SERVERS.filter(m=>m.status==='active').length;
+  const auth = MCP_SERVERS.filter(m=>m.status==='auth').length;
+  const items = MCP_SERVERS.filter(mcpMatch);
+  document.getElementById('viewMcp').innerHTML = `<div class="mcp-main">
+    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${active} активных · ${auth} ждут авторизации</span></div>
+    <div class="mcp-grid">${items.map((m,i)=>{
+      const on = m.status==='active';
+      const btn = on ? `<button class="mcp-btn">Настроить</button>` : `<a class="mcp-btn activate" href="${CONN}" target="_blank" rel="noopener">Активировать${EI}</a>`;
+      return `<div class="mcp-card ${on?'':'authwait'}" style="animation-delay:${i*25}ms">
+        <div class="mcp-top"><span class="mcp-name">${m.name}</span><span class="mcp-status ${on?'on':'off'}"><span class="d ${on?'pass':'run'}"></span>${on?'активен':'нужна авторизация'}</span></div>
+        <div class="mcp-desc">${m.desc}</div>
+        <div class="mcp-foot"><span class="mcp-cat">${m.cat}</span><span class="mcp-tools">${on?m.tools+' инстр.':''}</span>${btn}</div>
+      </div>`; }).join('')}</div></div>`;
+}
+
+/* ---------- session ---------- */
+function sideHTML(t) {
+  const s = t.session;
+  const stateLabel = { active:'активна', idle:'приостановлена', archived:'архив', none:'нет сессии' }[s.state];
+  const stateColor = s.state==='active' ? 'var(--good)' : 'var(--text-faint)';
+  const sessionSec = s.state==='none' ? '' : `
+    <div class="sec">
+      <div class="sec-label"><span class="ll">Сессия Claude</span><span class="st-note" style="color:${stateColor}">${stateLabel}</span></div>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">модель</div><div class="v">${s.model}</div></div>
+        <div class="stat"><div class="k">сообщений</div><div class="v">${s.msgs}</div></div>
+        <div class="stat"><div class="k">активность</div><div class="v">${s.last}</div></div>
+        <div class="stat"><div class="k">окно</div><div class="v">${s.tokens}</div></div>
+      </div>
+      <div class="ctx-row"><span class="k-line">контекст</span><span class="ctxbar"><i style="width:${Math.round(s.ctx*100)}%;background:${ctxColor(s.ctx)}"></i></span><span class="ctx-pct" style="color:${ctxColor(s.ctx)}">${Math.round(s.ctx*100)}%</span></div>
+    </div>`;
+  const branchRows = t.branches.length ? t.branches.map(b=>{
+      const val = b.repo==='диагностика' ? b.name : aStub(`${GL}${repoSlug(b.repo)}/-/tree/${b.name}`, b.name);
+      return `<div class="row-item"><span class="ri-k">${b.repo}</span><span class="ri-v">${val}</span></div>`;
+    }).join('') : `<div class="empty" style="text-align:left;padding:2px">— веток нет —</div>`;
+  const mrRows = t.mrs.length ? t.mrs.map(m=>{
+      const url = `${GL}${mrRepo(m)}/-/merge_requests/${m.num}`;
+      return `<div class="row-item"><span class="ri-k">${m.target}</span><span class="ri-v">${aStub(url, m.id)}</span><span class="ri-badge pill mr-${m.state}"><span class="d ${m.state==='merged'?'pass':m.state==='draft'?'none':''}"></span>${m.state==='merged'?'влит':m.state==='draft'?'draft':'открыт'}</span></div>`;
+    }).join('') : `<div class="empty" style="text-align:left;padding:2px">— MR ещё нет —</div>`;
+  const buildRows = t.builds.length ? t.builds.map(b=>{
+      const lbl = { pass:'успешно', fail:'упала', run:'собирается', none:'нет сборки' }[b.state];
+      const link = b.id ? aStub(TC+b.id, '#'+b.num) : `<span style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-faint)">${b.num}</span>`;
+      return `<div class="build-row"><span class="plat">${b.platform}</span><span class="build-state"><span class="d ${b.state}"></span>${lbl}</span><span style="margin-left:auto">${link}</span></div>`;
+    }).join('') : `<div class="empty" style="text-align:left;padding:2px">— сборок не было —</div>`;
+  const notes = t.notes.map(n=>`<li class="${n.warn?'warn':''}">${n.t}</li>`).join('');
+  return `
+    <div class="sec"><div class="sec-label">Описание</div><div class="desc">${t.desc}</div></div>
+    ${sessionSec}
+    <div class="sec"><div class="sec-label">Ветки</div>${branchRows}</div>
+    <div class="sec"><div class="sec-label">Merge Requests</div>${mrRows}</div>
+    <div class="sec"><div class="sec-label">Сборки</div>${buildRows}</div>
+    <div class="sec"><div class="sec-label">Заметки для возврата</div><ul class="notes">${notes}</ul>
+      <div class="side-actions">
+        <a class="btn-ghost" href="${JIRA}${t.id}" target="_blank" rel="noopener"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg> Открыть задачу в Jira</a>
+        <button class="btn-ghost"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 3v12M18 9v12M6 15a6 6 0 0 0 6 6h1"/><circle cx="6" cy="3" r="2"/><circle cx="18" cy="9" r="2"/></svg> Форкнуть сессию</button>
+      </div>
+    </div>`;
+}
+function msgHTML(m) {
+  if (m.k === 'tool') return `<div class="tool-row"><span class="tn">⚙ ${m.n}</span><span class="ta">${m.a}</span><span class="tstat">${m.s}</span></div>`;
+  if (m.typing) return `<div class="msg"><div class="msg-head"><span class="ava a">C</span><span class="who">Claude</span></div><div class="msg-body"><span class="typing"><span></span><span></span><span></span></span></div></div>`;
+  const kind = m.k || m.r;
+  const head = kind==='u' ? `<span class="ava u">Я</span><span class="who">Ты</span>` : `<span class="ava a">C</span><span class="who">Claude</span>`;
+  return `<div class="msg ${kind}"><div class="msg-head">${head}</div><div class="msg-body">${m.t}</div></div>`;
+}
+function renderThread(t) {
+  document.getElementById('thread').innerHTML = t.chat.map(msgHTML).join('');
+  const tr = document.getElementById('transcript'); tr.scrollTop = tr.scrollHeight;
+}
+function renderComposer(t) {
+  const c = document.getElementById('composer'); const st = t.session.state;
+  if (st === 'archived') {
+    c.innerHTML = `<div class="archived-note"><span>Сессия в архиве — read-only.</span><button class="btn-ghost" style="margin-left:auto" onclick="reopen('${t.id}')">Открыть для продолжения</button></div>`;
+    return;
+  }
+  c.innerHTML = `
+    <div class="composer-inner">
+      <textarea id="composer-ta" rows="1" placeholder="Написать в сессию ${t.id}…  (Enter — отправить, Shift+Enter — перенос)"></textarea>
+      <div class="composer-foot">
+        <span class="model-tag"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg>${t.session.model}</span>
+        <span class="model-tag">окно ${Math.round(t.session.ctx*100)}%</span>
+        <button class="send-btn" id="sendBtn" disabled><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="m3 20 18-8L3 4v6l12 2-12 2z"/></svg></button>
+      </div>
+    </div>`;
+  const ta = document.getElementById('composer-ta'), btn = document.getElementById('sendBtn');
+  const grow = () => { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,150)+'px'; btn.disabled = !ta.value.trim(); };
+  ta.addEventListener('input', grow);
+  ta.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  btn.addEventListener('click', send);
+  setTimeout(()=>ta.focus(), 60);
+}
+function send() {
+  const ta = document.getElementById('composer-ta'); if (!ta) return;
+  const v = ta.value.trim(); if (!v) return;
+  const t = TASKS.find(x=>x.id===currentSessionId); if (!t) return;
+  t.chat.push({ k:'u', t: escHtml(v) }); t.session.msgs += 1;
+  ta.value=''; ta.style.height='auto'; document.getElementById('sendBtn').disabled = true;
+  t.chat.push({ typing:true }); renderThread(t);
+  setTimeout(() => {
+    t.chat = t.chat.filter(m => !m.typing);
+    t.chat.push({ k:'a', t:'<i style="opacity:.7">демо-ответ:</i> в реальном приложении здесь пошёл бы живой стрим ответа Claude по этой сессии через Agent SDK. Сейчас это макет — но поле ввода и переписка настоящие.' });
+    t.session.msgs += 1; renderThread(t);
+  }, 850);
+}
+function reopen(id) { const t = TASKS.find(x=>x.id===id); if (!t) return; t.session.state = 'idle'; openSession(id); }
+function openSession(id) {
+  const t = TASKS.find(x=>x.id===id); if (!t) return;
+  currentSessionId = id;
+  document.getElementById('viewBoard').style.display = 'none';
+  document.getElementById('viewSkills').style.display = 'none';
+  document.getElementById('viewMcp').style.display = 'none';
+  document.getElementById('viewSession').style.display = 'flex';
+  document.getElementById('filters').style.display = 'none';
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected','false'));
+  document.getElementById('sessionBar').innerHTML = `
+    <button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Доска</button>
+    <span class="sb-wo">${aReal(JIRA+t.id, t.id, 'plain')}</span><span class="sb-title">${t.title}</span><span class="sb-jira">${aReal(JIRA+t.id, 'Jira · '+t.jira, 'plain')}</span>`;
+  document.getElementById('backBtn').addEventListener('click', () => setView('board'));
+  document.getElementById('sessionSide').innerHTML = sideHTML(t);
+  const st = t.session.state;
+  if (st === 'none') {
+    document.getElementById('thread').innerHTML = `
+      <div class="empty-session">
+        <div class="es-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div>
+        <h3>Контекст ещё не заведён</h3>
+        <p>Для этой задачи пока нет сессии Claude. Заведи новый контекст — он привяжется к карточке и ветке.</p>
+        <button class="btn-resume" style="margin:14px auto 0" onclick="reopen('${t.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg> Завести контекст</button>
+      </div>`;
+    document.getElementById('composer').innerHTML = '';
+  } else { renderThread(t); renderComposer(t); }
+}
+
+/* ---------- command palette ---------- */
+function palIndex() {
+  const idx = [];
+  idx.push({type:'Вид', label:'Доска задач', sub:'kanban', act:()=>setView('board')});
+  idx.push({type:'Вид', label:'Скиллы', sub:'каталог', act:()=>setView('skills')});
+  idx.push({type:'Вид', label:'MCP-инструменты', sub:'серверы', act:()=>setView('mcp')});
+  TASKS.forEach(t=>idx.push({type:'Задача', label:`${t.id} · ${t.title}`, sub:t.jira, key:(t.id+' '+t.title).toLowerCase(), act:()=>openSession(t.id)}));
+  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does, key:(s.cmd+' '+s.does+' '+s.trig).toLowerCase(), act:()=>{ setView('skills'); const q=document.getElementById('q'); q.value=s.cmd; query=s.cmd; renderSkills(); }}));
+  MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:m.status==='active'?'активен':'нужна авторизация', key:(m.name+' '+m.desc).toLowerCase(), act:()=>setView('mcp')}));
+  return idx;
+}
+let palItems = [], palSel = 0;
+const palShown = () => Math.min(palItems.length, 40);
+function openPal(){ document.getElementById('palBack').classList.add('open'); const i=document.getElementById('palInput'); i.value=''; renderPal(''); setTimeout(()=>i.focus(),40); }
+function closePal(){ document.getElementById('palBack').classList.remove('open'); }
+function renderPal(q){
+  const all = palIndex(); q = q.trim().toLowerCase();
+  palItems = q ? all.filter(x=>(x.key||x.label.toLowerCase()).includes(q)) : all;
+  palSel = 0;
+  const list = document.getElementById('palList');
+  list.innerHTML = palItems.length ? palItems.slice(0,40).map((x,i)=>`<div class="pal-item ${i===0?'sel':''}" data-i="${i}"><span class="pal-type">${x.type}</span><span class="pal-label">${x.label}</span><span class="pal-sub">${x.sub||''}</span></div>`).join('') : `<div class="pal-empty">Ничего не найдено</div>`;
+  list.querySelectorAll('.pal-item').forEach(el=>{ el.addEventListener('click',()=>runPal(+el.dataset.i)); el.addEventListener('mousemove',()=>setSel(+el.dataset.i)); });
+}
+function setSel(i){ palSel=i; document.querySelectorAll('.pal-item').forEach((el,j)=>el.classList.toggle('sel',j===i)); const s=document.querySelector('.pal-item.sel'); if(s) s.scrollIntoView({block:'nearest'}); }
+function runPal(i){ const it=palItems[i]; if(!it) return; closePal(); it.act(); }
+
+/* ---------- view switch + events ---------- */
+function setView(v) {
+  activeView = v; currentSessionId = null;
+  document.getElementById('viewBoard').style.display = v==='board' ? 'flex' : 'none';
+  document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
+  document.getElementById('viewMcp').style.display = v==='mcp' ? 'flex' : 'none';
+  document.getElementById('viewSession').style.display = 'none';
+  document.getElementById('filters').style.display = v==='board' ? 'flex' : 'none';
+  const ph = { board:'фильтр задач…', skills:'поиск скиллов…', mcp:'поиск MCP-серверов…' };
+  document.getElementById('q').placeholder = ph[v] || 'поиск…';
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
+  if (v==='skills') renderSkills(); else if (v==='mcp') renderMcp(); else renderBoard();
+}
+document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setView(b.dataset.v); });
+document.getElementById('q').addEventListener('input', e => { query = e.target.value.trim().toLowerCase(); if (activeView==='skills') renderSkills(); else if (activeView==='mcp') renderMcp(); else renderBoard(); });
+document.getElementById('filters').addEventListener('click', e => {
+  const b = e.target.closest('.fchip'); if (!b) return;
+  filter = b.dataset.f;
+  document.querySelectorAll('.fchip').forEach(x => x.setAttribute('aria-pressed', String(x===b)));
+  renderBoard();
+});
+document.getElementById('palTrigger').addEventListener('click', openPal);
+document.getElementById('palInput').addEventListener('input', e => renderPal(e.target.value));
+document.getElementById('palBack').addEventListener('click', e => { if (e.target.id==='palBack') closePal(); });
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k') { e.preventDefault(); openPal(); return; }
+  const palOpen = document.getElementById('palBack').classList.contains('open');
+  if (palOpen) {
+    if (e.key==='Escape') closePal();
+    else if (e.key==='ArrowDown') { e.preventDefault(); setSel(Math.min(palSel+1, palShown()-1)); }
+    else if (e.key==='ArrowUp') { e.preventDefault(); setSel(Math.max(palSel-1, 0)); }
+    else if (e.key==='Enter') { e.preventDefault(); runPal(palSel); }
+    return;
+  }
+  if (e.key==='Escape' && currentSessionId) setView('board');
+});
+
+renderNow();
+renderBoard();
+</script>
