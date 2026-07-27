@@ -383,8 +383,10 @@ async function apiSessions() {
   const wfStates = loadWfStates();   // читается один раз на запрос
   const sessions = top.map((f) => buildSessionSummary(f, wfStates));
 
-  // ЖИВОЙ билд-статус — только для кандидатов (wfBuildState==='running'), параллельно, с кэшем 60с.
-  const buildCands = sessions.filter((s) => s.wfBuildState === 'running');
+  // ЖИВОЙ билд-статус. Кандидаты = сессии с РАБОЧЕЙ (не-базовой) веткой И (свежая активность ИЛИ stale-флаг
+  // dev-workflow). Так ловим реальные ручные/безфлаговые билды по фича-ветке, но НЕ долбим TC по базовым/no-branch/
+  // старым todo (80 сессий). Всё параллельно + адаптивный кэш buildActiveFor.
+  const buildCands = sessions.filter((s) => s.gitBranch && !isBaseBranch(s.gitBranch) && (s.active || s.wfBuildState === 'running'));
   await Promise.all(buildCands.map(async (s) => { s.buildActive = await buildActiveFor(s.gitBranch, s.wo); }));
   for (const s of sessions) if (s.buildActive === undefined) s.buildActive = false;
 
@@ -785,6 +787,7 @@ const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
 const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
 const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions']);   // P3: режимы разрешений
 const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoWrite']);
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);   // правки файлов — авто-принимаются в acceptEdits
 function isReadOnlyTool(name) {
   if (READ_ONLY_TOOLS.has(name)) return true;
   const bare = String(name || '').replace(/^mcp__.+?__/, '').toLowerCase();   // mcp__server__tool -> tool
@@ -928,6 +931,8 @@ async function apiChat(req, res, u) {
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
+    if (mode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };            // байпас — ничего не спрашиваем
+    if (mode === 'acceptEdits' && EDIT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };  // «Авто-правки»: правки файлов без спроса (в т.ч. вне cwd); Bash/прочее — по-прежнему спрашиваем
     const set = sessionKey && sessionAllow.get(sessionKey);
     if (set && set.has(toolName)) return { behavior: 'allow', updatedInput: input };
     const id = 'ap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1067,15 +1072,16 @@ async function tcLatestBuild(btId, branch, wo) {
   }
   return null;
 }
-// ЖИВОЙ признак «билд реально идёт» (running/queued в TeamCity) — вызывается ТОЛЬКО для кандидатов
-// (у кого wfBuildState==='running' по локальной аппроксимации). Кэш по branch|wo, TTL 60с.
+// ЖИВОЙ признак «билд реально идёт» (running/queued в TeamCity). Кэш по branch|wo с АДАПТИВНЫМ TTL:
+// активный билд — короткий TTL (~15с), чтобы быстро поймать завершение; неактивный — обычный (~60с).
 const _buildActiveCache = new Map();
-const BUILD_ACTIVE_TTL = 60 * 1000;
+const BUILD_TTL_ACTIVE = 15 * 1000;
+const BUILD_TTL_IDLE = 60 * 1000;
 async function buildActiveFor(branch, wo) {
   if (!TC_TOKEN) return false;
   const key = (branch || '') + '|' + (wo || '');
   const c = _buildActiveCache.get(key);
-  if (c && Date.now() - c.ts < BUILD_ACTIVE_TTL) return c.v;
+  if (c && Date.now() - c.ts < (c.v ? BUILD_TTL_ACTIVE : BUILD_TTL_IDLE)) return c.v;
   let active = false;
   try {
     for (const bt of TC_BUILD_TYPES) {
