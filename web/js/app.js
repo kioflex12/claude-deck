@@ -1704,6 +1704,8 @@ async function openSettingsModal(){
   const back = modalBack('settingsBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
+      <div class="ns-actions" style="justify-content:flex-start;margin-bottom:4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
+      <div class="um-note" id="setImportRes" style="margin:0 0 8px"></div>
       <label class="ns-lbl">Папка состояний dev-workflow (WO_STATES_DIR)</label>
       <input id="setWo" class="ns-inp" type="text" placeholder="пусто → колонка «Статусы» мягко деградирует" value="${esc(cfg.woStatesDir||'')}">
       <label class="ns-lbl">Папка сессий Claude (CLAUDE_PROJECTS_DIR)</label>
@@ -1741,6 +1743,29 @@ async function openSettingsModal(){
   back.querySelector('.dm-cancel').addEventListener('click', close);
   back.classList.add('open');
   const status = back.querySelector('#setStatus');
+  // «Подтянуть токены» — автоимпорт из существующих секретов (.env / ~/.claude.json / MCP-конфиги).
+  back.querySelector('#setImport').addEventListener('click', async ()=>{
+    const box = back.querySelector('#setImportRes'); box.textContent = 'Ищу секреты…';
+    let r; try { r = await (await fetch('/api/config/import-tokens', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json(); } catch { box.textContent = 'Ошибка импорта.'; return; }
+    const res = r.result || {};
+    const mark = (s)=> s==='imported'?'✓': s==='kept'?'≈ уже был': s==='standalone'?'⚠ .env (не сохранён без Electron)': '✗ не найдено';
+    const groups = [['Jira','jiraToken'],['TeamCity','teamcityToken'],['GitLab','gitlabToken'],['WO_STATES_DIR','woStatesDir'],['Папка сессий','claudeProjectsDir']];
+    const any = Object.values(res).some(s=>s==='imported');
+    const lines = groups.filter(([,k])=>k in res).map(([lbl,k])=>lbl+': '+mark(res[k]));
+    box.innerHTML = (any ? 'Импортировано → ' : 'Ничего нового не импортировано → ') + esc(lines.join(' · '));
+    if (!any && groups.every(([,k])=> res[k]==='notfound')) box.textContent = 'Источников с токенами не найдено — введи вручную.';
+    toast(any ? 'Токены подтянуты' : 'Импорт: нового не найдено');
+    // обновить флаги «задан» на полях по свежему конфигу
+    const c = r.config || {};
+    const setPh = (id, on, label)=>{ const el = back.querySelector(id); if (el && on){ el.placeholder = 'сохранён — вставьте новый, чтобы заменить'; } };
+    setPh('#setJt', c.jira && c.jira.tokenSet); setPh('#setTt', c.teamcity && c.teamcity.tokenSet); setPh('#setGt', c.gitlab && c.gitlab.tokenSet);
+    if (c.woStatesDir) back.querySelector('#setWo').value = c.woStatesDir;
+    if (c.jira){ if (c.jira.host) back.querySelector('#setJh').value = c.jira.host; if (c.jira.email) back.querySelector('#setJe').value = c.jira.email; }
+    if (c.teamcity && c.teamcity.host) back.querySelector('#setTh').value = c.teamcity.host;
+    if (c.gitlab && c.gitlab.host) back.querySelector('#setGh').value = c.gitlab.host;
+    if (typeof pollSessions === 'function') await pollSessions();   // подтянулся WO_STATES_DIR/Jira → доска получит стадии
+    if (typeof loadUsage === 'function') loadUsage();
+  });
   back.querySelector('#setSave').addEventListener('click', async ()=>{
     status.textContent = 'Сохраняю…';
     const payload = {

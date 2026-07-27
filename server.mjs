@@ -1402,6 +1402,59 @@ async function apiConfig(req, res) {
   sendJSON(res, configView());
 }
 
+// -------- Автоимпорт токенов/путей из уже существующих секретов Claude Code (кнопка «Подтянуть токены»). --------
+// Сканируем источники (более явный → выше): process.env (включает Deck/.env, загруженный на старте) → env MCP-серверов
+// в ~/.claude.json → env MCP-серверов в .mcp.json проектов. Наружу значения НЕ отдаём — только флаги/источники.
+function hasStoredToken(svc) { try { return existsSync(tokenFile(svc)); } catch { return false; } }
+function scanSecretSources() {
+  const want = ['JIRA_TOKEN', 'JIRA_EMAIL', 'JIRA_HOST', 'TEAMCITY_TOKEN', 'TEAMCITY_HOST', 'GITLAB_TOKEN', 'GITLAB_HOST', 'WO_STATES_DIR', 'CLAUDE_PROJECTS_DIR'];
+  const found = {};
+  const take = (k, v, source) => { if (!found[k] && v != null && String(v).trim()) found[k] = { value: String(v), source }; };
+  for (const k of want) take(k, process.env[k], 'process.env/.env');
+  try {
+    const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
+    const scan = (servers, where) => { if (servers && typeof servers === 'object') for (const [name, cfg] of Object.entries(servers)) { const env = cfg && cfg.env; if (env) for (const k of want) take(k, env[k], where + '.' + name + '.env'); } };
+    scan(j.mcpServers, '~/.claude.json:mcpServers');
+    if (j.projects && typeof j.projects === 'object') for (const pc of Object.values(j.projects)) scan(pc && pc.mcpServers, '~/.claude.json:projects.mcpServers');
+  } catch {}
+  for (const cwd of uniqueSessionCwds()) {
+    try { const j = JSON.parse(readFileSync(path.join(cwd, '.mcp.json'), 'utf8')); if (j.mcpServers) for (const [name, cfg] of Object.entries(j.mcpServers)) { const env = cfg && cfg.env; if (env) for (const k of want) take(k, env[k], cwd + '/.mcp.json:' + name + '.env'); } } catch {}
+  }
+  return found;
+}
+async function apiImportTokens(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 4096); } catch {}
+  const overwrite = !!(body && body.overwrite);
+  const found = scanSecretSources();
+  const cur = loadConfig();
+  const result = {}, sources = {};
+  // Хосты/пути → deck-config.json. Не перетираем заполненное (если не overwrite).
+  const setCfg = (cfgKey, srcKey) => {
+    const f = found[srcKey];
+    if (!f) { result[cfgKey] = 'notfound'; return; }
+    sources[cfgKey] = f.source;
+    if (cur[cfgKey] && String(cur[cfgKey]).trim() && !overwrite) { result[cfgKey] = 'kept'; return; }
+    cur[cfgKey] = f.value; result[cfgKey] = 'imported';   // host'ы applyConfig нормализует сам
+  };
+  setCfg('jiraHost', 'JIRA_HOST'); setCfg('jiraEmail', 'JIRA_EMAIL');
+  setCfg('teamcityHost', 'TEAMCITY_HOST'); setCfg('gitlabHost', 'GITLAB_HOST');
+  setCfg('woStatesDir', 'WO_STATES_DIR'); setCfg('claudeProjectsDir', 'CLAUDE_PROJECTS_DIR');
+  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(cur, null, 2)); } catch {}
+  // Токены → safeStorage. Не перетираем уже сохранённый (если не overwrite). Значения не логируем/не отдаём.
+  const setTok = (svc, srcKey) => {
+    const f = found[srcKey];
+    if (!f) { result[svc + 'Token'] = 'notfound'; return; }
+    sources[svc + 'Token'] = f.source;
+    if (hasStoredToken(svc) && !overwrite) { result[svc + 'Token'] = 'kept'; return; }
+    const r = writeTokenSecure(svc, f.value);
+    result[svc + 'Token'] = (r && r.ok) ? 'imported' : (r && r.standalone) ? 'standalone' : 'error';
+  };
+  setTok('jira', 'JIRA_TOKEN'); setTok('teamcity', 'TEAMCITY_TOKEN'); setTok('gitlab', 'GITLAB_TOKEN');
+  applyConfig();
+  _summaryCache.clear(); _jiraCache.clear(); _tcCache.clear(); _buildActiveCache.clear(); _mrCache.clear();
+  sendJSON(res, { ok: true, electron: !!getElectron(), result, sources, config: configView() });
+}
+
 // -------- D1: авторизация Claude ИЗ приложения (без ручного терминала). Через CLI `claude auth`. --------
 // Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
@@ -1581,6 +1634,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
+  if (u.pathname === '/api/config/import-tokens') { apiImportTokens(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/config') { apiConfig(req, res); return; }
   if (u.pathname === '/api/auth') { apiAuth(res); return; }
   if (u.pathname === '/api/auth/login') { apiAuthLogin(res); return; }
