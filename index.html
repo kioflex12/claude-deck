@@ -450,6 +450,18 @@ let activeView='status', filter='all', query='', skillCat='all', currentFile=nul
 let SESSION_SKILLS = [], slashItems = [], slashSel = 0, slashOpen = false;   // «/» в композере
 let streaming = false, currentES = null;   // живой стрим ответа в консоль
 let liveFinish = null, streamTimer = null;  // обрыв стрима кнопкой СТОП + счётчик секунд
+let currentStreamId = null;                 // id живого стрима (для гарантированного /api/stop)
+// Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
+function userStop(){
+  if (!streaming && !currentES){ clearQueue(); return; }
+  if (currentStreamId) fetch('/api/stop?id=' + encodeURIComponent(currentStreamId), { cache:'no-store' }).catch(()=>{});
+  if (liveFinish){ liveFinish('Остановлено пользователем', { silent:true, stopped:true }); return; }
+  // стрим жив, но finish потерялся (перерисовка/edge) — жёстко обрываем сами
+  if (currentES){ try { currentES.close(); } catch {} currentES = null; }
+  if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
+  document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
+  streamingFile = null; currentStreamId = null; setComposerBusy(false); clearQueue();
+}
 let buildTimer = null;                      // live-опрос сборок TeamCity
 let streamingFile = null;                   // файл сессии, которую Deck стримит сейчас (оверрайд working=true)
 let notifyEnabled = false;                  // браузерные уведомления о завершении включены
@@ -764,7 +776,8 @@ function sideHTML(t){
     : '';
 
   const jiraBtn = t.wo ? `<a class="btn-ghost" href="${JIRA}${t.wo}" target="_blank" rel="noopener"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg> Открыть ${esc(t.wo)} в Jira</a>` : '';
-  const forkBtn = `<button class="btn-ghost" type="button" onclick="return false" title="Скоро — форк через Agent SDK"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M6 8v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8M12 14v4"/></svg> Форкнуть сессию</button>`;
+  const forkBtn = `<button class="btn-ghost" id="forkBtn" type="button" title="Продолжить в новой сессии с контекстом этой"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M6 8v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8M12 14v4"/></svg> Форкнуть сессию</button>`;
+  const delBtn = `<button class="btn-ghost btn-danger" id="delSessionBtn" type="button" title="Убрать сессию из Deck (в корзину, восстановимо)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/></svg> Удалить сессию</button>`;
 
   return `
     <div class="sec"><div class="sec-label">Описание</div><div class="desc">${esc(t.lastPrompt||t.title||'—')}</div></div>
@@ -803,7 +816,7 @@ function sideHTML(t){
     <div class="sec"><div class="sec-label">Сборки</div>${buildSection}</div>
     ${notesSection}
     <div class="sec"><div class="sec-label">Файл сессии</div><div class="rail-hint"><code>${esc(t.file)}</code></div>
-      <div class="side-actions">${jiraBtn}${forkBtn}</div>
+      <div class="side-actions">${jiraBtn}${forkBtn}${delBtn}</div>
     </div>`;
 }
 /* ---------- live-статус сборок (TeamCity) в секции «Сборки» ---------- */
@@ -907,7 +920,10 @@ async function loadJira(t){
   box2.innerHTML = `<div class="row-item"><span class="ri-k">статус</span>${jiraChipHTML(d)}</div>` + (d.summary?`<div class="rail-hint">${esc(d.summary)}</div>`:'');
 }
 /* ---------- пользовательские теги сессии (add/edit/delete, Deck-side) ---------- */
-function currentTags(){ const t = currentFile && SESSION_CACHE[currentFile]; return (t && Array.isArray(t.tags)) ? t.tags.slice() : []; }
+function currentTags(){   // источник — кэш ЛИБО запись в списке (finish() удаляет SESSION_CACHE, теги нельзя терять)
+  const t = (currentFile && SESSION_CACHE[currentFile]) || SESSIONS.find(s=>s.file===currentFile);
+  return (t && Array.isArray(t.tags)) ? t.tags.slice() : [];
+}
 async function saveTags(next){
   if (!currentFile) return;
   const clean = [...new Set(next.map(x=>String(x).trim()).filter(Boolean))].slice(0,30);
@@ -1044,14 +1060,15 @@ function wireConsole(){
 /* ---------- «/» — список скиллов в композере ---------- */
 async function loadSkills(cwd){
   SESSION_SKILLS = [];
-  if (!cwd) return;
-  if (SKILLS_CACHE[cwd]){ SESSION_SKILLS = SKILLS_CACHE[cwd]; return; }
+  if (!cwd){ updateSlash(); return; }
+  if (SKILLS_CACHE[cwd]){ SESSION_SKILLS = SKILLS_CACHE[cwd]; updateSlash(); return; }
   try {
     const r = await fetch('/api/skills?cwd=' + encodeURIComponent(cwd), { cache:'no-store' });
     const d = await r.json();
     SESSION_SKILLS = Array.isArray(d.skills) ? d.skills : [];
     SKILLS_CACHE[cwd] = SESSION_SKILLS;
   } catch (e) { SESSION_SKILLS = []; }
+  updateSlash();   // если «/» уже введён (гонка загрузки — особенно в новой сессии) — перефильтровать дропдаун
 }
 function slashFilter(q){
   q = q.toLowerCase();
@@ -1114,7 +1131,7 @@ function renderComposer(t){
         <div class="cx-foot-l">
           <button class="cx-ibtn" id="attachBtn" type="button" title="Прикрепить (скоро)">${ICON.attach}</button>
           <button class="cx-ibtn" id="skillBtn" type="button" title="Скиллы (/)">/</button>
-          <button class="cx-ibtn cx-stop" id="stopBtn" type="button" title="Остановить" disabled>${ICON.stop}</button>
+          <button class="cx-ibtn cx-stop" id="stopBtn" type="button" title="Остановить">${ICON.stop}</button>
           <span class="cx-queue" id="queueInd" hidden></span>
         </div>
         <div class="cx-foot-r">
@@ -1137,7 +1154,9 @@ function renderComposer(t){
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   btn.addEventListener('click', sendMessage);
-  document.getElementById('stopBtn').addEventListener('click', () => { if (liveFinish) liveFinish('Остановлено пользователем', { silent:true, stopped:true }); else clearQueue(); });
+  const stopBtn = document.getElementById('stopBtn');
+  stopBtn.disabled = !streaming;   // состояние Стоп = чистая функция от факта живого стрима (переживает перерисовку)
+  stopBtn.addEventListener('click', userStop);
   document.getElementById('skillBtn').addEventListener('click', () => { if (streaming) return; if (ta.value[0] !== '/') ta.value = '/' + ta.value; ta.focus(); updateSlash(); });
   document.getElementById('modeBtn').addEventListener('click', cycleMode);
   // P4: вложения — пикер, drag-drop, вставка скриншота
@@ -1165,7 +1184,7 @@ function stopStream(){
   if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
   stopTail();
   stopAgentsPoll();
-  streaming = false; liveFinish = null; streamingFile = null;
+  streaming = false; liveFinish = null; streamingFile = null; currentStreamId = null;
   promptQueue.length = 0; updateQueueIndicator();        // уходя с сессии — очередь сбрасываем
   // жёсткий сброс UI стрима: убрать индикатор «работает» и снять недостроенный live-блок из чата
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
@@ -1391,13 +1410,16 @@ async function runPrompt(payload){
   const clearLive = () => { if (liveMd && liveMd.parentElement) liveMd.parentElement.classList.remove('cx-live'); liveMd = null; };
   const finalizeThink = () => { if (liveThink && liveThink.parentElement) liveThink.parentElement.classList.remove('cx-live'); liveThink = null; };
 
-  const isNewRun = !!payload.newSessionCwd;
-  // URL потока: без вложений/новой сессии — обычный GET-query (+режим); иначе — POST-стадирование → token
+  const isFork = !!payload.forkFile;
+  const isNewRun = !!payload.newSessionCwd || isFork;   // и новая, и форк дают НОВЫЙ session_id (событие session → переключение)
+  // URL потока: без вложений/новой/форка — обычный GET-query (+режим); иначе — POST-стадирование → token
   let streamUrl;
   if (attachments.length || isNewRun){
     try {
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
-      const body = isNewRun
+      const body = isFork
+        ? { prompt: text, mode, fork: true, sessionFile: payload.forkFile, attachments: slim }
+        : payload.newSessionCwd
         ? { prompt: text, mode, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
         : { prompt: text, mode, sessionFile: currentFile, attachments: slim };
       const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
@@ -1420,7 +1442,7 @@ async function runPrompt(payload){
   const finish = (note, opts) => {
     if (finished) return; finished = true;
     if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
-    try { es.close(); } catch {} currentES = null; liveFinish = null;
+    try { es.close(); } catch {} currentES = null; liveFinish = null; currentStreamId = null;
     clearLive(); finalizeThink();
     runEl.remove();                      // снять индикатор «работает» из чата
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
@@ -1478,12 +1500,14 @@ async function runPrompt(payload){
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       currentFile = d.file; streamingFile = d.file; tailCount = 0;
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = 'Новая сессия';
+    } else if (d.type === 'start'){
+      if (d.streamId) currentStreamId = d.streamId;   // для гарантированного /api/stop
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
       finish(d.isError ? 'Завершено с ошибкой' : null, { done:true });
     }
-    // 'start' / 'system' — в UI не показываем
+    // 'system' — в UI не показываем
   };
   es.onerror = () => { if (!finished) finish('Соединение прервано'); };
 }
@@ -1521,6 +1545,7 @@ async function openSession(file){
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
   wireTags();          // секция «Теги»: add/edit/delete
+  wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   renderComposer(t);
@@ -1869,6 +1894,14 @@ function injectCSS(){
     .ns-actions{ display:flex; justify-content:flex-end; margin-top:15px; }
     .ns-start{ height:34px; padding:0 16px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-weight:600; font-size:13px; cursor:pointer; }
     .ns-start:hover{ filter:brightness(1.06); }
+    .ns-start.dm-danger{ border-color:var(--bad); background:var(--bad); }
+    .dm-cancel{ height:34px; }
+    .dm-text{ font-size:13.5px; color:var(--text); margin-bottom:8px; }
+    .btn-ghost.btn-danger{ color:var(--bad); }
+    .btn-ghost.btn-danger:hover{ border-color:var(--bad); background:var(--bad-soft); }
+    /* тост */
+    .deck-toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(12px); background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:10px; box-shadow:var(--shadow-lift); padding:10px 16px; font-size:13px; color:var(--text); opacity:0; pointer-events:none; transition:.2s; z-index:70; }
+    .deck-toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
     /* поиск-дропдаун сессий (под полем #q, во всех видах) */
     .search{ position:relative; }
@@ -2080,7 +2113,7 @@ function openNewSessionDialog(){
   back.classList.add('open');
   setTimeout(()=>{ const p = back.querySelector('#nsPrompt'); if (p) p.focus(); }, 60);
 }
-function openNewSession(cwd, prompt, mode){
+function openNewSession(cwd, prompt, mode, forkFile){
   stopStream();
   currentFile = null;
   returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
@@ -2091,7 +2124,7 @@ function openNewSession(cwd, prompt, mode){
   document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
-  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">Новая сессия…</span>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${forkFile?'Форк сессии…':'Новая сессия…'}</span>`;
   document.getElementById('backBtn').addEventListener('click', ()=>setView(returnView));
   document.getElementById('sessionSide').innerHTML = '<div class="sec"><div class="rail-hint">Новая сессия создаётся…</div></div>';
   document.getElementById('thread').innerHTML = '<div class="cx-console"></div>';
@@ -2099,8 +2132,67 @@ function openNewSession(cwd, prompt, mode){
   sessionMode = mode;
   renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:'Новая сессия', project: proj });
   paintMode();
-  loadSkills(cwd);
-  runPrompt({ text: prompt, mode, attachments: [], newSessionCwd: cwd });
+  loadSkills(cwd);     // «/»-скиллы для нового cwd (перефильтрует дропдаун по готовности)
+  runPrompt(forkFile ? { text: prompt, mode, attachments: [], forkFile } : { text: prompt, mode, attachments: [], newSessionCwd: cwd });
+}
+/* ---------- обработчики действий рейла: форк + удаление ---------- */
+function wireSideActions(t){
+  const del = document.getElementById('delSessionBtn');
+  if (del) del.addEventListener('click', () => openDeleteDialog(t.file, t.title));
+  const fork = document.getElementById('forkBtn');
+  if (fork) fork.addEventListener('click', () => openForkDialog(t));
+}
+function toast(msg){
+  let el = document.getElementById('deckToast');
+  if (!el){ el = document.createElement('div'); el.id = 'deckToast'; el.className = 'deck-toast'; document.body.appendChild(el); }
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(el._t); el._t = setTimeout(()=>el.classList.remove('show'), 2600);
+}
+function openDeleteDialog(file, title){
+  const back = modalBack('delBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Удалить сессию из Deck?</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="dm-text">«${esc(title||file)}»</div>
+      <div class="um-note">Файл транскрипта переедет в <code>deck-trash/</code> — восстановимо (не удаляется безвозвратно).</div>
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start dm-danger" type="button">Удалить</button></div>
+    </div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('.dm-cancel').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('.dm-danger').addEventListener('click', async ()=>{
+    back.classList.remove('open');
+    try {
+      const r = await fetch('/api/delete-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d && d.error ? d.error : 'delete failed');
+      SESSIONS = SESSIONS.filter(s=>s.file!==file); delete SESSION_CACHE[file];
+      if (currentFile === file){ stopStream(); setView(returnView); } else renderBoard(false);
+      toast('Перемещено в корзину (deck-trash)');
+    } catch (e){ toast('Не удалось удалить: ' + (e.message||e)); }
+  });
+  back.classList.add('open');
+}
+function openForkDialog(t){
+  const back = modalBack('forkBack');
+  const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m===sessionMode?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Форк сессии</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note">Новая сессия продолжит контекст «${esc(t.title||t.file)}» (resume + fork). Оригинал не меняется.</div>
+      <label class="ns-lbl">Первый промт продолжения</label>
+      <textarea id="forkPrompt" class="ns-inp" rows="4" placeholder="Что делать в форке…"></textarea>
+      <label class="ns-lbl">Режим разрешений</label>
+      <select id="forkMode" class="ns-inp">${modeOpts}</select>
+      <div class="ns-actions"><button id="forkStart" class="ns-start" type="button">Создать форк</button></div>
+    </div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('#forkStart').addEventListener('click', ()=>{
+    const prompt = back.querySelector('#forkPrompt').value.trim();
+    const mode = back.querySelector('#forkMode').value;
+    if (!prompt){ back.querySelector('#forkPrompt').focus(); return; }
+    back.classList.remove('open');
+    openNewSession(t.cwd, prompt, mode, t.file);   // forkFile = исходная сессия
+  });
+  back.classList.add('open');
+  setTimeout(()=>{ const p = back.querySelector('#forkPrompt'); if (p) p.focus(); }, 60);
 }
 
 /* ---------- загрузка реальных сессий ---------- */

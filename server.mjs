@@ -9,7 +9,7 @@
 //                 env WO_STATES_DIR -> дефолт ниже.
 
 import http from 'node:http';
-import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, renameSync, existsSync, cpSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -784,6 +784,7 @@ async function apiUsage(res) {
 
 // -------- P2: аппрув инструментов (canUseTool). Читающее — молча allow; пишущее/выполняющее — спросить. --------
 const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
+const activeStreams = new Map();      // streamId -> AbortController (для гарантированного /api/stop)
 const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
 const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions']);   // P3: режимы разрешений
 const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoWrite']);
@@ -847,6 +848,36 @@ function readJsonBody(req, maxBytes) {
     req.on('error', reject);
   });
 }
+// Перенос пути; renameSync не умеет через диски (projects на C:, deck-trash на D: → EXDEV) — фолбэк copy+remove.
+function movePath(src, dest) {
+  try { renameSync(src, dest); }
+  catch (e) { if (e && e.code === 'EXDEV') { cpSync(src, dest, { recursive: true }); rmSync(src, { recursive: true, force: true }); } else throw e; }
+}
+// БЕЗОПАСНОЕ удаление: НЕ rm, а перенос .jsonl (+ каталог сабагентов) в <repo>/deck-trash/<ts>-<basename> (восстановимо).
+async function apiDeleteSession(req, res) {
+  let body;
+  try { body = await readJsonBody(req, 64 * 1024); }
+  catch (e) { sendJSON(res, { error: (e && e.message) || 'read error' }, 400); return; }
+  const rp = resolveSessionPath(String(body.file || ''));
+  if (rp.error) { sendJSON(res, { error: rp.error }, rp.code || 400); return; }
+  try {
+    const base = path.basename(rp.resolved);
+    const sessionId = base.replace(/\.jsonl$/, '');
+    const trashDir = path.join(HERE, 'deck-trash');
+    mkdirSync(trashDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');   // сервер — не воркфлоу-скрипт, Node Date разрешён
+    const dest = path.join(trashDir, ts + '-' + base);
+    movePath(rp.resolved, dest);                                  // .jsonl → корзина (через диски — copy+remove)
+    const subs = path.join(path.dirname(rp.resolved), sessionId); // каталог сабагентов рядом, если есть
+    let subsMoved = false;
+    if (existsSync(subs)) { try { movePath(subs, path.join(trashDir, ts + '-' + sessionId)); subsMoved = true; } catch {} }
+    delete loadTags()[body.file];                                 // теги удалённой сессии тоже чистим
+    try { writeFileSync(TAGS_FILE, JSON.stringify(loadTags(), null, 2)); } catch {}
+    sendJSON(res, { ok: true, trash: dest, subsMoved });
+  } catch (e) {
+    sendJSON(res, { error: (e && e.message) || String(e) }, 500);
+  }
+}
 async function apiTags(req, res) {   // POST {file, tags:[...]} — перезаписывает набор тегов сессии, персист на диск
   let body;
   try { body = await readJsonBody(req, 256 * 1024); }
@@ -865,6 +896,7 @@ async function apiChatPrepare(req, res) {
   let mode = String(body.mode || 'default'); if (!VALID_MODES.has(mode)) mode = 'default';
   const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 20) : [];
   const newSession = body.newSession === true;         // Part 3: создать НОВУЮ сессию (без resume) в cwd
+  const fork = body.fork === true;                     // форк: resume + forkSession — новый id с контекстом исходной
   const cwd = String(body.cwd || '');
   let bytes = 0;
   for (const a of attachments) bytes += (a && a.dataB64 ? a.dataB64.length : 0) + (a && a.text ? a.text.length : 0);
@@ -872,7 +904,7 @@ async function apiChatPrepare(req, res) {
   const now = Date.now();
   for (const [k, v] of stagedRequests) if (now - v.ts > 5 * 60 * 1000) stagedRequests.delete(k);   // sweep старьё
   const token = 'st_' + now.toString(36) + Math.random().toString(36).slice(2, 10);
-  stagedRequests.set(token, { sessionFile, prompt, mode, attachments, newSession, cwd, ts: now });
+  stagedRequests.set(token, { sessionFile, prompt, mode, attachments, newSession, cwd, fork, ts: now });
   sendJSON(res, { token });
 }
 
@@ -887,7 +919,7 @@ async function apiChat(req, res, u) {
   const fail = (msg) => { send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };
 
   // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
-  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '';
+  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false;
   const token = u.searchParams.get('token');
   if (token) {
     const staged = stagedRequests.get(token);
@@ -898,6 +930,7 @@ async function apiChat(req, res, u) {
     mode = staged.mode || 'default';
     attachments = Array.isArray(staged.attachments) ? staged.attachments : [];
     isNew = staged.newSession === true;                             // Part 3: новая сессия без resume
+    isFork = staged.fork === true;                                  // форк: resume исходной + forkSession
     newCwd = staged.cwd || '';
   } else {
     relFile = u.searchParams.get('file') || '';
@@ -926,7 +959,9 @@ async function apiChat(req, res, u) {
 
   const ac = new AbortController();
   let closed = false;
-  req.on('close', () => { closed = true; try { ac.abort(); } catch {} });
+  const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  activeStreams.set(streamId, ac);                                  // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
+  req.on('close', () => { closed = true; try { ac.abort(); } catch {} activeStreams.delete(streamId); });
 
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
@@ -977,7 +1012,7 @@ async function apiChat(req, res, u) {
     sdkPrompt = combinedText || prompt;
   }
 
-  send({ type: 'start', sessionId: sessionId || '', cwd: cwd || '', isNew });
+  send({ type: 'start', streamId, sessionId: sessionId || '', cwd: cwd || '', isNew });
   try {
     const query = await getSdkQuery();
     const options = {
@@ -990,7 +1025,8 @@ async function apiChat(req, res, u) {
       abortController: ac,
       maxTurns: 24,
     };
-    if (!isNew) options.resume = sessionId;   // существующая сессия — продолжаем; новая — без resume
+    if (!isNew) options.resume = sessionId;   // существующая сессия / форк — resume; новая — без resume
+    if (isFork) options.forkSession = true;   // форк: resume создаёт НОВЫЙ session_id (контекст исходной), оригинал не трогаем
     // claude_code-preset + append: дефолтный системный промпт Claude Code ПЛЮС правила проекта (вместо CLAUDE.md-автозагрузки)
     options.systemPrompt = projectInstructions
       ? { type: 'preset', preset: 'claude_code', append: projectInstructions }
@@ -1000,7 +1036,7 @@ async function apiChat(req, res, u) {
       if (closed) break;
       if (m.type === 'system' && m.subtype === 'init') {
         send({ type: 'system', model: m.model, apiKeySource: m.apiKeySource });
-        if (isNew && m.session_id) {                    // Part 3: узнали id новой сессии — сообщаем клиенту файл, чтобы открыть/тейлить
+        if ((isNew || isFork) && m.session_id) {         // новая/форкнутая сессия → сообщаем клиенту НОВЫЙ файл (переключиться/тейлить)
           sessionKey = m.session_id;
           const rel = String(cwd).replace(/[^a-zA-Z0-9]/g, '-') + '/' + m.session_id + '.jsonl';
           send({ type: 'session', id: m.session_id, file: rel });
@@ -1023,8 +1059,17 @@ async function apiChat(req, res, u) {
   } catch (e) {
     if (!closed) send({ type: 'error', message: (e && e.message) ? e.message : String(e) });
   } finally {
+    activeStreams.delete(streamId);
     if (!closed) { try { res.end(); } catch {} }
   }
+}
+
+// Явный обрыв стрима по id (клиент дёргает на Стоп, плюс закрывает ES) — гарантированно рвём SDK-запрос.
+function apiStop(res, u) {
+  const id = u.searchParams.get('id') || '';
+  const ac = activeStreams.get(id);
+  if (ac) { try { ac.abort(); } catch {} activeStreams.delete(id); }
+  sendJSON(res, { ok: true });
 }
 
 // Решение по аппруву от клиента: allow | deny | always. Нет id (двойной клик/устарело) — тихо ok.
@@ -1221,6 +1266,7 @@ const server = http.createServer((req, res) => {
   }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
+  if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }
   if (u.pathname === '/api/agents') {
     const out = apiAgents(u.searchParams.get('file') || '');
     if (out.error) { sendJSON(res, { error: out.error }, out.code || 400); return; }
@@ -1231,6 +1277,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }
+  if (u.pathname === '/api/stop') { apiStop(res, u); return; }
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
