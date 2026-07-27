@@ -491,7 +491,7 @@ function searchableText(s){
   if (mrs && mrs.length){ for (const m of mrs){ parts.push('!'+m.iid, m.target_branch, m.project || ''); parts.push(m.state==='merged'?'влит merged':m.state==='closed'?'закрыт closed':'открыт opened'); } }
   else if (s.wfMrUrl){ parts.push('mr', s.wfMrState==='merged'?'влит merged':'открыт opened'); }
   // билд
-  if (s.wfBuildState==='running') parts.push('билд идёт running');
+  if (s.buildActive) parts.push('билд идёт running');
   else if (s.wfBuildState==='done') parts.push('билд готово done');
   if (isWorking(s)) parts.push('работает');
   return parts.filter(Boolean).join(' ').toLowerCase();
@@ -574,8 +574,8 @@ function cardHTML(s){
   const flag = working
     ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
     : s.active ? `<div class="flag attention"><span class="dot"></span>активна · ${timeAgo(s.mtime)}</div>` : '';
-  const buildPill = (s.wfBuildState && s.wfBuildState!=='none')
-    ? `<span class="pill"><span class="d ${s.wfBuildState==='running'?'run':'pass'}"></span>билд</span>` : '';
+  const buildPill = s.buildActive
+    ? `<span class="pill"><span class="d run"></span>билд</span>` : '';
   // MR — приоритет live-данным из GitLab (MR_CACHE), stale wfMrUrl лишь как фолбэк пока live не загрузилось
   const live = (s.gitBranch && MR_CACHE[s.gitBranch]) ? MR_CACHE[s.gitBranch].mrs : null;
   let mrPill = '';
@@ -752,7 +752,7 @@ function sideHTML(t){
 
   // Сборки: сперва приближение по wf (мигает пока running), затем loadBuilds заменит live-данными из TeamCity
   let buildApprox;
-  if (t.wfBuildState==='running') buildApprox = `<div class="build-row"><span class="plat">CI</span><span class="build-state"><span class="d run"></span>идёт</span></div>`;
+  if (t.buildActive) buildApprox = `<div class="build-row"><span class="plat">CI</span><span class="build-state"><span class="d run"></span>идёт</span></div>`;
   else if (t.wfBuildState==='done') buildApprox = `<div class="build-row"><span class="plat">CI</span><span class="build-state"><span class="d pass"></span>готово</span></div>`;
   else buildApprox = `<div class="rail-empty">— сборок нет —</div>`;
   const buildSection = `<div id="buildBox">${buildApprox}<div class="rail-hint">проверяю TeamCity…</div></div>`;
