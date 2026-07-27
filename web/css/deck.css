@@ -254,3 +254,25 @@
     .mcp-scope{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border); border-radius:20px; padding:2px 8px; }
     .mcp-cmd{ font-family:var(--mono); font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:60%; }
   
+    /* MCP: живой статус, разворот деталей, реконнект (D — live MCP) */
+    .mcp-card{ cursor:pointer; }
+    .mcp-card.open{ border-color:var(--accent); }
+    .mcp-badge{ font-family:var(--mono); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; border-radius:20px; padding:2px 8px; border:1px solid transparent; margin-left:auto; }
+    .mcp-badge.st-connected{ color:var(--good); background:color-mix(in srgb, var(--good) 14%, transparent); border-color:color-mix(in srgb, var(--good) 35%, transparent); }
+    .mcp-badge.st-failed{ color:var(--bad); background:color-mix(in srgb, var(--bad) 14%, transparent); border-color:color-mix(in srgb, var(--bad) 35%, transparent); }
+    .mcp-badge.st-needs-auth{ color:var(--warn); background:color-mix(in srgb, var(--warn) 16%, transparent); border-color:color-mix(in srgb, var(--warn) 40%, transparent); }
+    .mcp-badge.st-pending,.mcp-badge.st-unknown{ color:var(--text-faint); background:var(--surface-2); border-color:var(--border); }
+    .mcp-top{ display:flex; align-items:center; gap:8px; }
+    .mcp-detail{ margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); display:flex; flex-direction:column; gap:6px; }
+    .mcp-kv{ display:flex; gap:8px; font-size:12px; }
+    .mcp-kv span{ color:var(--text-faint); min-width:76px; }
+    .mcp-kv b{ font-family:var(--mono); font-weight:500; word-break:break-all; }
+    .mcp-err{ font-size:11px; color:var(--bad); background:color-mix(in srgb, var(--bad) 8%, transparent); border-radius:6px; padding:6px 8px; }
+    .mcp-hint{ font-size:11px; color:var(--warn); background:color-mix(in srgb, var(--warn) 8%, transparent); border-radius:6px; padding:6px 8px; }
+    .mcp-hint code{ font-family:var(--mono); background:var(--surface-2); padding:0 4px; border-radius:4px; }
+    .mcp-tools{ display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
+    .mcp-tool{ font-family:var(--mono); font-size:10px; color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border); border-radius:5px; padding:1px 6px; }
+    .mcp-refresh{ margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--text); background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:4px 12px; cursor:pointer; }
+    .mcp-refresh:hover{ border-color:var(--accent); }
+    .mcp-refresh:disabled{ opacity:.5; cursor:default; }
+    .mcp-head{ display:flex; align-items:center; gap:12px; }

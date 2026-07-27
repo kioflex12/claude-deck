@@ -50,39 +50,44 @@ function getElectron() {
 }
 function userDataDir() { const e = getElectron(); if (e && e.app) { try { return e.app.getPath('userData'); } catch {} } return HERE; }
 function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
-function jiraTokenFile() { return path.join(userDataDir(), 'jira-token.bin'); }
 function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 function saveConfig(patch) {
   const c = loadConfig();
-  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail']) if (k in patch) c[k] = String(patch[k] || '');
+  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost']) if (k in patch) c[k] = String(patch[k] || '');
   try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
 }
-// Jira-токен: в Electron шифруем safeStorage'ом (как update-token в D3); в standalone безопасно сохранить нельзя — только .env.
-function readJiraTokenSecure() {
+// Секретные токены (Jira/TeamCity/GitLab): в Electron шифруем safeStorage'ом (как update-token в D3) в userData/<svc>-token.bin;
+// в standalone безопасно сохранить нельзя — фолбэк на .env (<SVC>_TOKEN).
+function tokenFile(service) { return path.join(userDataDir(), service + '-token.bin'); }
+function readTokenSecure(service) {
   const e = getElectron();
-  if (e && e.safeStorage) { try { if (e.safeStorage.isEncryptionAvailable()) return e.safeStorage.decryptString(readFileSync(jiraTokenFile())) || ''; } catch {} }
+  if (e && e.safeStorage) { try { if (e.safeStorage.isEncryptionAvailable()) return e.safeStorage.decryptString(readFileSync(tokenFile(service))) || ''; } catch {} }
   return '';
 }
-function writeJiraTokenSecure(tok) {
+function writeTokenSecure(service, tok) {
   tok = String(tok || '');
-  if (!tok) { try { rmSync(jiraTokenFile(), { force: true }); } catch {} return { ok: true, cleared: true }; }
+  if (!tok) { try { rmSync(tokenFile(service), { force: true }); } catch {} return { ok: true, cleared: true }; }
   const e = getElectron();
   if (e && e.safeStorage && e.safeStorage.isEncryptionAvailable()) {
-    try { mkdirSync(path.dirname(jiraTokenFile()), { recursive: true }); writeFileSync(jiraTokenFile(), e.safeStorage.encryptString(tok)); return { ok: true, storage: 'safeStorage' }; }
+    try { mkdirSync(path.dirname(tokenFile(service)), { recursive: true }); writeFileSync(tokenFile(service), e.safeStorage.encryptString(tok)); return { ok: true, storage: 'safeStorage' }; }
     catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
   }
   return { ok: false, standalone: true };   // standalone — задать токен можно только через .env
 }
 
-let PROJECTS_DIR, WO_STATES_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED;
+let PROJECTS_DIR, WO_STATES_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED, TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN;
 function applyConfig() {
   const c = loadConfig();
   PROJECTS_DIR = c.claudeProjectsDir || process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
   WO_STATES_DIR = c.woStatesDir || process.env.WO_STATES_DIR || '';
   JIRA_HOST = String(c.jiraHost || process.env.JIRA_HOST || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
   JIRA_EMAIL = c.jiraEmail || process.env.JIRA_EMAIL || '';
-  JIRA_TOKEN = readJiraTokenSecure() || process.env.JIRA_TOKEN || '';
+  JIRA_TOKEN = readTokenSecure('jira') || process.env.JIRA_TOKEN || '';
   JIRA_ENABLED = !!(JIRA_TOKEN && JIRA_EMAIL && JIRA_HOST);
+  TC_HOST = String(c.teamcityHost || process.env.TEAMCITY_HOST || 'https://teamcity.example.com').replace(/\/$/, '');
+  TC_TOKEN = readTokenSecure('teamcity') || process.env.TEAMCITY_TOKEN || '';
+  GL_HOST = String(c.gitlabHost || process.env.GITLAB_HOST || 'https://gitlab.example.com').replace(/\/$/, '');
+  GL_TOKEN = readTokenSecure('gitlab') || process.env.GITLAB_TOKEN || '';
 }
 applyConfig();
 const CTX_LIMIT = 1_000_000;          // сессии на 1M-контексте
@@ -185,10 +190,17 @@ function countMessages(text) {
   return (text.match(/"type":"user"/g) || []).length + (text.match(/"type":"assistant"/g) || []).length;
 }
 function prettyModel(m) {
-  if (!m) return '—';
+  if (!m || /^<.*>$/.test(m)) return '—';   // '<synthetic>' и прочие служебные псевдо-модели → «—», не показываем сырьём
   const x = m.match(/(opus|sonnet|haiku)-(\d+)-(\d+)/i);
   if (x) return x[1][0].toUpperCase() + x[1].slice(1).toLowerCase() + ' ' + x[2] + '.' + x[3];
   return m.replace(/^claude-/, '');
+}
+// Последняя РЕАЛЬНАЯ модель: Claude Code метит служебные авто-сообщения ассистента "model":"<synthetic>" —
+// берём последнее значение model, не обёрнутое в <...> (иначе на чип попадает <synthetic>).
+function lastRealModel(text) {
+  const all = allStrings(text, 'model');
+  for (let i = all.length - 1; i >= 0; i--) { const m = all[i]; if (m && !/^<.*>$/.test(m)) return m; }
+  return '';
 }
 const woOf = (s) => { const m = String(s || '').match(/WO-\d+/); return m ? m[0] : ''; };
 
@@ -401,7 +413,7 @@ function textSummary(f) {
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
   if (!title) title = (lastPrompt || '').split('\n')[0].slice(0, 80) || '(без заголовка)';
-  const model = prettyModel(lastString(text, 'model'));
+  const model = prettyModel(lastRealModel(text));
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
@@ -535,7 +547,7 @@ function buildSessionBlocks(text) {
     const role = ev.type === 'assistant' ? 'assistant' : 'user';
     // Служебная вставка (загрузка скилла / ре-инвок) — не человек, блок не создаём.
     if (role === 'user' && ev.isMeta === true) continue;
-    if (role === 'assistant' && msg.model) model = msg.model;
+    if (role === 'assistant' && msg.model && !/^<.*>$/.test(msg.model)) model = msg.model;   // игнорим <synthetic> — иначе модель сессии слетает на служебную
     const start = blocks.length;
     const content = msg.content;
     if (typeof content === 'string') {
@@ -758,7 +770,7 @@ function mcpEntryInfo(name, cfg, scope) {
   const command = cfg.command ? [cfg.command].concat(Array.isArray(cfg.args) ? cfg.args : []).join(' ') : (cfg.url || '');
   return { name, scope, transport: transport || (cfg.url ? 'http' : cfg.command ? 'stdio' : ''), command, desc: cfg.description || '' };
 }
-function apiMcp(res) {
+function collectMcpConfig() {
   const found = new Map();   // name -> info, дедуп по имени (первый источник выигрывает)
   const add = (name, cfg, scope) => { if (!name || found.has(name)) return; found.set(name, mcpEntryInfo(name, cfg, scope)); };
   // ~/.claude.json — глобальные mcpServers + по-проектные projects[<path>].mcpServers
@@ -780,8 +792,67 @@ function apiMcp(res) {
       if (Array.isArray(s.enabledMcpjsonServers)) for (const n of s.enabledMcpjsonServers) add(n, {}, 'enabled');
     } catch {}
   }
-  const servers = [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+function apiMcp(res) {
+  const servers = collectMcpConfig();
   sendJSON(res, { count: servers.length, servers });
+}
+// Живой статус MCP: контрол-запрос SDK mcpServerStatus() (без turn; SDK коннектит MCP на каждый query).
+// Форма ответа сервера: [{name, status: connected|failed|needs-auth|pending, error?, config:{type,command,args,url}, scope, tools:[{name,annotations}]}].
+async function fetchMcpStatusRaw() {
+  const query = await getSdkQuery();
+  const ac = new AbortController();
+  async function* openInput() { await new Promise((r) => setTimeout(r, 45000)); }   // держим ввод открытым, turn НЕ шлём
+  // БЕЗ settingSources:[] — иначе SDK не загрузит MCP-конфиг и статус будет пустой.
+  const q = query({ prompt: openInput(), options: { permissionMode: 'plan', abortController: ac } });
+  (async () => { try { for await (const _ of q) { /* keep-alive drain */ } } catch {} })();
+  try {
+    // Серверы коннектятся ПОСТЕПЕННО — делаем несколько снимков и мёржим по имени: pending→connected апгрейдим,
+    // наличие tools предпочитаем. Так за ~6с собирается полная картина (иначе первый снимок ловит только быстрые).
+    const merged = new Map();
+    let got = false, lastErr;
+    for (const delay of [1800, 1500, 1500, 1500]) {
+      await new Promise((r) => setTimeout(r, delay));
+      try {
+        const s = await q.mcpServerStatus();
+        if (Array.isArray(s)) { got = true; for (const srv of s) { const prev = merged.get(srv.name); if (!prev || (prev.status === 'pending' && srv.status !== 'pending') || (srv.tools && !prev.tools)) merged.set(srv.name, srv); } }
+      } catch (e) { lastErr = e; }
+    }
+    if (got) return [...merged.values()];
+    throw lastErr || new Error('mcp status unavailable');
+  } finally { try { ac.abort(); } catch {} }
+}
+function mapMcpServer(s) {
+  const cfg = s.config || {};
+  const transport = cfg.type || (cfg.url ? 'http' : cfg.command ? 'stdio' : '');
+  const command = cfg.command ? [cfg.command].concat(Array.isArray(cfg.args) ? cfg.args : []).join(' ') : (cfg.url || '');
+  const tools = Array.isArray(s.tools) ? s.tools.map((t) => (typeof t === 'string' ? t : (t && t.name) || '')).filter(Boolean) : null;
+  return { name: s.name, status: s.status || 'unknown', error: s.error || '', transport, command, scope: s.scope || '', toolCount: tools ? tools.length : null, tools: tools ? tools.slice(0, 80) : null };
+}
+let _mcpStatus = { ts: 0, data: null };
+const MCP_STATUS_TTL = 30000;
+async function apiMcpStatus(res, u) {
+  const refresh = u.searchParams.get('refresh') === '1';   // reconnect в нашей модели = свежая проба (SDK коннектит MCP заново)
+  if (!refresh && _mcpStatus.data && Date.now() - _mcpStatus.ts < MCP_STATUS_TTL) { sendJSON(res, _mcpStatus.data); return; }
+  const cfg = collectMcpConfig();
+  let data;
+  try {
+    const raw = await fetchMcpStatusRaw();
+    const map = new Map(raw.map((s) => [s.name, mapMcpServer(s)]));
+    for (const c of cfg) {   // серверов из конфига, которых SDK не вернул (не поднялись за окно) — добавим со статусом unknown; и добьём desc
+      if (!map.has(c.name)) map.set(c.name, { name: c.name, status: 'unknown', error: '', transport: c.transport, command: c.command, scope: c.scope, toolCount: null, tools: null, desc: c.desc });
+      else { const s = map.get(c.name); if (!s.desc && c.desc) s.desc = c.desc; if (!s.command && c.command) s.command = c.command; if (!s.transport && c.transport) s.transport = c.transport; if (!s.scope && c.scope) s.scope = c.scope; }
+    }
+    const servers = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+    data = { available: true, live: true, count: servers.length, servers };
+  } catch (e) {
+    // Честный фолбэк: SDK-проба не удалась → листинг из конфигов со статусом unknown + пометка.
+    const servers = cfg.map((c) => ({ name: c.name, status: 'unknown', error: '', transport: c.transport, command: c.command, scope: c.scope, toolCount: null, tools: null, desc: c.desc })).sort((a, b) => a.name.localeCompare(b.name));
+    data = { available: false, live: false, reason: (e && e.message) || String(e), count: servers.length, servers };
+  }
+  _mcpStatus = { ts: Date.now(), data };
+  sendJSON(res, data);
 }
 
 // -------- http --------
@@ -1147,8 +1218,7 @@ function apiApprove(res, u) {
 // Хост дефолтный, токен из env (TEAMCITY_TOKEN). Нет токена → { available:false } и клиент
 // показывает приближённую метку по wfBuildState. Ветку матчим точно; фолбэк — свежие билды типа,
 // у которых branchName начинается с WO (ветка vibecode-сессии не всегда = ветка клиентской сборки).
-const TC_HOST = (process.env.TEAMCITY_HOST || 'https://teamcity.example.com').replace(/\/$/, '');
-const TC_TOKEN = process.env.TEAMCITY_TOKEN || '';
+// TC_HOST/TC_TOKEN резолвятся в applyConfig() (config → env/.env → дефолт; токен из safeStorage либо .env).
 const TC_BUILD_TYPES = [
   { id: 'Wo_Client_Development_Android', plat: 'Android' },
   { id: 'Wo_Client_Development_IOS', plat: 'iOS' },
@@ -1226,8 +1296,7 @@ async function apiBuild(res, u) {
 // -------- GitLab: live-MR по ветке (секция «Merge Requests»; приоритет над stale wfMrUrl из dev-workflow) --------
 // Ищем MR ГЛОБАЛЬНО по source_branch (scope=all) — надёжнее, чем угадывать project id (client-unity/backend-services/
 // staticsutils). Фолбэк — search=<WO-XXXX>. Нет токена → { available:false }, клиент оставляет wfMrUrl.
-const GL_HOST = (process.env.GITLAB_HOST || 'https://gitlab.example.com').replace(/\/$/, '');
-const GL_TOKEN = process.env.GITLAB_TOKEN || '';
+// GL_HOST/GL_TOKEN резолвятся в applyConfig() (config → env/.env → дефолт; токен из safeStorage либо .env).
 const _mrCache = new Map();   // branch|wo -> { ts, data }
 const MR_TTL = 30000;
 
@@ -1306,19 +1375,26 @@ function configView() {
     woStatesDir: WO_STATES_DIR,
     claudeProjectsDir: PROJECTS_DIR,
     jira: { host: JIRA_HOST, email: JIRA_EMAIL, tokenSet: !!JIRA_TOKEN, enabled: JIRA_ENABLED },
+    teamcity: { host: TC_HOST, tokenSet: !!TC_TOKEN },
+    gitlab: { host: GL_HOST, tokenSet: !!GL_TOKEN },
     electron: !!getElectron(),   // можно ли безопасно сохранить токен (safeStorage) или только через .env
-    defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects') },
+    defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects'), teamcityHost: 'https://teamcity.example.com', gitlabHost: 'https://gitlab.example.com' },
   };
 }
 async function apiConfig(req, res) {
   if (req.method === 'POST') {
     let body; try { body = await readJsonBody(req, 64 * 1024); } catch { sendJSON(res, { error: 'bad body' }, 400); return; }
     saveConfig(body);
-    let tokenResult = null;
-    if ('jiraToken' in body) tokenResult = writeJiraTokenSecure(body.jiraToken);
+    const tokenResult = {};   // токен пустой/не передан = не менять; сохраняем только переданные
+    if ('jiraToken' in body) tokenResult.jira = writeTokenSecure('jira', body.jiraToken);
+    if ('teamcityToken' in body) tokenResult.teamcity = writeTokenSecure('teamcity', body.teamcityToken);
+    if ('gitlabToken' in body) tokenResult.gitlab = writeTokenSecure('gitlab', body.gitlabToken);
     applyConfig();
-    _summaryCache.clear();   // могла смениться папка проектов → инвалидируем кэш парса
-    _jiraCache.clear();      // сменились host/email/token → сбросить кэш статусов
+    _summaryCache.clear();       // могла смениться папка проектов → инвалидируем кэш парса
+    _jiraCache.clear();          // сменились host/email/token → сбросить кэш статусов Jira
+    _tcCache.clear();            // сменился TeamCity host/token → перечитать сборки
+    _buildActiveCache.clear();
+    _mrCache.clear();            // сменился GitLab host/token → перечитать MR
     sendJSON(res, { ok: true, tokenResult, config: configView() });
     return;
   }
@@ -1486,6 +1562,7 @@ const server = http.createServer((req, res) => {
     sendJSON(res, { count: skills.length, skills });
     return;
   }
+  if (u.pathname === '/api/mcp/status') { apiMcpStatus(res, u).catch((e) => sendJSON(res, { available: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
   if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }

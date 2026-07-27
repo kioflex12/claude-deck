@@ -49,7 +49,8 @@ const notifiedDone = new Set();             // файлы, за чей теку�
 let pollTimer = null, polling = false;      // живой поллинг доски ~7с
 let tailTimer = null, tailCount = 0;        // live-tail открытой активной сессии (курсор = число блоков)
 let agentsTimer = null;                      // live-опрос фоновых сабагентов открытой сессии
-const MR_CACHE = {};                        // branch -> { ts, mrs } живые MR из GitLab (кэш клиента ~60с)
+const MR_CACHE = {};                        // branch -> { ts, mrs } живые MR из GitLab (кэш клиента ~30с)
+const LIVE_TTL = 30000;                     // TTL клиентских кэшей MR/Jira — влитый MR перелистнётся в пределах ~30с
 let mrHydrating = false;                    // идёт фоновая подгрузка MR для карточек
 const JIRA_CACHE = {};                      // wo -> { ts, available, status, category, summary } живой статус Jira
 let jiraHydrating = false;                  // идёт фоновая подгрузка статусов Jira
@@ -194,6 +195,8 @@ function renderFilters(){
 /* ---------- skills (статический контент макета вкладки) ---------- */
 /* TECH-2: списки НЕ захардкожены — тянутся с сервера (реальные скиллы/MCP из файлов окружения). */
 let SKILLS = [], MCP_SERVERS = [], skillsLoaded = false, mcpLoaded = false;
+let MCP_STATUS = { available: false, live: false, servers: [] }, mcpLoading = false;
+const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
 const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
 async function loadSkillsCatalog(){
   try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); SKILLS = Array.isArray(d.skills) ? d.skills : []; }
@@ -201,10 +204,12 @@ async function loadSkillsCatalog(){
   skillsLoaded = true;
   if (activeView === 'skills') renderSkills();
 }
-async function loadMcpCatalog(){
-  try { const r = await fetch('/api/mcp', { cache:'no-store' }); const d = await r.json(); MCP_SERVERS = Array.isArray(d.servers) ? d.servers : []; }
-  catch { MCP_SERVERS = []; }
-  mcpLoaded = true;
+async function loadMcpCatalog(refresh){
+  // Живой статус через SDK-пробу (mcpServerStatus); refresh=1 = «реконнект» (свежая проба).
+  mcpLoading = true; if (activeView === 'mcp') renderMcp();
+  try { const r = await fetch('/api/mcp/status' + (refresh ? '?refresh=1' : ''), { cache:'no-store' }); const d = await r.json(); MCP_STATUS = d; MCP_SERVERS = Array.isArray(d.servers) ? d.servers : []; }
+  catch { MCP_STATUS = { available:false, live:false, reason:'сеть', servers:[] }; MCP_SERVERS = []; }
+  mcpLoaded = true; mcpLoading = false;
   if (activeView === 'mcp') renderMcp();
 }
 function skillMatch(sk){
@@ -238,29 +243,59 @@ function renderSkills(){
       ${s.trig?`<div class="skill-trig"><b>когда зовётся</b>${esc(s.trig)}</div>`:''}
       <div class="skill-foot"><button class="skill-run" data-cmd="${esc(s.cmd)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${esc(s.cmd)}</button></div>
     </div>`).join('') : `<div class="empty">${SKILLS.length?'Ничего не найдено':'Скиллы не найдены'}</div>`;
-  grid.querySelectorAll('.skill-run').forEach(b => b.addEventListener('click', () => {
+  grid.querySelectorAll('.skill-run').forEach(b => b.addEventListener('click', async () => {
     const cmd = '/' + b.dataset.cmd;
-    const ta = document.getElementById('composer-ta');
-    if (currentFile && ta){ ta.value = cmd + ' '; ta.focus(); }   // открыта сессия — вставляем в композер
-    else if (navigator.clipboard){ navigator.clipboard.writeText(cmd).catch(()=>{}); }   // иначе — в буфер
+    if (currentFile){
+      await openSession(currentFile);                       // переключаемся в сессию — композер становится видимым
+      const ta = document.getElementById('composer-ta');
+      if (ta){ ta.value = cmd + ' '; ta.dispatchEvent(new Event('input')); ta.focus(); }   // input → включает кнопку отправки/ресайз
+      toast('Вставлено в композер: ' + cmd);
+    } else if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(cmd).then(()=>toast('Скопировано: ' + cmd)).catch(()=>toast('Не удалось скопировать'));
+    } else { toast('Открой сессию, чтобы вставить ' + cmd); }
   }));
 }
 
-/* ---------- mcp (реальный конфиг из файлов) ---------- */
-function mcpMatch(m){ return !query || ((m.name||'')+' '+(m.desc||'')+' '+(m.command||'')+' '+(m.scope||'')).toLowerCase().includes(query); }
+/* ---------- mcp (живой статус через SDK + разворот деталей + реконнект) ---------- */
+function mcpMatch(m){ return !query || ((m.name||'')+' '+(m.desc||'')+' '+(m.command||'')+' '+(m.scope||'')+' '+(m.status||'')).toLowerCase().includes(query); }
+const MCP_ST = {
+  connected:{c:'st-connected',t:'подключён'}, failed:{c:'st-failed',t:'ошибка'},
+  'needs-auth':{c:'st-needs-auth',t:'нужна авторизация'}, pending:{c:'st-pending',t:'подключается'},
+  unknown:{c:'st-unknown',t:'нет данных'},
+};
+function mcpBadge(s){ const m = MCP_ST[s] || MCP_ST.unknown; return `<span class="mcp-badge ${m.c}">${esc(m.t)}</span>`; }
 function renderMcp(){
-  if (!mcpLoaded){ loadMcpCatalog(); }
+  if (!mcpLoaded && !mcpLoading){ loadMcpCatalog(); }
   const items = MCP_SERVERS.filter(mcpMatch);
-  const body = !mcpLoaded ? `<div class="empty">Загрузка MCP…</div>`
-    : (items.length ? `<div class="mcp-grid">${items.map((m,i)=>`
-      <div class="mcp-card" style="animation-delay:${i*25}ms">
-        <div class="mcp-top"><span class="mcp-name">${esc(m.name)}</span><span class="mcp-scope">${esc(m.scope||'')}</span></div>
-        ${m.desc?`<div class="mcp-desc">${esc(m.desc)}</div>`:''}
-        <div class="mcp-foot"><span class="mcp-cat">${esc(m.transport||'')}</span><span class="mcp-cmd" title="${esc(m.command||'')}">${esc((m.command||'').slice(0,60))}</span></div>
-      </div>`).join('')}</div>` : `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены в конфигах'}</div>`);
+  const note = mcpLoading ? 'опрос…'
+    : (MCP_STATUS.live ? 'живой статус (SDK)'
+      : (MCP_STATUS.available === false ? ('статус недоступен: ' + esc(MCP_STATUS.reason || '') + ' — показаны конфиги') : 'из конфигов'));
+  const cards = items.map((m,i)=>{
+    const exp = mcpExpanded.has(m.name);
+    const needsAuth = m.status === 'needs-auth';
+    const toolList = Array.isArray(m.tools) && m.tools.length ? `<div class="mcp-tools">${m.tools.map(t=>`<span class="mcp-tool">${esc(t)}</span>`).join('')}</div>` : '';
+    return `<div class="mcp-card${exp?' open':''}" data-mcp="${esc(m.name)}" style="animation-delay:${i*20}ms">
+      <div class="mcp-top"><span class="mcp-name">${esc(m.name)}</span>${mcpBadge(m.status)}<span class="mcp-scope">${esc(m.scope||'')}</span></div>
+      ${m.desc?`<div class="mcp-desc">${esc(m.desc)}</div>`:''}
+      <div class="mcp-foot"><span class="mcp-cat">${esc(m.transport||'')}</span>${m.toolCount!=null?`<span class="mcp-cat">${m.toolCount} tools</span>`:''}<span class="mcp-cmd" title="${esc(m.command||'')}">${esc((m.command||'').slice(0,60))}</span></div>
+      ${exp?`<div class="mcp-detail">
+        ${m.error?`<div class="mcp-err">${esc(m.error)}</div>`:''}
+        ${needsAuth?`<div class="mcp-hint">Нужна авторизация. claude.ai-коннекторы — в настройках коннекторов claude.ai; остальные — через <code>claude mcp</code> или /mcp в интерактивной сессии. (Запуск OAuth прямо из Deck — отдельно.)</div>`:''}
+        <div class="mcp-kv"><span>статус</span><b>${esc(m.status||'—')}</b></div>
+        <div class="mcp-kv"><span>transport</span><b>${esc(m.transport||'—')}</b></div>
+        <div class="mcp-kv"><span>scope</span><b>${esc(m.scope||'—')}</b></div>
+        <div class="mcp-kv"><span>command</span><b>${esc(m.command||'—')}</b></div>
+        ${toolList}
+      </div>`:''}
+    </div>`;
+  }).join('');
+  const body = (mcpLoading && !MCP_SERVERS.length) ? `<div class="empty">Опрашиваю MCP…</div>`
+    : (items.length ? `<div class="mcp-grid">${cards}</div>` : `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
   document.getElementById('viewMcp').innerHTML = `<div class="mcp-main">
-    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${mcpLoaded?MCP_SERVERS.length+' серверов из конфигов':'загрузка…'}</span></div>
+    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${MCP_SERVERS.length} серверов · ${note}</span><button class="mcp-refresh" id="mcpRefresh"${mcpLoading?' disabled':''}>${mcpLoading?'опрос…':'Обновить'}</button></div>
     ${body}</div>`;
+  const rb = document.getElementById('mcpRefresh'); if (rb) rb.addEventListener('click', ()=>{ if (!mcpLoading) loadMcpCatalog(true); });
+  document.querySelectorAll('#viewMcp .mcp-card').forEach(c => c.addEventListener('click', ()=>{ const n = c.dataset.mcp; if (mcpExpanded.has(n)) mcpExpanded.delete(n); else mcpExpanded.add(n); renderMcp(); }));
 }
 
 /* ---------- session: правый рейл контекста (плотные секции на реальных данных + wf) ---------- */
@@ -405,23 +440,28 @@ async function loadMrs(t){
     + (m.project ? `<div class="rail-hint">${esc(m.project)}</div>` : '')
   ).join('');
 }
-async function hydrateMrs(){   // фоновая подгрузка MR для карточек (клиент-кэш 60с + серверный 30с → без спама)
+async function hydrateMrs(){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама)
   if (mrHydrating) return; mrHydrating = true;
   const now = Date.now();
   const branches = [...new Set(SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
   let changed = false;
   for (const br of branches){
     const c = MR_CACHE[br];
-    if (c && now - c.ts < 60000) continue;   // свежий клиент-кэш — не дёргаем GitLab
+    if (c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
     const s = SESSIONS.find(x => x.gitBranch === br);
     try {
       const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || ''), { cache:'no-store' });
       const d = await r.json();
       if (d && d.available){ MR_CACHE[br] = { ts: Date.now(), mrs: d.mrs || [] }; changed = true; }
+      else MR_CACHE[br] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
     } catch {}
   }
   mrHydrating = false;
   if (changed && (activeView==='board' || activeView==='status')) renderBoard(false);
+}
+function MR_TTL_RESET(){   // сброс клиентских кэшей MR/Jira (после смены токена в Настройках → сразу перечитать)
+  for (const k of Object.keys(MR_CACHE)) delete MR_CACHE[k];
+  for (const k of Object.keys(JIRA_CACHE)) delete JIRA_CACHE[k];
 }
 /* ---------- live-статус Jira: маппинг в колонку + чип/секция ---------- */
 // Маппинг Jira-статус → колонка (клиент, т.к. In Progress зависит от состояния билда). Возвращает {col, blocked}.
@@ -503,7 +543,7 @@ async function hydrateJira(){   // фоновая подгрузка стату�
   let changed = false, gated = false;
   for (const wo of wos){
     const c = JIRA_CACHE[wo];
-    if (c && now - c.ts < 60000) continue;
+    if (c && now - c.ts < LIVE_TTL) continue;
     try {
       const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo), { cache:'no-store' });
       const d = await r.json();
@@ -1253,22 +1293,29 @@ function seedJiraFromSessions(){
   const now = Date.now();
   for (const s of SESSIONS){ if (s.wo && s.jira && s.jira.available && s.jira.status) JIRA_CACHE[s.wo] = { ts: now, available:true, status:s.jira.status, category:s.jira.category }; }
 }
-/* ---------- живой поллинг доски (~7с) ---------- */
+/* ---------- живой поллинг доски: лёгкий тик ~7с (рендер) + тяжёлый re-fetch раз в ~30с ---------- */
+// Один таймер. Лёгкий тик перерисовывает доску (пульс «работает», timeAgo) СОХРАНЯЯ скролл/фильтр/поиск.
+// Тяжёлый тик (раз в ~30с) перечитывает /api/sessions + гидрирует MR/Jira, чтобы влитый MR сам стал «влит».
+// Открытая session-view (лента/композер/стрим) НЕ трогается — рендерим только на доске «Статусы»/«Доска».
+let _lastHeavy = 0;
 async function pollSessions(){
   if (polling) return; polling = true;
+  const onBoard = (activeView === 'board' || activeView === 'status');
+  const heavy = Date.now() - _lastHeavy >= 29000;
   try {
-    const r = await fetch('/api/sessions', { cache:'no-store' });
-    const data = await r.json();
-    if (Array.isArray(data.sessions)) SESSIONS = data.sessions;
+    if (heavy){
+      _lastHeavy = Date.now();
+      const r = await fetch('/api/sessions', { cache:'no-store' });
+      const data = await r.json();
+      if (Array.isArray(data.sessions)) SESSIONS = data.sessions;   // обновляем данные НА МЕСТЕ, приложение не пересоздаём
+      seedJiraFromSessions();
+      const nowSet = workingSet();
+      for (const file of nowSet){ if (!prevWorkingFiles.has(file)) notifiedDone.delete(file); }   // снова «работает» → перевзвести дедуп
+      for (const file of prevWorkingFiles){ if (!nowSet.has(file) && SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file)); }   // working→idle = завершила
+      prevWorkingFiles = nowSet;
+    }
   } catch { polling = false; return; }
-  seedJiraFromSessions();
-  const nowSet = workingSet();
-  for (const file of nowSet){ if (!prevWorkingFiles.has(file)) notifiedDone.delete(file); }   // снова «работает» → перевзвести дедуп
-  for (const file of prevWorkingFiles){                 // working → idle = сессия завершила работу
-    if (!nowSet.has(file) && SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file));
-  }
-  prevWorkingFiles = nowSet;
-  if (activeView==='board' || activeView==='status'){ renderNow(); renderBoard(false); hydrateMrs(); hydrateJira(); }  // session-view не трогаем
+  if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(); hydrateJira(); } }   // renderBoard(false) сохраняет colScroll; session-view не трогаем
   renderUsageBar();
   polling = false;
 }
@@ -1639,7 +1686,9 @@ async function openUpdatesModal(){
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
 async function openSettingsModal(){
   let cfg = {}; try { cfg = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch {}
-  const jira = cfg.jira || {};
+  const jira = cfg.jira || {}, tc = cfg.teamcity || {}, gl = cfg.gitlab || {};
+  const tokHint = cfg.electron ? '<div class="um-note">Токены хранятся локально в зашифрованном виде (хранилище ОС).</div>'
+    : '<div class="um-note" style="color:#e79">Standalone: токены безопасно сохранить нельзя — задайте их в .env (JIRA_TOKEN / TEAMCITY_TOKEN / GITLAB_TOKEN) рядом с server.mjs. Хосты и Jira email сохранятся.</div>';
   const back = modalBack('settingsBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
@@ -1647,14 +1696,24 @@ async function openSettingsModal(){
       <input id="setWo" class="ns-inp" type="text" placeholder="пусто → колонка «Статусы» мягко деградирует" value="${esc(cfg.woStatesDir||'')}">
       <label class="ns-lbl">Папка сессий Claude (CLAUDE_PROJECTS_DIR)</label>
       <input id="setProj" class="ns-inp" type="text" placeholder="${esc((cfg.defaults&&cfg.defaults.claudeProjectsDir)||'~/.claude/projects')}" value="${esc(cfg.claudeProjectsDir||'')}">
-      <div class="um-note" style="margin-top:12px">Jira — для колонки «Статусы» и живых статусов задач.</div>
+      <div class="um-note" style="margin-top:12px">Jira — колонка «Статусы» и живые статусы задач.</div>
       <label class="ns-lbl">Jira host</label>
       <input id="setJh" class="ns-inp" type="text" placeholder="your-org.atlassian.net" value="${esc(jira.host||'')}">
       <label class="ns-lbl">Jira email</label>
       <input id="setJe" class="ns-inp" type="text" placeholder="you@example.com" value="${esc(jira.email||'')}">
       <label class="ns-lbl">Jira API token${jira.tokenSet?' — задан':''}</label>
       <input id="setJt" class="ns-inp" type="password" placeholder="${jira.tokenSet?'сохранён — вставьте новый, чтобы заменить':'вставьте API-токен'}" autocomplete="off">
-      ${cfg.electron?'<div class="um-note">Токен хранится локально в зашифрованном виде (хранилище ОС).</div>':'<div class="um-note" style="color:#e79">Standalone: токен безопасно сохранить нельзя — задайте JIRA_TOKEN в .env рядом с server.mjs (папки и host/email сохранятся).</div>'}
+      <div class="um-note" style="margin-top:12px">TeamCity — рейл «Сборки» (статус Android/iOS-билдов).</div>
+      <label class="ns-lbl">TeamCity host</label>
+      <input id="setTh" class="ns-inp" type="text" placeholder="${esc((cfg.defaults&&cfg.defaults.teamcityHost)||'https://…')}" value="${esc(tc.host||'')}">
+      <label class="ns-lbl">TeamCity token${tc.tokenSet?' — задан':''}</label>
+      <input id="setTt" class="ns-inp" type="password" placeholder="${tc.tokenSet?'сохранён — вставьте новый, чтобы заменить':'вставьте bearer-токен'}" autocomplete="off">
+      <div class="um-note" style="margin-top:12px">GitLab — секция «Merge Requests» (живые MR по ветке).</div>
+      <label class="ns-lbl">GitLab host</label>
+      <input id="setGh" class="ns-inp" type="text" placeholder="${esc((cfg.defaults&&cfg.defaults.gitlabHost)||'https://…')}" value="${esc(gl.host||'')}">
+      <label class="ns-lbl">GitLab token${gl.tokenSet?' — задан':''}</label>
+      <input id="setGt" class="ns-inp" type="password" placeholder="${gl.tokenSet?'сохранён — вставьте новый, чтобы заменить':'вставьте private-токен'}" autocomplete="off">
+      ${tokHint}
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="setSave" type="button">Сохранить</button></div>
       <div class="um-note" id="setStatus" style="margin-top:8px"></div>
     </div></div>`;
@@ -1670,14 +1729,18 @@ async function openSettingsModal(){
       claudeProjectsDir: back.querySelector('#setProj').value.trim(),
       jiraHost: back.querySelector('#setJh').value.trim(),
       jiraEmail: back.querySelector('#setJe').value.trim(),
+      teamcityHost: back.querySelector('#setTh').value.trim(),
+      gitlabHost: back.querySelector('#setGh').value.trim(),
     };
-    const jt = back.querySelector('#setJt').value;
-    if (jt) payload.jiraToken = jt;
+    const jt = back.querySelector('#setJt').value; if (jt) payload.jiraToken = jt;
+    const tt = back.querySelector('#setTt').value; if (tt) payload.teamcityToken = tt;
+    const gt = back.querySelector('#setGt').value; if (gt) payload.gitlabToken = gt;
     let r; try { r = await (await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json(); } catch { status.textContent = 'Ошибка сохранения.'; return; }
-    let msg = 'Сохранено.';
-    if (r.tokenResult && r.tokenResult.ok === false && r.tokenResult.standalone) msg += ' Токен не сохранён (standalone) — используйте .env.';
+    const standalone = r.tokenResult && Object.values(r.tokenResult).some(x => x && x.ok === false && x.standalone);
+    let msg = 'Сохранено.' + (standalone ? ' Токены не сохранены (standalone) — используйте .env.' : '');
     status.textContent = msg + ' Обновляю доску…';
-    if (typeof pollSessions === 'function') await pollSessions();   // доска перечитает /api/sessions с новыми папками/Jira — без перезапуска
+    MR_TTL_RESET();   // сбросить клиентские кэши MR/Jira, чтобы сборки/MR перечитались с новым токеном
+    if (typeof pollSessions === 'function') await pollSessions();
     if (typeof loadUsage === 'function') loadUsage();
     setTimeout(close, 900);
   });
@@ -1692,6 +1755,8 @@ loadAuth();
 if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
 // Electron: открыть окно «Обновления» из меню/трея + принимать статусы автоапдейтера.
 if (window.deckNative && window.deckNative.onOpenUpdates) window.deckNative.onOpenUpdates(openUpdatesModal);
+// Electron: Ctrl/Cmd+K через нативный аксельратор меню (физическое сочетание может не дойти до document-listener).
+if (window.deckNative && window.deckNative.onOpenPalette) window.deckNative.onOpenPalette(() => openPal());
 if (window.deckNative && window.deckNative.onUpdateStatus) window.deckNative.onUpdateStatus(renderUpdateStatus);
 load();
 

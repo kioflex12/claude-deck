@@ -14,3 +14,5 @@ deck-trash/
 # Локальный конфиг/секреты (standalone пишет рядом с server.mjs; в Electron — в userData)
 deck-config.json
 jira-token.bin
+teamcity-token.bin
+gitlab-token.bin

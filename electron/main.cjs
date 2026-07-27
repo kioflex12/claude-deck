@@ -230,6 +230,9 @@ function showAbout() {
   });
 }
 function openUpdatesUI() { showWindow(); if (mainWindow) mainWindow.webContents.send('open-updates'); }
+// Ctrl/Cmd+K через нативный аксельратор: в Electron физическое сочетание может не дойти до document-listener рендерера —
+// меню-аксельратор гарантированно ловит его и шлёт в renderer открыть командную палитру. Web/standalone — свой keydown.
+function openPaletteUI() { showWindow(); if (mainWindow) mainWindow.webContents.send('open-palette'); }
 
 ipcMain.handle('deck:appVersion', () => app.getVersion());
 ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), hasToken: hasToken(), encryptionAvailable: encryptionOk(), packaged: app.isPackaged }));
@@ -259,7 +262,7 @@ function buildMenu() {
       isMac ? { role: 'close' } : { label: 'Выход', click: () => { app.isQuitting = true; app.quit(); } },
     ] },
     { label: 'Правка', submenu: [ { role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' } ] },
-    { label: 'Вид', submenu: [ { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' } ] },
+    { label: 'Вид', submenu: [ { label: 'Командная палитра', accelerator: 'CommandOrControl+K', click: openPaletteUI }, { type: 'separator' }, { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' } ] },
     { label: 'Окно', submenu: [ { role: 'minimize' }, { role: 'zoom' } ] },
     { label: 'Помощь', role: 'help', submenu: [
       { label: 'Проверить обновления…', click: openUpdatesUI },
