@@ -9,7 +9,7 @@
 //                 env WO_STATES_DIR -> дефолт ниже.
 
 import http from 'node:http';
-import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,24 @@ const WORKING_MS = 20 * 1000;         // «работает сейчас»: фа
 const LIST_CAP = 150;                 // сколько самых свежих сессий листаем
 const MSG_CAP = 8000;                 // максимум символов на текстовый блок транскрипта
 const SYSREM = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+
+// -------- пользовательские теги на сессию (Deck-side, сессии read-only). Ключ = rel-путь файла. --------
+const TAGS_FILE = path.join(HERE, 'deck-tags.json');
+let _tags = null;
+function loadTags() {
+  if (_tags) return _tags;
+  try { _tags = JSON.parse(readFileSync(TAGS_FILE, 'utf8')); if (!_tags || typeof _tags !== 'object') _tags = {}; }
+  catch { _tags = {}; }
+  return _tags;
+}
+function getTags(file) { const t = loadTags()[file]; return Array.isArray(t) ? t : []; }
+function setTags(file, tags) {
+  const map = loadTags();
+  const clean = [...new Set((Array.isArray(tags) ? tags : []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
+  if (clean.length) map[file] = clean; else delete map[file];
+  try { writeFileSync(TAGS_FILE, JSON.stringify(map, null, 2)); } catch {}
+  return clean;
+}
 
 // -------- дешёвые экстракторы по сырому тексту (без JSON.parse каждой строки) --------
 
@@ -76,6 +94,12 @@ function pickWorkingBranch(branches) {
   if (wo.length) return wo[wo.length - 1];
   if (nonBase.length) return nonBase[nonBase.length - 1];
   return uniq[uniq.length - 1];
+}
+// Базовая ветка (источник форка рабочей ветки) = первая базовая из истории gitBranch сессии; иначе '' (фолбэк на targetEnv у вызывающего).
+function pickBaseBranch(branches) {
+  const empty = new Set(['', 'head']);
+  for (const b of branches) { const s = String(b || '').trim(); if (s && !empty.has(s.toLowerCase()) && isBaseBranch(s)) return s; }
+  return '';
 }
 // Первичный WO из первого человеческого промпта: у сессии-уборки ветка = preprod, WO нет в ветке/заголовке,
 // но он есть в первом user-сообщении (напр. ссылка .../browse/WO-13914). Сканируем первые ~5 человеческих реплик.
@@ -169,9 +193,9 @@ function wfInfo(st, active) {
   const build = !!(st.client && st.client.buildTriggered);
 
   let col;
-  if (step >= 13) col = 'merge';
-  else if (st.serverApprovalRequired && !st.approvedForMR) col = 'merge';
-  else if (hasMr) col = (st.testedOnSquad || step >= 13) ? 'merge' : 'qa';
+  if (step >= 13) col = 'done';                                           // влито/завершено
+  else if (st.serverApprovalRequired && !st.approvedForMR) col = 'readymerge';
+  else if (hasMr) col = st.testedOnSquad ? 'readymerge' : 'qa';           // MR открыт, оттестировано → ждёт мерджа
   else if (build || (step >= 7 && step < 11)) col = 'build';
   else col = active ? 'active' : 'todo';
 
@@ -180,10 +204,14 @@ function wfInfo(st, active) {
   const buildState = (build && step < 13 && (col === 'build' || col === 'qa')) ? 'running'
     : (st.testedOnSquad === true || step >= 13) ? 'done' : 'none';
   const mrState = step >= 13 ? 'merged' : 'open';
+  // Внутри «На QA»: отдана на QA/проверена (readyForQA/qaReportPosted/deviceVerified/verifiedLocallyByUser) —
+  // иначе ждёт ЛОКАЛЬНОЙ проверки разработчиком (билд готов, но ещё не отдана). Развод по этим полям dev-workflow.
+  const handed = !!(st.readyForQA || st.qaReportPosted || st.deviceVerified || st.verifiedLocallyByUser);
+  const wfQa = col === 'qa' ? (handed ? 'qa' : 'localcheck') : '';
 
   return {
     wfColumn: col, wfStep: step, wfMr: mrUrl || hasMr, wfBuild: build,
-    wfMrUrl: mrUrl || null, wfMrState: mrState, wfBuildState: buildState,
+    wfMrUrl: mrUrl || null, wfMrState: mrState, wfBuildState: buildState, wfQa,
   };
 }
 
@@ -238,8 +266,9 @@ function buildSessionSummary(f, wfStates) {
   let text = '';
   try { text = readFileSync(f.full, 'utf8'); } catch { text = ''; }
   const cwd = firstString(text, 'cwd') || '';
+  const branchesAll = allStrings(text, 'gitBranch');
   // Рабочая (не-базовая) ветка сессии — см. pickWorkingBranch. cwd остаётся first (не меняется).
-  const gitBranch = pickWorkingBranch(allStrings(text, 'gitBranch'));
+  const gitBranch = pickWorkingBranch(branchesAll);
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
   if (!title) title = (lastPrompt || '').split('\n')[0].slice(0, 80) || '(без заголовка)';
@@ -252,10 +281,12 @@ function buildSessionSummary(f, wfStates) {
   const st = wo ? wfStates.get(wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
+  // Базовая ветка (форк-источник ≈ таргет мерджа): из истории gitBranch, фолбэк — targetEnv из dev-workflow.
+  const baseBranch = pickBaseBranch(branchesAll) || scope.targetEnv || '';
   return {
     id: f.id,
     file: f.rel,
-    title, lastPrompt, cwd, project, gitBranch, wo, model,
+    title, lastPrompt, cwd, project, gitBranch, wo, model, baseBranch,
     msgs: countMessages(text),
     winTokens,
     ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
@@ -263,6 +294,7 @@ function buildSessionSummary(f, wfStates) {
     active,
     working: (Date.now() - f.mtime) < WORKING_MS,   // живая генерация прямо сейчас (< 20с)
     column: columnByAge(f.mtime),
+    tags: getTags(f.rel),                            // пользовательские теги (Deck-side)
     ...wf,
     ...scope,
   };
@@ -402,13 +434,14 @@ function apiSession(relFile) {
   const st = wo ? loadWfStates().get(wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
+  const baseBranch = pickBaseBranch(branches) || scope.targetEnv || '';
   const notes = notesFromClarifications(st && st.userClarifications);
   return {
     id: path.basename(rp.resolved).replace(/\.jsonl$/, ''),
     file: relFile,
     title, lastPrompt, cwd,
     project: cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : '',
-    gitBranch,
+    gitBranch, baseBranch,
     wo,
     model: prettyModel(model),
     winTokens,
@@ -419,6 +452,7 @@ function apiSession(relFile) {
     blocks,
     count: msgCount,
     notes,
+    tags: getTags(relFile),
     ...wf,
     ...scope,
   };
@@ -697,6 +731,15 @@ function readJsonBody(req, maxBytes) {
     req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch { reject(new Error('bad json')); } });
     req.on('error', reject);
   });
+}
+async function apiTags(req, res) {   // POST {file, tags:[...]} — перезаписывает набор тегов сессии, персист на диск
+  let body;
+  try { body = await readJsonBody(req, 256 * 1024); }
+  catch (e) { sendJSON(res, { error: (e && e.message) || 'read error' }, 400); return; }
+  const file = String(body.file || '');
+  if (!file) { sendJSON(res, { error: 'no file' }, 400); return; }
+  const tags = setTags(file, body.tags);
+  sendJSON(res, { file, tags });
 }
 async function apiChatPrepare(req, res) {
   let body;
@@ -1039,6 +1082,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
+  if (u.pathname === '/api/tags') { apiTags(req, res); return; }
   if (u.pathname === '/api/usage') { apiUsage(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }

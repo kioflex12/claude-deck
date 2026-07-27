@@ -310,17 +310,12 @@
       <kbd class="kbd" id="palTrigger" title="Командная палитра">Ctrl K</kbd>
       <div class="q-drop" id="qDrop" hidden></div>
     </label>
-    <div class="filters" id="filters">
-      <button class="fchip" data-f="all" aria-pressed="true">Все</button>
-      <button class="fchip" data-f="client" aria-pressed="false">Клиент</button>
-      <button class="fchip" data-f="backend" aria-pressed="false">Бэкенд</button>
-      <button class="fchip" data-f="statics" aria-pressed="false">Статика</button>
-    </div>
     <button id="notifyBtn" class="notify-btn" type="button" title="Уведомления о завершении" aria-pressed="false">🔕</button>
   </header>
 
   <div id="viewBoard" style="display:flex;flex-direction:column;flex:1;min-height:0">
     <div class="now" id="now"></div>
+    <div class="board-filters" id="filters"></div>
     <main class="board" id="board"></main>
   </div>
 
@@ -373,11 +368,13 @@ const COLUMNS = [
 ];
 /* доска по стадии workflow (основная) */
 const WF_COLUMNS = [
-  { key:'todo',   title:'Ждёт',    dot:'var(--text-faint)' },
-  { key:'active', title:'В работе', dot:'var(--accent)' },
-  { key:'build',  title:'Билды',    dot:'var(--warn)' },
-  { key:'qa',     title:'На QA',    dot:'var(--info)' },
-  { key:'merge',  title:'Мердж',    dot:'var(--good)' },
+  { key:'blocked',    title:'Заблокировано',    dot:'var(--bad)' },
+  { key:'todo',       title:'Ждёт',             dot:'var(--text-faint)' },
+  { key:'active',     title:'В работе',         dot:'var(--accent)' },
+  { key:'build',      title:'Build In Progress', dot:'var(--warn)' },
+  { key:'qa',         title:'На QA',            dot:'var(--info)' },
+  { key:'readymerge', title:'Ждёт мерджа',      dot:'var(--info)' },
+  { key:'done',       title:'Готово',           dot:'var(--good)' },
 ];
 
 let SESSIONS = [];
@@ -480,8 +477,9 @@ function searchableText(s){
   if (s.clientCu) parts.push(s.clientCu);
   if (s.backend){ parts.push('backend бэкенд'); if (Array.isArray(s.changedServices)) parts.push(s.changedServices.join(' ')); }
   if (s.statics) parts.push('статика statics');
-  if (s.targetEnv) parts.push(s.targetEnv);
-  if (s.merged) parts.push('смерджено merged');
+  if (s.baseBranch) parts.push(s.baseBranch);              // базовая/таргет ветка
+  if (Array.isArray(s.tags) && s.tags.length) parts.push(s.tags.join(' '));   // пользовательские теги
+  if (s.merged) parts.push('смерджено merged готово');
   // стадия — по Jira-приоритету если доступна, иначе локальный wfColumn; добавляем и код, и человекочитаемую метку
   const jira = (s.wo && JIRA_CACHE[s.wo] && JIRA_CACHE[s.wo].available) ? JIRA_CACHE[s.wo] : null;
   let col = s.wfColumn;
@@ -507,36 +505,60 @@ function ctxMini(s){
   return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
 }
 function isWorking(s){ return !!s && (s.working === true || (!!streamingFile && s.file === streamingFile)); }
-function scopeChipsHTML(s){   // полные метки скоупа: клиентская копия cuN · backend · статика · целевой/мердж-env
+function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
   if (s.clientCu) out.push(`<span class="chip sc-cu">${esc(s.clientCu)}</span>`);
   if (s.backend)  out.push(`<span class="chip sc-be">backend</span>`);
   if (s.statics)  out.push(`<span class="chip sc-st">статика</span>`);
-  if (s.merged)   out.push(`<span class="chip sc-merged">смерджено${s.targetEnv?': '+esc(s.targetEnv):''}</span>`);
-  else if (s.targetEnv) out.push(`<span class="chip sc-env">→ ${esc(s.targetEnv)}</span>`);
+  if (s.baseBranch) out.push(`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(s.baseBranch)}${s.merged?' ✓':''}</span>`);
   return out.join('');
 }
-// Статус для статус-бара сверху карточки: Jira-карточки — реальный текст Jira; остальные — локальная стадия.
+function tagsChipsHTML(s){    // пользовательские теги
+  const t = Array.isArray(s.tags) ? s.tags : [];
+  return t.map(x=>`<span class="chip sc-tag">#${esc(x)}</span>`).join('');
+}
+// Единый резолв колонки/стадии (для keyOf и статус-бара): приоритет по уточнению коордиинатора.
+function effectiveColumn(s){
+  let jm = null;
+  if (s.wo){ const j = JIRA_CACHE[s.wo]; if (j && j.available && j.status) jm = jiraColumn(j.status, j.category, s); }
+  if (jm && jm.blocked) return { col:'blocked', blocked:true };            // 1. Заблокировано
+  if (s.wfBuildState === 'running') return { col:'build', blocked:false }; // 2. Build In Progress — только пока билд идёт
+  let col = s.wfColumn || (s.active ? 'active' : 'todo');                  // done/readymerge/qa/active/todo — из dev-workflow…
+  if (jm && jm.col && jm.col !== 'build') col = jm.col;                    // …или из Jira, если доступен
+  if (col === 'build') col = 'qa';                                        // 3. билд завершён (не идёт) → «На QA»
+  return { col, blocked:false };
+}
+// Статус-бар: НЕ дублирует колонку. Русский под-стадийный текст сверх колонки (или полный ярлык в «Доске»).
 function cardStatus(s){
-  const jira = (s.wo && JIRA_CACHE[s.wo] && JIRA_CACHE[s.wo].available) ? JIRA_CACHE[s.wo] : null;
-  if (jira && jira.status){
-    const m = jiraColumn(jira.status, jira.category, s);
-    return { text: jira.status, col: m.col || s.wfColumn || 'todo', blocked: m.blocked };
+  const e = effectiveColumn(s);
+  let sub = '';
+  if (e.col === 'qa'){
+    const j = (s.wo && JIRA_CACHE[s.wo] && JIRA_CACHE[s.wo].available) ? JIRA_CACHE[s.wo] : null;
+    if (j && j.status) sub = jiraSubLabel(j.status);          // «Ревью»/«Проверка продюсером» — если реально отличается
+    if (!sub && s.wfQa === 'localcheck') sub = 'Ожидает проверки';  // локальная проверка разработчиком (билд готов, не отдан в QA)
   }
-  return { text: WF_LABEL[s.wfColumn] || 'Ждёт', col: s.wfColumn || 'todo', blocked: false };
+  return { col:e.col, blocked:e.blocked, sub };
 }
 function cardHTML(s){
+  const wf = activeView === 'status';
   const working = isWorking(s);
   const st = cardStatus(s);
   const blocked = st.blocked;
-  const barCls = 'card-status cs-' + esc(st.col) + (blocked ? ' cs-blocked' : '');
-  const statusBar = `<div class="${barCls}">${blocked ? 'Заблокировано' : esc(st.text)}</div>`;
-  const stripe = working ? `class="card stripe" style="--st:var(--good)"` : s.active ? `class="card stripe" style="--st:var(--accent)"` : 'class="card"';
+  // Статусы: колонка = стадия → бар ТОЛЬКО для под-стадийного уточнения (без дубля названия колонки).
+  // Доска (по свежести): колонок-стадий нет → бар всегда, полный локализованный ярлык.
+  let statusBar = '';
+  if (wf){
+    if (st.sub) statusBar = `<div class="card-status cs-${esc(st.col)}">${esc(st.sub)}</div>`;
+  } else {
+    const txt = st.sub || WF_LABEL[st.col] || '';
+    if (txt) statusBar = `<div class="card-status cs-${esc(st.col)}${blocked?' cs-blocked':''}">${esc(txt)}</div>`;
+  }
+  const stColor = blocked ? 'var(--bad)' : working ? 'var(--good)' : s.active ? 'var(--accent)' : '';   // blocked — красная полоса (виден и без бара)
+  const stripe = stColor ? `class="card stripe" style="--st:${stColor}"` : 'class="card"';
   const pulse = working ? '<span class="pulse"></span>' : '';
-  const wfChips = activeView==='status' ? [
+  const wfChips = wf ? [
     (s.wfStep!=null ? `<span class="chip">шаг ${s.wfStep}</span>` : ''),
     (s.wfMr ? `<span class="chip">MR</span>` : ''),
-    (s.wfBuild ? `<span class="chip">build</span>` : ''),
   ].join('') : '';
   const chips = [
     s.gitBranch ? `<span class="chip repo">⎇ ${esc(s.gitBranch)}</span>` : '',
@@ -544,6 +566,7 @@ function cardHTML(s){
     `<span class="chip">${s.msgs} сообщ.</span>`,
     s.wo ? `<span class="chip">${esc(s.wo)}</span>` : '',
     scopeChipsHTML(s),
+    tagsChipsHTML(s),
     wfChips,
   ].join('');
   const flag = working
@@ -570,13 +593,7 @@ function renderBoard(animate){
   const board = document.getElementById('board');
   const workflow = activeView==='status';
   const cols = workflow ? WF_COLUMNS : COLUMNS;
-  const keyOf = s => {
-    if (workflow && s.wo){                       // живой Jira-статус приоритетнее локального dev-workflow
-      const j = JIRA_CACHE[s.wo];
-      if (j && j.available && j.status){ const m = jiraColumn(j.status, j.category, s); if (m.col) return m.col; }
-    }
-    return workflow ? s.wfColumn : s.column;
-  };
+  const keyOf = s => workflow ? effectiveColumn(s).col : s.column;   // 7-колоночная логика — единый резолв
   // поллинг перерисовывает без анимации и с сохранением прокрутки — чтобы доска не «дёргалась»
   const sx = board.scrollLeft;
   const colScroll = [...board.querySelectorAll('.col-body')].map(el=>el.scrollTop);
@@ -696,7 +713,15 @@ function renderMcp(){
 }
 
 /* ---------- session: правый рейл контекста (плотные секции на реальных данных + wf) ---------- */
-const WF_LABEL = { todo:'Ждёт', active:'В работе', build:'Билды', qa:'На QA', merge:'Мердж' };
+const WF_LABEL = { blocked:'Заблокировано', todo:'Ждёт', active:'В работе', build:'Build In Progress', qa:'На QA', readymerge:'Ждёт мерджа', done:'Готово' };
+// Локализация сырого Jira-статуса → русское под-стадийное уточнение (согласовано со словарём колонок).
+// Возвращает '' когда статус = самой колонке (чтобы не дублировать её название).
+function jiraSubLabel(status){
+  const n = String(status||'').toLowerCase();
+  if (/producer\s*review|продюсер/.test(n)) return 'Проверка продюсером';
+  if (/in\s*review|ревью|на\s*ревью/.test(n)) return 'Ревью';
+  return '';   // In QA / Ready To QA / testing и т.п. — то же, что колонка «На QA» → без дубля
+}
 function sideHTML(t){
   const p = Math.round((t.ctxPct||0)*100);
   const stateColor = t.active ? 'var(--good)' : 'var(--text-faint)';
@@ -763,9 +788,13 @@ function sideHTML(t){
         ${t.clientCu?`<span class="chip sc-cu">${esc(t.clientCu)}</span>`:''}
         ${t.backend?`<span class="chip sc-be">backend</span>`:''}
         ${t.statics?`<span class="chip sc-st">статика</span>`:''}
-        ${t.merged?`<span class="chip sc-merged">смерджено${t.targetEnv?': '+esc(t.targetEnv):''}</span>`:(t.targetEnv?`<span class="chip sc-env">→ ${esc(t.targetEnv)}</span>`:'')}
+        ${t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:''}
       </div>
       ${(t.backend && Array.isArray(t.changedServices) && t.changedServices.length)?`<div class="rail-hint">сервисы: ${t.changedServices.map(esc).join(', ')}</div>`:''}
+    </div>
+    <div class="sec"><div class="sec-label">Теги</div>
+      <div class="tags-wrap" id="tagsWrap"></div>
+      <input class="tags-input" id="tagsInput" type="text" placeholder="добавить тег + Enter" autocomplete="off" spellcheck="false">
     </div>
     <div class="sec"><div class="sec-label">Merge Requests</div>${mrSection}</div>
     <div class="sec"><div class="sec-label">Сборки</div>${buildSection}</div>
@@ -852,8 +881,8 @@ function jiraColumn(status, category, s){
   const n = String(status||'').toLowerCase();
   const inProg = () => ({ col:(s && s.wfBuildState==='running')?'build':'active', blocked:false });   // In Progress → build если билд идёт, иначе active
   if (/block|блок/.test(n)) return { col:null, blocked:true };            // blocked — стадию не меняем, только бейдж
-  if (/ready\s*(to|for)?\s*merge|к\s*мерж|готов.*мерж/.test(n)) return { col:'merge', blocked:false };
-  if (/done|release|closed|resolved|готово|релиз|закрыт/.test(n) || category==='done') return { col:'merge', blocked:false };
+  if (/ready\s*(to|for)?\s*merge|к\s*мерж|готов.*мерж/.test(n)) return { col:'readymerge', blocked:false };
+  if (/done|release|closed|resolved|готово|релиз|закрыт/.test(n) || category==='done') return { col:'done', blocked:false };
   if (/in\s*review|ready\s*(to|for)?\s*qa|in\s*qa|producer\s*review|testing|review|провер|ревью|тестир|на\s*qa/.test(n)) return { col:'qa', blocked:false };
   if (/in\s*progress|in\s*dev|development|doing|в\s*работе|в\s*процесс|разработ/.test(n)) return inProg();
   if (/to\s*do|backlog|open|new|selected|to\s*be|ждёт|бэклог|открыт|новая/.test(n) || category==='new') return { col:'todo', blocked:false };
@@ -873,6 +902,35 @@ async function loadJira(t){
   JIRA_CACHE[t.wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
   if (!d.status){ box2.innerHTML = `<div class="rail-empty">— статус не получен —</div>`; return; }
   box2.innerHTML = `<div class="row-item"><span class="ri-k">статус</span>${jiraChipHTML(d)}</div>` + (d.summary?`<div class="rail-hint">${esc(d.summary)}</div>`:'');
+}
+/* ---------- пользовательские теги сессии (add/edit/delete, Deck-side) ---------- */
+function currentTags(){ const t = currentFile && SESSION_CACHE[currentFile]; return (t && Array.isArray(t.tags)) ? t.tags.slice() : []; }
+async function saveTags(next){
+  if (!currentFile) return;
+  const clean = [...new Set(next.map(x=>String(x).trim()).filter(Boolean))].slice(0,30);
+  try {
+    const r = await fetch('/api/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: currentFile, tags: clean }) });
+    const d = await r.json();
+    const tags = Array.isArray(d.tags) ? d.tags : clean;
+    if (SESSION_CACHE[currentFile]) SESSION_CACHE[currentFile].tags = tags;
+    const se = SESSIONS.find(s=>s.file===currentFile); if (se) se.tags = tags;   // чтобы поиск/фильтр/карточка сразу видели
+    renderTags();
+  } catch {}
+}
+function renderTags(){
+  const wrap = document.getElementById('tagsWrap'); if (!wrap) return;
+  const tags = currentTags();
+  wrap.innerHTML = tags.length ? tags.map((x,i)=>`<span class="tag-chip" data-i="${i}"><span class="tag-txt" title="переименовать">#${esc(x)}</span><button class="tag-x" type="button" title="удалить">✕</button></span>`).join('') : `<span class="rail-empty">тегов нет</span>`;
+  wrap.querySelectorAll('.tag-chip').forEach(chip=>{
+    const i = +chip.dataset.i;
+    chip.querySelector('.tag-x').addEventListener('click', e=>{ e.stopPropagation(); const t=currentTags(); t.splice(i,1); saveTags(t); });
+    chip.querySelector('.tag-txt').addEventListener('click', ()=>{ const t=currentTags(); const v=prompt('Переименовать тег:', t[i]); if (v!=null && v.trim()!==t[i]){ t[i]=v.trim(); saveTags(t); } });
+  });
+}
+function wireTags(){
+  renderTags();
+  const inp = document.getElementById('tagsInput'); if (!inp) return;
+  inp.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); const v=inp.value.trim(); if (v){ const t=currentTags(); t.push(v); saveTags(t); inp.value=''; } } });
 }
 async function hydrateJira(){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с)
   if (jiraHydrating) return; jiraHydrating = true;
@@ -1409,7 +1467,6 @@ async function openSession(file){
   document.getElementById('viewSkills').style.display = 'none';
   document.getElementById('viewMcp').style.display = 'none';
   document.getElementById('viewSession').style.display = 'flex';
-  document.getElementById('filters').style.display = 'none';
   document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected','false'));
   const bar = document.getElementById('sessionBar');
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
@@ -1435,6 +1492,7 @@ async function openSession(file){
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
+  wireTags();          // секция «Теги»: add/edit/delete
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
@@ -1516,9 +1574,7 @@ function setView(v){
   document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
   document.getElementById('viewMcp').style.display = v==='mcp' ? 'flex' : 'none';
   document.getElementById('viewSession').style.display = 'none';
-  document.getElementById('filters').style.display = boardish ? 'flex' : 'none';
-  const ph = { board:'фильтр сессий…', status:'фильтр сессий…', skills:'поиск скиллов…', mcp:'поиск MCP-серверов…' };
-  document.getElementById('q').placeholder = ph[v] || 'поиск…';
+  document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
   if (v==='skills') renderSkills(); else if (v==='mcp') renderMcp(); else renderBoard(true);
 }
@@ -1682,8 +1738,8 @@ function injectCSS(){
     .chip.sc-cu{ color:var(--accent-ink); border-color:var(--accent-soft); background:var(--accent-soft); }
     .chip.sc-be{ color:var(--info); border-color:var(--info-soft); background:var(--info-soft); }
     .chip.sc-st{ color:var(--warn); border-color:var(--warn-soft); background:var(--warn-soft); }
-    .chip.sc-env{ color:var(--text-muted); }
-    .chip.sc-merged{ color:var(--good); border-color:var(--good-soft); background:var(--good-soft); }
+    .chip.sc-base{ color:var(--text-muted); border-color:var(--border-strong); font-family:var(--mono); }
+    .chip.sc-tag{ color:var(--accent-ink); border-color:var(--accent-soft); background:var(--accent-soft); }
     /* живой статус Jira — цвет по statusCategory */
     .chip.jira-new{ color:var(--text-muted); border-color:var(--border-strong); }
     .chip.jira-indeterminate{ color:var(--info); border-color:var(--info-soft); background:var(--info-soft); }
@@ -1695,8 +1751,18 @@ function injectCSS(){
     .cs-active{ background:var(--accent-soft); color:var(--accent-ink); }
     .cs-build{ background:var(--warn-soft); color:var(--warn); }
     .cs-qa{ background:var(--info-soft); color:var(--info); }
-    .cs-merge{ background:var(--good-soft); color:var(--good); }
+    .cs-readymerge{ background:var(--info-soft); color:var(--info); }
+    .cs-done{ background:var(--good-soft); color:var(--good); }
     .cs-blocked{ background:var(--bad-soft); color:var(--bad); }
+
+    /* фильтр проектов на доске (перенесён из топбара) + теги в рейле */
+    .board-filters{ display:flex; gap:6px; flex-wrap:wrap; padding:0 22px 10px; flex:none; }
+    .tags-wrap{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+    .tag-chip{ display:inline-flex; align-items:center; gap:5px; background:var(--accent-soft); border:1px solid var(--accent-soft); border-radius:20px; padding:2px 4px 2px 9px; }
+    .tag-chip .tag-txt{ font-size:11.5px; color:var(--accent-ink); cursor:pointer; }
+    .tag-chip .tag-x{ border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:11px; padding:0 3px; }
+    .tag-chip .tag-x:hover{ color:var(--bad); }
+    .tags-input{ width:100%; box-sizing:border-box; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:6px 10px; color:var(--text); font-family:var(--ui); font-size:12.5px; }
 
     /* карточка «работает сейчас» (зелёная) + тумблер уведомлений в топбаре */
     .flag.working{ background:var(--good-soft); color:var(--good); }
@@ -1978,7 +2044,6 @@ function openNewSession(cwd, prompt, mode){
   document.getElementById('viewSkills').style.display='none';
   document.getElementById('viewMcp').style.display='none';
   document.getElementById('viewSession').style.display='flex';
-  document.getElementById('filters').style.display='none';
   document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
