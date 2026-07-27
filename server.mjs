@@ -12,7 +12,8 @@ import http from 'node:http';
 import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, renameSync, existsSync, cpSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn, execFile } from 'node:child_process';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1242,6 +1243,77 @@ async function jiraStatus(wo) {
 }
 async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '')); }
 
+// -------- D1: авторизация Claude ИЗ приложения (без ручного терминала). Через CLI `claude auth`. --------
+// Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
+const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+let _authCache = { ts: 0, data: null };
+const AUTH_TTL = 8000;
+function claudeAuthStatus() {
+  return new Promise((resolve) => {
+    execFile(CLAUDE_BIN, ['auth', 'status', '--json'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
+      let j = null; try { j = JSON.parse(String(stdout || '').trim()); } catch {}
+      if (j && typeof j.loggedIn === 'boolean') resolve({ loggedIn: j.loggedIn, email: j.email || null, orgName: j.orgName || null, subscriptionType: j.subscriptionType || null, authMethod: j.authMethod || null });
+      else resolve({ loggedIn: false, reason: (err && err.message) || 'no status', raw: String(stdout || '').slice(0, 200) });
+    });
+  });
+}
+async function apiAuth(res) {
+  if (_authCache.data && Date.now() - _authCache.ts < AUTH_TTL) { sendJSON(res, _authCache.data); return; }
+  const data = await claudeAuthStatus();
+  _authCache = { ts: Date.now(), data };
+  sendJSON(res, data);
+}
+// Логин: спавним `claude auth login --claudeai` (пайпы → режим «вставь код»), парсим OAuth-URL из stdout,
+// отдаём клиенту (тот открывает в системном браузере). Держим процесс до ввода кода.
+const logins = new Map();   // loginId -> { child, buf }
+function apiAuthLogin(res) {
+  const loginId = 'lg_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  let child;
+  try { child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], { windowsHide: true, shell: process.platform === 'win32' }); }
+  catch (e) { sendJSON(res, { error: 'spawn failed: ' + (e && e.message) }, 500); return; }
+  const rec = { child, buf: '', url: '', done: false, ok: false };
+  logins.set(loginId, rec);
+  let replied = false;
+  const reply = (obj, code) => { if (replied) return; replied = true; sendJSON(res, obj, code); };
+  const onData = (d) => {
+    rec.buf += String(d);
+    const m = rec.buf.match(/https?:\/\/\S*oauth\/authorize\S+/);
+    if (m && !rec.url) { rec.url = m[0]; reply({ loginId, url: rec.url }); }
+    if (/login successful/i.test(rec.buf)) { rec.done = true; rec.ok = true; }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  child.on('exit', (c) => { rec.done = true; if (rec.ok || c === 0) rec.ok = true; _authCache = { ts: 0, data: null }; });
+  child.on('error', () => { rec.done = true; });
+  setTimeout(() => reply({ loginId, url: rec.url || '' }), 8000);   // на случай, если URL не распарсился — вернём что есть
+}
+// Приём вставленного кода: пишем в stdin процесса логина, ждём завершения/успеха, отдаём свежий статус.
+async function apiAuthCode(req, res) {
+  let body; try { body = await readJsonBody(req, 16 * 1024); } catch { sendJSON(res, { error: 'bad body' }, 400); return; }
+  const rec = logins.get(String(body.loginId || ''));
+  if (!rec) { sendJSON(res, { error: 'unknown loginId' }, 400); return; }
+  const code = String(body.code || '').trim();
+  try { rec.child.stdin.write(code + '\n'); } catch {}
+  // ждём завершения процесса до ~30с
+  const t0 = Date.now();
+  while (!rec.done && Date.now() - t0 < 30000) { await new Promise((r) => setTimeout(r, 300)); }
+  logins.delete(String(body.loginId));
+  _authCache = { ts: 0, data: null };
+  const status = await claudeAuthStatus();
+  sendJSON(res, { ok: !!status.loggedIn, status });
+}
+function apiAuthCancel(req, res, u) {
+  const rec = logins.get(u.searchParams.get('id') || '');
+  if (rec) { try { rec.child.kill(); } catch {} logins.delete(u.searchParams.get('id')); }
+  sendJSON(res, { ok: true });
+}
+function apiAuthLogout(res) {
+  execFile(CLAUDE_BIN, ['auth', 'logout'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, () => {
+    _authCache = { ts: 0, data: null };
+    sendJSON(res, { ok: true });
+  });
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || '/', 'http://localhost');
   if (u.pathname === '/api/sessions') { apiSessions().then((d) => sendJSON(res, d)).catch((e) => sendJSON(res, { error: String(e && e.message || e) }, 500)); return; }
@@ -1281,6 +1353,11 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
+  if (u.pathname === '/api/auth') { apiAuth(res); return; }
+  if (u.pathname === '/api/auth/login') { apiAuthLogin(res); return; }
+  if (u.pathname === '/api/auth/code') { apiAuthCode(req, res); return; }
+  if (u.pathname === '/api/auth/cancel') { apiAuthCancel(req, res, u); return; }
+  if (u.pathname === '/api/auth/logout') { apiAuthLogout(res); return; }
   try {
     const html = readFileSync(path.join(HERE, 'index.html'));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -1291,11 +1368,25 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log('');
-  console.log('  Deck — доска сессий Claude Code');
-  console.log('  папка сессий:   ' + PROJECTS_DIR);
-  console.log('  папка статусов: ' + WO_STATES_DIR);
-  console.log('  открой в браузере:  http://localhost:' + PORT);
-  console.log('');
-});
+// Экспорт для Electron: поднять сервер на СВОБОДНОМ порту (listen(0)) и вернуть реальные port/url/close.
+// preferredPort: явный порт (напр. standalone 4317); иначе env PORT; иначе 0 → ОС выдаёт свободный.
+export function startServer(preferredPort) {
+  const listenPort = preferredPort != null ? preferredPort : (Number(process.env.PORT) || 0);
+  return new Promise((resolve) => {
+    server.listen(listenPort, () => {
+      const port = server.address().port;
+      const url = 'http://localhost:' + port;
+      console.log('');
+      console.log('  Deck — доска сессий Claude Code');
+      console.log('  папка сессий:   ' + PROJECTS_DIR);
+      console.log('  папка статусов: ' + WO_STATES_DIR);
+      console.log('  адрес:          ' + url);
+      console.log('');
+      resolve({ port, url, close: () => new Promise((r) => server.close(() => r())) });
+    });
+  });
+}
+
+// Прямой запуск (`node server.mjs`, лаунчеры start-deck.*) — авто-старт на 4317 (или env PORT). При импорте (Electron) — нет.
+const _isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (_isMain) startServer(Number(process.env.PORT) || 4317);

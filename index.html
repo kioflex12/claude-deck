@@ -303,6 +303,7 @@
       <button class="tab" data-v="mcp" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>MCP</button>
     </div>
     <div class="spacer"></div>
+    <button id="authChip" class="auth-chip" type="button" title="Авторизация Claude">Claude…</button>
     <button id="usageInd" class="usage-ind" type="button" title="Использование лимитов Claude"><span class="ui-bar"><i id="usageBarFill"></i></span><span class="ui-pct" id="usagePct">—</span></button>
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -312,6 +313,7 @@
     </label>
     <button id="notifyBtn" class="notify-btn" type="button" title="Уведомления о завершении" aria-pressed="false">🔕</button>
   </header>
+  <div id="authGate" class="auth-gate" hidden><span class="ag-msg">Вы не вошли в Claude — чат, лимиты и новые сессии недоступны.</span><button id="authGateBtn" class="ag-btn" type="button">Войти в Claude</button></div>
 
   <div id="viewBoard" style="display:flex;flex-direction:column;flex:1;min-height:0">
     <div class="now" id="now"></div>
@@ -1354,6 +1356,7 @@ function drainQueue(){                                     // по заверш�
 }
 function sendMessage(){
   const ta = document.getElementById('composer-ta'); if (!ta) return;
+  if (!requireAuth()) return;                             // чат требует логина в Claude
   const text = ta.value.trim();
   const attachments = attachDraft.slice();                // P4: приложенные файлы
   if ((!text && !attachments.length) || !currentFile) return;
@@ -1903,6 +1906,14 @@ function injectCSS(){
     .deck-toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(12px); background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:10px; box-shadow:var(--shadow-lift); padding:10px 16px; font-size:13px; color:var(--text); opacity:0; pointer-events:none; transition:.2s; z-index:70; }
     .deck-toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
+    /* D1: авторизация Claude — чип в топбаре + гейт-баннер */
+    .auth-chip{ height:30px; padding:0 12px; border-radius:8px; border:1px solid var(--bad); background:var(--bad-soft); color:var(--bad); font-family:var(--ui); font-size:12.5px; font-weight:600; cursor:pointer; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .auth-chip.in{ border-color:var(--good); background:var(--good-soft); color:var(--good); }
+    .auth-gate{ display:flex; align-items:center; gap:14px; padding:9px 22px; background:var(--bad-soft); border-bottom:1px solid var(--bad); flex:none; }
+    .auth-gate .ag-msg{ font-size:13px; color:var(--bad); font-weight:560; }
+    .auth-gate .ag-btn{ height:28px; padding:0 14px; border-radius:8px; border:1px solid var(--bad); background:var(--bad); color:#fff; font-weight:600; font-size:12.5px; cursor:pointer; }
+    .auth-gate .ag-btn:hover{ filter:brightness(1.08); }
+
     /* поиск-дропдаун сессий (под полем #q, во всех видах) */
     .search{ position:relative; }
     .q-drop{ position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:55; background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:11px; box-shadow:var(--shadow-lift); max-height:60vh; overflow-y:auto; padding:5px; }
@@ -2087,6 +2098,7 @@ function renderSearchDrop(){
 
 /* ---------- новая сессия ---------- */
 function openNewSessionDialog(){
+  if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   const back = modalBack('nsBack');
   const cwds = [...new Set(SESSIONS.map(s=>s.cwd).filter(Boolean))].sort();
   const opts = cwds.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
@@ -2217,11 +2229,90 @@ async function load(){
 }
 function wireTopbar(){
   const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
+  const a = document.getElementById('authChip'); if (a) a.addEventListener('click', onAuthChip);
+  const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);
 }
+
+/* ---------- D1: авторизация Claude из приложения ---------- */
+let AUTH = { loggedIn: false };
+function openExternal(url){   // системный браузер: в Electron — мост, в браузере — новая вкладка
+  if (window.deckNative && window.deckNative.openExternal) window.deckNative.openExternal(url);
+  else window.open(url, '_blank', 'noopener');
+}
+async function loadAuth(){
+  try { AUTH = await (await fetch('/api/auth', { cache:'no-store' })).json(); } catch { AUTH = { loggedIn:false, reason:'сеть' }; }
+  renderAuth();
+}
+function renderAuth(){
+  const chip = document.getElementById('authChip'), gate = document.getElementById('authGate');
+  if (chip){
+    chip.classList.toggle('in', !!AUTH.loggedIn);
+    chip.textContent = AUTH.loggedIn ? (AUTH.email || 'Claude ✓') : 'Войти в Claude';
+    chip.title = AUTH.loggedIn ? ('Claude: ' + (AUTH.email||'') + (AUTH.orgName?(' · '+AUTH.orgName):'') + ' — клик для выхода') : 'Войти в Claude';
+  }
+  if (gate) gate.hidden = !!AUTH.loggedIn;
+}
+function requireAuth(){   // гейт для chat/usage/новой сессии
+  if (AUTH.loggedIn) return true;
+  toast('Войдите в Claude — действие недоступно без авторизации');
+  startLogin();
+  return false;
+}
+function onAuthChip(){ if (AUTH.loggedIn) confirmLogout(); else startLogin(); }
+async function confirmLogout(){
+  const back = modalBack('logoutBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Выйти из Claude?</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body"><div class="dm-text">${esc(AUTH.email||'')}</div><div class="um-note">После выхода чат/лимиты/новые сессии станут недоступны, пока не войдёте снова.</div>
+    <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start dm-danger" type="button">Выйти</button></div></div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('.dm-cancel').addEventListener('click', ()=>back.classList.remove('open'));
+  back.querySelector('.dm-danger').addEventListener('click', async ()=>{ back.classList.remove('open'); try { await fetch('/api/auth/logout', { method:'POST' }); } catch {} await loadAuth(); toast('Вы вышли из Claude'); });
+  back.classList.add('open');
+}
+async function startLogin(){
+  const back = modalBack('loginBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Вход в Claude</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note" id="loginStep">Запускаю вход… открой ссылку в браузере, подтверди доступ и вставь код.</div>
+      <a class="btn-ghost" id="loginOpen" href="#" style="display:none;margin:8px 0">Открыть страницу входа</a>
+      <label class="ns-lbl">Код авторизации (со страницы Claude)</label>
+      <input id="loginCode" class="ns-inp" type="text" placeholder="вставь код и нажми Подтвердить" autocomplete="off">
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="loginSubmit" type="button" disabled>Подтвердить</button></div>
+    </div></div>`;
+  const close = ()=>{ back.classList.remove('open'); if (loginId) fetch('/api/auth/cancel?id='+encodeURIComponent(loginId)).catch(()=>{}); };
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('.dm-cancel').addEventListener('click', close);
+  back.classList.add('open');
+  let loginId = null;
+  try {
+    const d = await (await fetch('/api/auth/login', { method:'POST' })).json();
+    loginId = d.loginId;
+    if (d.url){
+      const link = back.querySelector('#loginOpen'); link.href = d.url; link.style.display = 'inline-flex';
+      link.addEventListener('click', (e)=>{ e.preventDefault(); openExternal(d.url); });
+      back.querySelector('#loginStep').textContent = 'Открой страницу входа, подтверди доступ в Claude и вставь показанный код ниже.';
+      openExternal(d.url);   // сразу открыть системный браузер
+    } else {
+      back.querySelector('#loginStep').textContent = 'Не удалось получить ссылку входа. Проверь, что установлен Claude CLI.';
+    }
+  } catch { back.querySelector('#loginStep').textContent = 'Ошибка запуска входа.'; }
+  const codeInp = back.querySelector('#loginCode'), submit = back.querySelector('#loginSubmit');
+  codeInp.addEventListener('input', ()=>{ submit.disabled = !codeInp.value.trim() || !loginId; });
+  submit.addEventListener('click', async ()=>{
+    submit.disabled = true; submit.textContent = 'Проверяю…';
+    try {
+      const r = await (await fetch('/api/auth/code', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ loginId, code: codeInp.value.trim() }) })).json();
+      if (r.ok){ back.classList.remove('open'); await loadAuth(); toast('Вход выполнен: ' + (AUTH.email||'')); }
+      else { back.querySelector('#loginStep').textContent = 'Код не принят — попробуй ещё раз.'; submit.disabled = false; submit.textContent = 'Подтвердить'; }
+    } catch { submit.disabled = false; submit.textContent = 'Подтвердить'; }
+  });
+}
+
 injectCSS();
 ensureStatusTab();
 initNotifyToggle();
 wireTopbar();
+loadAuth();
 load();
 
 </script>
