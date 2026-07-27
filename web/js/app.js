@@ -1615,6 +1615,7 @@ function wireTopbar(){
   const a = document.getElementById('authChip'); if (a) a.addEventListener('click', onAuthChip);
   const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);
   const s = document.getElementById('settingsBtn'); if (s) s.addEventListener('click', openSettingsModal);
+  const sg = document.getElementById('svcGateBtn'); if (sg) sg.addEventListener('click', openSettingsModal);
 }
 
 /* ---------- D1: авторизация Claude из приложения ---------- */
@@ -1635,6 +1636,25 @@ function renderAuth(){
     chip.title = AUTH.loggedIn ? ('Claude: ' + (AUTH.email||'') + (AUTH.orgName?(' · '+AUTH.orgName):'') + ' — клик для выхода') : 'Войти в Claude';
   }
   if (gate) gate.hidden = !!AUTH.loggedIn;
+}
+/* ---------- Плашка неавторизованных интеграций (Jira/TeamCity/GitLab) — красная, если не авторизован хотя бы один ---------- */
+let SVC_CFG = null;
+async function loadServicesGate(){
+  try { SVC_CFG = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch { SVC_CFG = null; }
+  renderServicesGate();
+}
+function renderServicesGate(cfg){
+  if (cfg) SVC_CFG = cfg;
+  const gate = document.getElementById('svcGate'), msg = document.getElementById('svcGateMsg');
+  if (!gate || !msg) return;
+  const c = SVC_CFG || {};
+  const missing = [];
+  if (!(c.jira && c.jira.enabled)) missing.push('Jira');
+  if (!(c.teamcity && c.teamcity.tokenSet)) missing.push('TeamCity');
+  if (!(c.gitlab && c.gitlab.tokenSet)) missing.push('GitLab');
+  if (!missing.length) { gate.hidden = true; return; }
+  msg.textContent = 'Не авторизованы сервисы: ' + missing.join(', ') + ' — доска не получит статусы задач, сборки и MR. Подтяните токены или заполните настройки.';
+  gate.hidden = false;
 }
 function requireAuth(){   // гейт для chat/usage/новой сессии
   if (AUTH.loggedIn) return true;
@@ -1706,14 +1726,16 @@ async function startLogin(){
 }
 
 /* ---------- D3: обновления (только в Electron) — версия + PAT + проверка ---------- */
-let UPDATE_STATUS_EL = null;
+let UPDATE_STATUS_EL = null, UPDATE_INSTALL_EL = null;
 function renderUpdateStatus(s){
-  if (!UPDATE_STATUS_EL || !s) return;
+  if (!s) return;
+  if (UPDATE_INSTALL_EL) UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // кнопка перезапуска только когда загружено
+  if (!UPDATE_STATUS_EL) return;
   const m = {
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
     available:'Доступна версия '+(s.version||'')+' — загружаю…',
     downloading:'Загрузка… '+(s.percent||0)+'%',
-    downloaded:'Обновление '+(s.version||'')+' загружено — установится при перезапуске.',
+    downloaded:'Обновление '+(s.version||'')+' загружено — нажмите «Перезапустить и установить».',
     error:'Ошибка обновления: '+(s.message||''), 'no-token':'Добавьте токен для автообновления.', dev:'Обновления доступны только в установленном приложении.',
   };
   UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
@@ -1732,24 +1754,32 @@ async function openUpdatesModal(){
         <div>${info.hasToken?'<button class="btn-ghost" id="updClear" type="button">Удалить токен</button>':''}</div>
         <div><button class="btn-ghost" id="updSave" type="button">Сохранить</button><button class="ns-start" id="updCheck" type="button">Проверить обновления</button></div>
       </div>
+      <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
       ${info.encryptionAvailable?'':'<div class="um-note" style="color:#e79">Безопасное хранилище ОС недоступно — токен сохранить нельзя.</div>'}
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; });
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; UPDATE_INSTALL_EL=null; });
   back.classList.add('open');
-  const tok = back.querySelector('#updTok'); UPDATE_STATUS_EL = back.querySelector('#updStatus');
+  const tok = back.querySelector('#updTok'); UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall');
   back.querySelector('#updSave').addEventListener('click', async ()=>{
     const r = await window.deckNative.setUpdateToken(tok.value.trim());
     UPDATE_STATUS_EL.textContent = r.ok ? (r.cleared?'Токен удалён.':'Токен сохранён.') : ('Ошибка: '+(r.error||'')); tok.value='';
+    if (r.ok && !r.cleared && info.packaged) doUpdCheck();   // токен появился → сразу проверим
   });
   const clr = back.querySelector('#updClear');
   if (clr) clr.addEventListener('click', async ()=>{ await window.deckNative.setUpdateToken(''); UPDATE_STATUS_EL.textContent='Токен удалён.'; });
-  back.querySelector('#updCheck').addEventListener('click', async ()=>{
+  async function doUpdCheck(){
     UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();
     if (!r.ok) renderUpdateStatus({ state: r.reason==='no-token'?'no-token' : r.reason==='dev'?'dev' : 'error', message: r.reason });
+  }
+  back.querySelector('#updCheck').addEventListener('click', doUpdCheck);
+  UPDATE_INSTALL_EL.addEventListener('click', async ()=>{
+    UPDATE_STATUS_EL.textContent='Перезапуск и установка…';
+    try { await window.deckNative.quitAndInstall(); } catch { UPDATE_STATUS_EL.textContent='Не удалось установить — попробуйте ещё раз.'; }
   });
+  if (info.packaged && info.hasToken) doUpdCheck();   // открыли окно с токеном → автопроверка (autoDownload сам скачает → появится кнопка установки)
 }
 
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
@@ -1761,8 +1791,10 @@ async function openSettingsModal(){
   const back = modalBack('settingsBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
-      <div class="ns-actions" style="justify-content:flex-start;margin-bottom:4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
+      <div class="ns-actions" style="justify-content:flex-start;margin-bottom:4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env по указанному пути / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
       <div class="um-note" id="setImportRes" style="margin:0 0 8px"></div>
+      <label class="ns-lbl">Путь к .env с токенами (для «Подтянуть» в установленном приложении)</label>
+      <input id="setEnv" class="ns-inp" type="text" placeholder="напр. D:/claude-deck/.env — установленное приложение не видит shell/.env само" value="${esc(cfg.secretsEnvPath||'')}">
       <label class="ns-lbl">Папка состояний dev-workflow (WO_STATES_DIR)</label>
       <input id="setWo" class="ns-inp" type="text" placeholder="пусто → колонка «Статусы» мягко деградирует" value="${esc(cfg.woStatesDir||'')}">
       <label class="ns-lbl">Папка сессий Claude (CLAUDE_PROJECTS_DIR)</label>
@@ -1792,6 +1824,7 @@ async function openSettingsModal(){
       <label class="ns-lbl">Путь к Unity Hub (опц., фолбэк)</label>
       <input id="setUhub" class="ns-inp" type="text" placeholder="дефолт C:\\Program Files\\Unity Hub\\Unity Hub.exe" value="${esc(unity.hubPath||'')}">
       ${tokHint}
+      ${cfg.electron ? '<div class="um-note" style="margin-top:12px">Приложение — обновление одним кликом (проверить → скачать → перезапустить), без переустановки.</div><div class="ns-actions" style="justify-content:flex-start"><button class="btn-ghost" id="setUpdates" type="button">↻ Обновления и версия</button></div>' : ''}
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="setSave" type="button">Сохранить</button></div>
       <div class="um-note" id="setStatus" style="margin-top:8px"></div>
     </div></div>`;
@@ -1799,18 +1832,21 @@ async function openSettingsModal(){
   back.querySelector('.dm-x').addEventListener('click', close);
   back.querySelector('.dm-cancel').addEventListener('click', close);
   back.classList.add('open');
+  const upd = back.querySelector('#setUpdates'); if (upd) upd.addEventListener('click', ()=>{ close(); openUpdatesModal(); });
   const status = back.querySelector('#setStatus');
   // «Подтянуть токены» — автоимпорт из существующих секретов (.env / ~/.claude.json / MCP-конфиги).
   back.querySelector('#setImport').addEventListener('click', async ()=>{
     const box = back.querySelector('#setImportRes'); box.textContent = 'Ищу секреты…';
-    let r; try { r = await (await fetch('/api/config/import-tokens', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })).json(); } catch { box.textContent = 'Ошибка импорта.'; return; }
-    const res = r.result || {};
+    const envPath = back.querySelector('#setEnv').value.trim();
+    let r; try { r = await (await fetch('/api/config/import-tokens', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ secretsEnvPath: envPath }) })).json(); } catch { box.textContent = 'Ошибка импорта.'; return; }
+    const res = r.result || {}, src = r.sources || {};
     const mark = (s)=> s==='imported'?'✓': s==='kept'?'≈ уже был': s==='standalone'?'⚠ .env (не сохранён без Electron)': '✗ не найдено';
+    const srcShort = (s)=>{ if(!s) return ''; s=String(s); if(s==='process.env/.env') return 'env'; return s.split(/[\\/]/).slice(-2).join('/'); };
     const groups = [['Jira','jiraToken'],['TeamCity','teamcityToken'],['GitLab','gitlabToken'],['WO_STATES_DIR','woStatesDir'],['Папка сессий','claudeProjectsDir']];
     const any = Object.values(res).some(s=>s==='imported');
-    const lines = groups.filter(([,k])=>k in res).map(([lbl,k])=>lbl+': '+mark(res[k]));
+    const lines = groups.filter(([,k])=>k in res).map(([lbl,k])=>{ const st=res[k]; let t=lbl+': '+mark(st); if(st==='imported' && src[k]) t+=' ('+srcShort(src[k])+')'; return t; });
     box.innerHTML = (any ? 'Импортировано → ' : 'Ничего нового не импортировано → ') + esc(lines.join(' · '));
-    if (!any && groups.every(([,k])=> res[k]==='notfound')) box.textContent = 'Источников с токенами не найдено — введи вручную.';
+    if (!any && groups.every(([,k])=> res[k]==='notfound')) box.textContent = 'Источников с токенами не найдено — укажи путь к .env выше и жми снова, либо введи вручную.';
     toast(any ? 'Токены подтянуты' : 'Импорт: нового не найдено');
     // обновить флаги «задан» на полях по свежему конфигу
     const c = r.config || {};
@@ -1820,12 +1856,14 @@ async function openSettingsModal(){
     if (c.jira){ if (c.jira.host) back.querySelector('#setJh').value = c.jira.host; if (c.jira.email) back.querySelector('#setJe').value = c.jira.email; }
     if (c.teamcity && c.teamcity.host) back.querySelector('#setTh').value = c.teamcity.host;
     if (c.gitlab && c.gitlab.host) back.querySelector('#setGh').value = c.gitlab.host;
+    renderServicesGate(c);   // красная плашка сервисов гаснет по мере авторизации
     if (typeof pollSessions === 'function') await pollSessions();   // подтянулся WO_STATES_DIR/Jira → доска получит стадии
     if (typeof loadUsage === 'function') loadUsage();
   });
   back.querySelector('#setSave').addEventListener('click', async ()=>{
     status.textContent = 'Сохраняю…';
     const payload = {
+      secretsEnvPath: back.querySelector('#setEnv').value.trim(),
       woStatesDir: back.querySelector('#setWo').value.trim(),
       claudeProjectsDir: back.querySelector('#setProj').value.trim(),
       jiraHost: back.querySelector('#setJh').value.trim(),
@@ -1844,6 +1882,7 @@ async function openSettingsModal(){
     let msg = 'Сохранено.' + (standalone ? ' Токены не сохранены (standalone) — используйте .env.' : '');
     status.textContent = msg + ' Обновляю доску…';
     MR_TTL_RESET();   // сбросить клиентские кэши MR/Jira, чтобы сборки/MR перечитались с новым токеном
+    if (r.config) renderServicesGate(r.config);   // авторизовали сервис → красная плашка обновится
     if (typeof pollSessions === 'function') await pollSessions();
     if (typeof loadUsage === 'function') loadUsage();
     setTimeout(close, 900);
@@ -1855,6 +1894,7 @@ ensureStatusTab();
 initNotifyToggle();
 wireTopbar();
 loadAuth();
+loadServicesGate();
 // Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
 if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
 // Electron: открыть окно «Обновления» из меню/трея + принимать статусы автоапдейтера.

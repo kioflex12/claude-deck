@@ -303,6 +303,11 @@ ipcMain.handle('deck:setUpdateToken', (_e, pat) => {
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });
 ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
+// Установить загруженное обновление и перезапуститься — кнопка «Перезапустить и установить» из окна обновлений.
+ipcMain.handle('deck:quitAndInstall', () => {
+  try { app.isQuitting = true; setImmediate(() => autoUpdater.quitAndInstall()); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
 
 function refreshMenus() {
   Menu.setApplicationMenu(buildMenu());

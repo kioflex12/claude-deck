@@ -18,12 +18,10 @@ import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// zero-dep .env loader: подхватываем <repo>/.env (JIRA_HOST/JIRA_EMAIL/JIRA_TOKEN и пр.) при старте,
-// НЕ перезаписывая уже заданное в окружении. Простой KEY=VALUE, игнор #/пустых, trim, снятие кавычек.
-(function loadDotEnv() {
-  let raw = '';
-  try { raw = readFileSync(path.join(HERE, '.env'), 'utf8'); } catch { return; }
-  for (const line of raw.split(/\r?\n/)) {
+// zero-dep .env парсер: простой KEY=VALUE, игнор #/пустых, trim, снятие кавычек. Возвращает объект пар.
+function parseEnvText(raw) {
+  const out = {};
+  for (const line of String(raw || '').split(/\r?\n/)) {
     const s = line.trim();
     if (!s || s[0] === '#') continue;
     const eq = s.indexOf('=');
@@ -31,8 +29,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
     const key = s.slice(0, eq).trim();
     let val = s.slice(eq + 1).trim();
     if (val.length >= 2 && ((val[0] === '"' && val.endsWith('"')) || (val[0] === "'" && val.endsWith("'")))) val = val.slice(1, -1);
-    if (!(key in process.env)) process.env[key] = val;
+    out[key] = val;
   }
+  return out;
+}
+function parseEnvFile(p) { try { return parseEnvText(readFileSync(p, 'utf8')); } catch { return null; } }
+// Подхватываем <repo>/.env при старте, НЕ перезаписывая уже заданное в окружении (source-режим; в установленном
+// app HERE = внутри asar, .env там нет — концы токенов тянет «Подтянуть токены» из явного пути, см. secretsEnvCandidates).
+(function loadDotEnv() {
+  const env = parseEnvFile(path.join(HERE, '.env'));
+  if (env) for (const [k, v] of Object.entries(env)) if (!(k in process.env)) process.env[k] = v;
 })();
 
 const PORT = Number(process.env.PORT) || 4317;
@@ -53,7 +59,7 @@ function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
 function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 function saveConfig(patch) {
   const c = loadConfig();
-  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath']) if (k in patch) c[k] = String(patch[k] || '');
+  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'secretsEnvPath']) if (k in patch) c[k] = String(patch[k] || '');
   try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
 }
 // Секретные токены (Jira/TeamCity/GitLab): в Electron шифруем safeStorage'ом (как update-token в D3) в userData/<svc>-token.bin;
@@ -1453,6 +1459,7 @@ function configView() {
     teamcity: { host: TC_HOST, tokenSet: !!TC_TOKEN },
     gitlab: { host: GL_HOST, tokenSet: !!GL_TOKEN },
     unity: (() => { const c = loadConfig(); return { clientUnityParent: c.clientUnityParent || '', editorsDir: c.unityEditorsDir || '', hubPath: c.unityHubPath || '' }; })(),
+    secretsEnvPath: loadConfig().secretsEnvPath || '',   // явный .env для «Подтянуть токены» (нужно установленному app — HERE в asar)
     electron: !!getElectron(),   // можно ли безопасно сохранить токен (safeStorage) или только через .env
     defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects'), teamcityHost: 'https://teamcity.example.com', gitlabHost: 'https://gitlab.example.com' },
   };
@@ -1481,11 +1488,26 @@ async function apiConfig(req, res) {
 // Сканируем источники (более явный → выше): process.env (включает Deck/.env, загруженный на старте) → env MCP-серверов
 // в ~/.claude.json → env MCP-серверов в .mcp.json проектов. Наружу значения НЕ отдаём — только флаги/источники.
 function hasStoredToken(svc) { try { return existsSync(tokenFile(svc)); } catch { return false; } }
+// Конкретные .env-файлы для «Подтянуть токены»: установленный app не наследует shell-env и HERE у него в asar (там .env нет),
+// поэтому читаем файлы по явным путям — заданный в настройках secretsEnvPath (файл или папка) + <repo>/.env + .env в рабочих
+// папках известных сессий (там и лежит наш D:\claude-deck\.env). Порядок = приоритет (первый выигрывает в take()).
+function secretsEnvCandidates() {
+  const out = [], seen = new Set();
+  const add = (p) => { if (p && !seen.has(p)) { seen.add(p); out.push(p); } };
+  try {
+    let p = loadConfig().secretsEnvPath; p = p && String(p).trim();
+    if (p) { p = path.resolve(p); try { if (statSync(p).isDirectory()) p = path.join(p, '.env'); } catch {} add(p); }
+  } catch {}
+  add(path.join(HERE, '.env'));
+  for (const cwd of uniqueSessionCwds()) add(path.join(cwd, '.env'));
+  return out;
+}
 function scanSecretSources() {
   const want = ['JIRA_TOKEN', 'JIRA_EMAIL', 'JIRA_HOST', 'TEAMCITY_TOKEN', 'TEAMCITY_HOST', 'GITLAB_TOKEN', 'GITLAB_HOST', 'WO_STATES_DIR', 'CLAUDE_PROJECTS_DIR'];
   const found = {};
   const take = (k, v, source) => { if (!found[k] && v != null && String(v).trim()) found[k] = { value: String(v), source }; };
   for (const k of want) take(k, process.env[k], 'process.env/.env');
+  for (const p of secretsEnvCandidates()) { const env = parseEnvFile(p); if (env) for (const k of want) take(k, env[k], p); }
   try {
     const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
     const scan = (servers, where) => { if (servers && typeof servers === 'object') for (const [name, cfg] of Object.entries(servers)) { const env = cfg && cfg.env; if (env) for (const k of want) take(k, env[k], where + '.' + name + '.env'); } };
@@ -1500,8 +1522,10 @@ function scanSecretSources() {
 async function apiImportTokens(req, res) {
   let body = {}; try { body = await readJsonBody(req, 4096); } catch {}
   const overwrite = !!(body && body.overwrite);
-  const found = scanSecretSources();
   const cur = loadConfig();
+  // путь к .env из поля настроек — сохраняем ДО скана (scanSecretSources читает config.secretsEnvPath)
+  if (typeof body.secretsEnvPath === 'string') { cur.secretsEnvPath = body.secretsEnvPath.trim(); try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(cur, null, 2)); } catch {} }
+  const found = scanSecretSources();
   const result = {}, sources = {};
   // Хосты/пути → deck-config.json. Не перетираем заполненное (если не overwrite).
   const setCfg = (cfgKey, srcKey) => {

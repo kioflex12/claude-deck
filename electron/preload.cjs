@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('deckNative', {
   updateInfo: () => ipcRenderer.invoke('deck:updateInfo'),
   setUpdateToken: (pat) => ipcRenderer.invoke('deck:setUpdateToken', pat),
   checkForUpdates: () => ipcRenderer.invoke('deck:checkForUpdates'),
+  quitAndInstall: () => ipcRenderer.invoke('deck:quitAndInstall'),   // установить загруженное обновление + перезапуск
+
   onOpenUpdates: (cb) => ipcRenderer.on('open-updates', () => { try { cb(); } catch {} }),
   onOpenPalette: (cb) => ipcRenderer.on('open-palette', () => { try { cb(); } catch {} }),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => { try { cb(s); } catch {} }),
