@@ -1,0 +1,5 @@
+# Гарантируем переводы строк для лаунчеров независимо от ОС/настроек git:
+# .sh — только LF (иначе bash на macOS/Linux падает на CR), .bat — CRLF (Windows).
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf

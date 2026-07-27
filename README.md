@@ -1,34 +1,43 @@
 # Claude Deck
 
-Десктоп-менеджер **контекстов Claude Code** — замена неудобному VSCode-расширению.
+Локальный менеджер **контекстов Claude Code** — замена неудобному VSCode-расширению.
 
-Доска задач WO, где **карточка = контекст (сессия Claude)**, привязанный к задаче: статус в Jira, ветка, MR, статусы сборок Android/iOS, окно контекста. По клику — **полноэкранная сессия**: слева живой чат (как в расширении VSCode), справа рейл с инфой (описание, ветки, MR, сборки, заметки для возврата). Плюс вкладки **Скиллы** и **MCP-инструменты** и командная палитра (Ctrl K).
+Канбан-доска, где **карточка = контекст (сессия Claude)**: статус в Jira, ветка, MR, статусы сборок Android/iOS, окно контекста. По клику — **полноэкранная сессия**: слева живой чат (стрим, thinking, токены, аппрув Edit/Write/Bash, режимы разрешений, вложения-скриншоты), справа рейл (описание, ветки, MR, сборки, заметки). Плюс вкладки **Скиллы** и **MCP**, командная палитра (Ctrl K), индикатор аккаунт-лимитов Claude.
 
 ## Зачем своё, а не готовое
 
-Есть похожие инструменты (Nimbalyst, langwatch/kanban-code, code-factory), но все завязаны на **GitHub PR + git worktree**. Наш конвейер — другой: **GitLab MR + Jira + TeamCity + файлы `dev-workflow/WO-XXXX.json` + 4 копии `client-unity`**. Этот «клей» и есть смысл проекта — ни один готовый тул его не покрывает.
+Похожие инструменты (Nimbalyst, langwatch/kanban-code, code-factory) завязаны на **GitHub PR + git worktree**. Наш конвейер другой: **GitLab MR + Jira + TeamCity + файлы `dev-workflow/WO-XXXX.json` + копии `client-unity`**. Этот «клей» и есть смысл проекта — ни один готовый тул его не покрывает.
 
-## Подход
+## Архитектура
 
-**Форк [`nimbalyst/nimbalyst`](https://github.com/nimbalyst/nimbalyst)** (MIT, TypeScript / Electron, кроссплатформа) + наш слой интеграций. У nimbalyst уже готов самый дорогой кусок — запуск и стрим параллельных сессий, git, worktrees, дифф-ревью. Мы добавляем поверх:
+Никакого Electron/сборки — **zero-dep Node-сервер + статический HTML**:
 
-- источник задач и статусов: Jira (mcp-tools) + TeamCity (сборки) + GitLab (MR);
-- привязку сессия ↔ задача WO через файлы `dev-workflow/WO-XXXX.json`;
-- вкладку **Скиллы** (каталог `~100` проектных скиллов, поиск, вставка `/команды`);
-- вкладку **MCP** (активные серверы + активация коннекторов);
-- обвязку всего гиперссылками (ветка→GitLab, MR→страница MR, сборка→TeamCity, задача→Jira).
+- **`server.mjs`** — HTTP-сервер (`localhost:4317`) на голом `node:http`. Читает реальные сессии из `~/.claude/projects/*/*.jsonl`, состояния `dev-workflow/WO-*.json`, ходит в TeamCity/GitLab/Jira, гоняет живого Claude через **Agent SDK** (`@anthropic-ai/claude-agent-sdk`, существующий OAuth-логин Claude Code — без отдельного ключа). Единственная внешняя зависимость.
+- **`index.html`** — весь UI одним файлом (дизайн из `prototype/index.html`).
+
+## Запуск
+
+**Требования:** Node.js 20+ и установленный, **залогиненный Claude Code** на этой машине (real-Claude, usage-лимиты и создание сессий работают через его OAuth).
+
+- **Windows** — двойной клик по **`start-deck.bat`**.
+- **macOS / Linux** — `bash start-deck.sh` (или сделать исполняемым и запускать `./start-deck.sh`).
+
+Лаунчер сам ставит зависимости при первом запуске (`npm install`), поднимает сервер и открывает браузер на `http://localhost:4317`. Правки `server.mjs` требуют перезапуска, `index.html` — просто F5.
+
+**Автозапуск после перезагрузки (Windows, опц.):** положи ярлык на `start-deck.bat` в папку автозагрузки — `Win+R` → `shell:startup`.
+
+### Переменные окружения (опционально)
+
+Кладутся в `.env` в корне репо (gitignored):
+
+- `JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN` — живой статус Jira на карточках. Без них Jira-колонка молча берётся из локального `dev-workflow`.
+- `WO_STATES_DIR` — путь к `dev-workflow/workflow-states` (по умолчанию — путь основного рабочего репо). На другой машине задай свой или оставь пустым (доска заполнится по активности сессий).
+- `CLAUDE_PROJECTS_DIR` — где лежат транскрипты (по умолчанию `~/.claude/projects`).
 
 ## Прототип
 
-`prototype/index.html` — кликабельный макет всего UI/UX (открыть в браузере). Он же источник дизайна.
-Онлайн-версия: https://claude.ai/code/artifact/4ba38cff-a443-4a73-b76b-2f6c504d3eb6
-
-## Стек
-
-- **Electron + TypeScript** (от nimbalyst), npm workspaces.
-- Сессии Claude — через Claude **Agent SDK** / `claude --resume` (движок nimbalyst).
-- Данные — локальные транскрипты `~/.claude/projects/*/*.jsonl`, `dev-workflow/WO-*.json`, REST/MCP к Jira/TeamCity/GitLab.
+`prototype/index.html` — кликабельный макет всего UI/UX и источник дизайна.
 
 ## Статус
 
-Bootstrap. Дальше — см. [ROADMAP.md](ROADMAP.md).
+Рабочая платформа (стрим, аппрувы, режимы, вложения, live Jira/MR/сборки, usage, создание сессий). Дальше — см. [ROADMAP.md](ROADMAP.md) и [BACKLOG.md](BACKLOG.md).
