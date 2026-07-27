@@ -1350,6 +1350,34 @@ async function apiAuth(res) {
 const logins = new Map();   // loginId -> { child, buf }
 let activeLoginId = null;   // single-flight: пока логин идёт, не спавним второй `claude auth login` (= второе окно браузера)
 function clearActiveLogin(id) { if (activeLoginId === id) activeLoginId = null; }
+
+// Успех логина ловим по ЛЮБОМУ пути: `claude auth login` часто завершает OAuth сам через колбэк браузера
+// (процесс выходит 0 + пишет ~/.claude/.credentials.json), кода не спрашивая. Помимо ввода кода детектим:
+// (а) exit 0, (б) обновление credentials-файла, (в) `claude auth status` = залогинен — что раньше, то и финал.
+const credsFile = () => path.join(os.homedir(), '.claude', '.credentials.json');
+function credsMtime() { try { return statSync(credsFile()).mtimeMs; } catch { return 0; } }
+async function finalizeLoginIfLoggedIn(loginId, rec) {
+  if (rec.finalized) return true;
+  const st = await claudeAuthStatus();
+  if (!st.loggedIn) return false;
+  rec.finalized = true; rec.done = true; rec.ok = true;
+  if (rec.watcher) { clearInterval(rec.watcher); rec.watcher = null; }
+  try { rec.child.kill(); } catch {}                    // процесс мог ещё ждать код — больше не нужен
+  clearActiveLogin(loginId);
+  logins.delete(loginId);
+  _authCache = { ts: Date.now(), data: st };            // следующий /api/auth сразу вернёт свежий loggedIn:true
+  return true;
+}
+function watchLoginSuccess(loginId, rec) {
+  const t0 = Date.now();
+  rec.watcher = setInterval(() => {
+    if (rec.finalized || !logins.has(loginId)) { clearInterval(rec.watcher); rec.watcher = null; return; }
+    if (Date.now() - t0 > 180000) { clearInterval(rec.watcher); rec.watcher = null; return; }   // таймаут ~3мин
+    rec.ticks = (rec.ticks || 0) + 1;
+    // дешёвый сигнал каждые 1.5с (creds-файл обновился) + дорогой `claude auth status` раз в ~4.5с (creds могут быть в keychain)
+    if (credsMtime() > rec.credsMtime0 || rec.ticks % 3 === 0) finalizeLoginIfLoggedIn(loginId, rec);
+  }, 1500);
+}
 function apiAuthLogin(res) {
   // Уже есть незавершённый логин — переиспользуем его процесс/URL, а не плодим второй (двойной клик, повторный вызов).
   if (activeLoginId) {
@@ -1368,7 +1396,7 @@ function apiAuthLogin(res) {
   let child;
   try { child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], { windowsHide: true, shell: process.platform === 'win32' }); }
   catch (e) { sendJSON(res, { error: 'spawn failed: ' + (e && e.message) }, 500); return; }
-  const rec = { child, buf: '', url: '', done: false, ok: false };
+  const rec = { child, buf: '', url: '', done: false, ok: false, finalized: false, watcher: null, credsMtime0: credsMtime() };
   logins.set(loginId, rec);
   activeLoginId = loginId;
   let replied = false;
@@ -1377,26 +1405,35 @@ function apiAuthLogin(res) {
     rec.buf += String(d);
     const m = rec.buf.match(/https?:\/\/\S*oauth\/authorize\S+/);
     if (m && !rec.url) { rec.url = m[0]; reply({ loginId, url: rec.url }); }
-    if (/login successful/i.test(rec.buf)) { rec.done = true; rec.ok = true; }
+    if (/login successful/i.test(rec.buf)) finalizeLoginIfLoggedIn(loginId, rec);
   };
   child.stdout.on('data', onData);
   child.stderr.on('data', onData);
-  child.on('exit', (c) => { rec.done = true; if (rec.ok || c === 0) rec.ok = true; clearActiveLogin(loginId); _authCache = { ts: 0, data: null }; });
+  child.on('exit', (c) => {
+    rec.done = true;
+    clearActiveLogin(loginId);                 // процесс завершился — освобождаем single-flight
+    _authCache = { ts: 0, data: null };        // следующий /api/auth пересчитает
+    if (c === 0) { rec.ok = true; finalizeLoginIfLoggedIn(loginId, rec); }   // самозавершение через колбэк браузера — подтвердить и закешировать успех
+  });
   child.on('error', () => { rec.done = true; clearActiveLogin(loginId); });
   setTimeout(() => reply({ loginId, url: rec.url || '' }), 8000);   // на случай, если URL не распарсился — вернём что есть
+  watchLoginSuccess(loginId, rec);   // параллельно ждём успех по creds/status (кода может и не быть)
 }
 // Приём вставленного кода: пишем в stdin процесса логина, ждём завершения/успеха, отдаём свежий статус.
 async function apiAuthCode(req, res) {
   let body; try { body = await readJsonBody(req, 16 * 1024); } catch { sendJSON(res, { error: 'bad body' }, 400); return; }
-  const rec = logins.get(String(body.loginId || ''));
-  if (!rec) { sendJSON(res, { error: 'unknown loginId' }, 400); return; }
+  const id = String(body.loginId || '');
+  const rec = logins.get(id);
+  // Логин мог уже самозавершиться (watcher финализировал и удалил rec) — отдаём текущий статус, а не ошибку.
+  if (!rec) { const status = await claudeAuthStatus(); sendJSON(res, { ok: !!status.loggedIn, status }); return; }
   const code = String(body.code || '').trim();
   try { rec.child.stdin.write(code + '\n'); } catch {}
   // ждём завершения процесса до ~30с
   const t0 = Date.now();
   while (!rec.done && Date.now() - t0 < 30000) { await new Promise((r) => setTimeout(r, 300)); }
-  logins.delete(String(body.loginId));
-  clearActiveLogin(String(body.loginId));
+  if (rec.watcher) { clearInterval(rec.watcher); rec.watcher = null; }
+  logins.delete(id);
+  clearActiveLogin(id);
   _authCache = { ts: 0, data: null };
   const status = await claudeAuthStatus();
   sendJSON(res, { ok: !!status.loggedIn, status });
@@ -1404,7 +1441,7 @@ async function apiAuthCode(req, res) {
 function apiAuthCancel(req, res, u) {
   const id = u.searchParams.get('id') || '';
   const rec = logins.get(id);
-  if (rec) { try { rec.child.kill(); } catch {} logins.delete(id); }
+  if (rec) { if (rec.watcher) { clearInterval(rec.watcher); rec.watcher = null; } try { rec.child.kill(); } catch {} logins.delete(id); }
   clearActiveLogin(id);
   sendJSON(res, { ok: true });
 }

@@ -1567,6 +1567,16 @@ async function startLogin(){
       back.querySelector('#loginStep').textContent = 'Не удалось получить ссылку входа. Проверь, что установлен Claude CLI.';
     }
   } catch { back.querySelector('#loginStep').textContent = 'Ошибка запуска входа.'; }
+  // Ловим успех по ЛЮБОМУ пути (в т.ч. когда браузер авторизовал сам, без кода): поллим /api/auth ~каждые 2с.
+  const started = Date.now();
+  const pollAuth = async () => {
+    if (!loginInProgress || !back.classList.contains('open')) return;   // модалку закрыли/отменили — стоп
+    await loadAuth();                                                    // обновляет AUTH + renderAuth: чип зелёный, красная плашка #authGate гаснет
+    if (AUTH.loggedIn){ back.classList.remove('open'); loginInProgress = false; toast('Вход выполнен: ' + (AUTH.email || '')); return; }
+    if (Date.now() - started > 180000) return;                          // таймаут ~3мин
+    setTimeout(pollAuth, 2000);
+  };
+  if (loginId) setTimeout(pollAuth, 2000);
   const codeInp = back.querySelector('#loginCode'), submit = back.querySelector('#loginSubmit');
   codeInp.addEventListener('input', ()=>{ submit.disabled = !codeInp.value.trim() || !loginId; });
   submit.addEventListener('click', async ()=>{
