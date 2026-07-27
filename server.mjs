@@ -1492,3 +1492,11 @@ export function startServer(preferredPort) {
 // Прямой запуск (`node server.mjs`, лаунчеры start-deck.*) — авто-старт на 4317 (или env PORT). При импорте (Electron) — нет.
 const _isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (_isMain) startServer(Number(process.env.PORT) || 4317);
+
+// Named-экспорты чистых хелперов для тестов (D4b). Аддитивно — поведение не меняем. startServer уже экспортирован.
+export {
+  isBaseBranch, pickWorkingBranch, pickBaseBranch,
+  classifyUserBlock, buildSessionBlocks,
+  wfInfo, scopeInfo,
+  isReadOnlyTool, briefArg, woOf, columnByAge,
+};
