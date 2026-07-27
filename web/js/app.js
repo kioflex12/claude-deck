@@ -209,6 +209,12 @@ function renderFilters(){
 let SKILLS = [], MCP_SERVERS = [], skillsLoaded = false, mcpLoaded = false;
 let MCP_STATUS = { available: false, live: false, servers: [] }, mcpLoading = false;
 const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
+let unityInstances = [];         // авто-обнаруженные запущенные Unity-инстансы (из RunState-реестра)
+async function loadUnityInstances(){
+  try { const d = await (await fetch('/api/unity/instances', { cache:'no-store' })).json(); unityInstances = Array.isArray(d.instances) ? d.instances : []; }
+  catch { unityInstances = []; }
+  if (activeView === 'mcp' && !mcpDetail) renderMcp();   // появились/исчезли → перерисовать секцию
+}
 const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
 async function loadSkillsCatalog(){
   try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); SKILLS = Array.isArray(d.skills) ? d.skills : []; }
@@ -343,8 +349,13 @@ function renderMcp(){
   const groups = MCP_SCOPES.map(([sc,lbl])=>{ const g = items.filter(m=>(m.scope||'user')===sc); return g.length ? `<div class="mcp-group"><div class="mcp-grouphd">${esc(lbl)} <span class="mcp-gcount">${g.length}</span></div>${mcpRowsHtml(g)}</div>` : ''; }).join('');
   const other = items.filter(m=>!known.has(m.scope||'user'));
   const otherHtml = other.length ? `<div class="mcp-group"><div class="mcp-grouphd">прочее <span class="mcp-gcount">${other.length}</span></div>${mcpRowsHtml(other)}</div>` : '';
-  const body = (mcpLoading && !MCP_SERVERS.length) ? `<div class="empty">Опрашиваю MCP…</div>`
-    : (items.length ? groups+otherHtml : `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
+  // Авто-обнаруженные Unity-инстансы (появляются/исчезают сами по RunState-реестру) — отдельной секцией сверху.
+  const shortP = p => String(p||'').split(/[\\/]/).slice(-2).join('/');
+  const unityHtml = unityInstances.length ? `<div class="mcp-group"><div class="mcp-grouphd">Unity инстансы <span class="mcp-gcount">${unityInstances.length}</span></div>`
+    + unityInstances.map(u=>`<div class="unity-row" data-cu="${esc(u.cu||'')}" data-cwd="${esc(u.projectPath||'')}" title="Запустить/сфокусировать Unity: ${esc(u.projectPath||'')}"><span class="mcp-rowname">${esc(u.cu||'unity')} <span class="unity-path">${esc(shortP(u.projectPath))}</span></span><span class="unity-port">:${esc(String(u.port||''))}</span><span class="mcp-badge st-connected">up</span></div>`).join('')
+    + `</div>` : '';
+  const body = (mcpLoading && !MCP_SERVERS.length) ? unityHtml + `<div class="empty">Опрашиваю MCP…</div>`
+    : (items.length ? unityHtml+groups+otherHtml : unityHtml + `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
   document.getElementById('viewMcp').innerHTML = `<div class="mcp-main">
     <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${MCP_SERVERS.length} серверов · ${note}</span><button class="mcp-refresh" id="mcpRefresh"${mcpLoading?' disabled':''}>${mcpLoading?'опрос…':'↻ Обновить'}</button></div>
     ${body}
@@ -352,6 +363,7 @@ function renderMcp(){
   const rb = document.getElementById('mcpRefresh'); if (rb) rb.addEventListener('click', ()=>{ if (!mcpLoading) loadMcpCatalog(true); });
   const ln = document.getElementById('mcpLearn'); if (ln) ln.addEventListener('click', e=>{ e.preventDefault(); openExternal('https://modelcontextprotocol.io'); });
   document.querySelectorAll('#viewMcp .mcp-row').forEach(r => r.addEventListener('click', ()=>{ mcpDetail = r.dataset.mcp; renderMcp(); }));
+  document.querySelectorAll('#viewMcp .unity-row').forEach(r => r.addEventListener('click', ()=>launchUnity(r.dataset.cu, r.dataset.cwd)));   // тап → запуск/фокус Unity этого проекта
 }
 
 /* ---------- session: правый рейл контекста (плотные секции на реальных данных + wf) ---------- */
@@ -1248,8 +1260,9 @@ function setView(v){
   document.getElementById('viewSession').style.display = 'none';
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
-  if (v==='skills') renderSkills(); else if (v==='mcp') renderMcp(); else renderBoard(true);
+  if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else renderBoard(true);
 }
+setInterval(() => { if (activeView === 'mcp' && !mcpDetail) loadUnityInstances(); }, 15000);   // live-цикл авто-дискавери Unity-инстансов
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setView(b.dataset.v); });
 document.getElementById('q').addEventListener('input', e => {
   query = e.target.value.trim().toLowerCase();
