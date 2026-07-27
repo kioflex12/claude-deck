@@ -39,6 +39,7 @@ const WO_STATES_DIR = process.env.WO_STATES_DIR || 'D:/wo_vibecode/vibecode/.cla
 const CTX_LIMIT = 1_000_000;          // сессии на 1M-контексте
 const ACTIVE_MS = 30 * 60 * 1000;     // «активна», если mtime моложе 30 минут
 const WORKING_MS = 20 * 1000;         // «работает сейчас»: файл сессии писался < 20с назад (живая генерация)
+const BG_ACTIVE_MS = 60 * 1000;       // фоновый сабагент «живой», если его файл писался < 60с назад
 const LIST_CAP = 150;                 // сколько самых свежих сессий листаем
 const MSG_CAP = 8000;                 // максимум символов на текстовый блок транскрипта
 const SYSREM = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
@@ -262,6 +263,79 @@ function listSessionFiles() {
   return files;
 }
 
+// -------- фоновые сабагенты сессии: <projDir>/<sessionId>/subagents/agent-<id>.jsonl (+ .meta.json) --------
+function subagentsDir(projDir, sessionId) { return path.join(PROJECTS_DIR, projDir, sessionId, 'subagents'); }
+// ДЁШЕВО (для списка карточек): только statSync mtime, БЕЗ парса содержимого.
+function sessionSubagents(projDir, sessionId) {
+  let entries;
+  try { entries = readdirSync(subagentsDir(projDir, sessionId), { withFileTypes: true }); } catch { return []; }
+  const now = Date.now(), dir = subagentsDir(projDir, sessionId), out = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const m = e.name.match(/^agent-(.+)\.jsonl$/);
+    if (!m) continue;
+    let mtime = 0; try { mtime = statSync(path.join(dir, e.name)).mtimeMs; } catch { continue; }
+    out.push({ id: m[1], mtime, running: (now - mtime) < BG_ACTIVE_MS });
+  }
+  return out;
+}
+// Хвост файла (последние N байт), отбросив обрезанную первую строку — чтобы дёшево взять последние события.
+function readTail(full, bytes) {
+  let fd;
+  try {
+    const sz = statSync(full).size; const start = Math.max(0, sz - bytes); const len = sz - start;
+    if (len <= 0) return '';
+    fd = openSync(full, 'r'); const buf = Buffer.alloc(len); readSync(fd, buf, 0, len, start);
+    let s = buf.toString('utf8');
+    if (start > 0) { const nl = s.indexOf('\n'); if (nl >= 0) s = s.slice(nl + 1); }
+    return s;
+  } catch { return ''; } finally { if (fd !== undefined) { try { closeSync(fd); } catch {} } }
+}
+// Что агент делает СЕЙЧАС — самый свежий значимый блок его транскрипта.
+function agentActivity(tailText) {
+  const lines = tailText.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    let ev; try { ev = JSON.parse(lines[i]); } catch { continue; }
+    if (ev.type !== 'assistant' && ev.type !== 'user') continue;
+    const c = ev.message && ev.message.content;
+    if (typeof c === 'string') { const t = c.replace(SYSREM, '').trim(); if (t) return oneLine(t, 90); continue; }
+    if (Array.isArray(c)) {
+      for (let k = c.length - 1; k >= 0; k--) {
+        const b = c[k]; if (!b || typeof b !== 'object') continue;
+        if (b.type === 'tool_use') { const a = briefArg(b.input); return '▸ ' + (b.name || 'tool') + (a ? '(' + a + ')' : ''); }
+        if (b.type === 'text' && b.text && b.text.trim()) return oneLine(b.text, 90);
+        if (b.type === 'thinking' && b.thinking && b.thinking.trim()) return '✻ ' + oneLine(b.thinking, 80);
+      }
+    }
+  }
+  return '';
+}
+function lastUsageIn(tailText) {
+  const i = tailText.lastIndexOf('"usage":'); if (i < 0) return 0;
+  const seg = tailText.slice(i, i + 400);
+  const num = (k) => { const m = seg.match(new RegExp('"' + k + '":(\\d+)')); return m ? +m[1] : 0; };
+  return num('input_tokens') + num('cache_read_input_tokens') + num('cache_creation_input_tokens');
+}
+// ДЕТАЛЬНО (только для ОТКРЫТОЙ сессии): label из .meta.json, текущая активность из хвоста, токены.
+function sessionAgentsDetail(projDir, sessionId) {
+  const dir = subagentsDir(projDir, sessionId);
+  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const now = Date.now(), out = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const m = e.name.match(/^agent-(.+)\.jsonl$/); if (!m) continue;
+    const id = m[1], full = path.join(dir, e.name);
+    let mtime = 0; try { mtime = statSync(full).mtimeMs; } catch { continue; }
+    let label = '', stopped = false;
+    try { const meta = JSON.parse(readFileSync(path.join(dir, 'agent-' + id + '.meta.json'), 'utf8')); label = meta.description || meta.agentType || ''; stopped = !!meta.stoppedByUser; } catch {}
+    const tail = readTail(full, 65536);
+    out.push({ id, label: label || ('агент ' + id.slice(0, 6)), running: (now - mtime) < BG_ACTIVE_MS, stopped, activity: agentActivity(tail), mtime, tokensIn: lastUsageIn(tail) });
+  }
+  out.sort((a, b) => b.mtime - a.mtime);
+  return out;
+}
+
 function buildSessionSummary(f, wfStates) {
   let text = '';
   try { text = readFileSync(f.full, 'utf8'); } catch { text = ''; }
@@ -277,7 +351,9 @@ function buildSessionSummary(f, wfStates) {
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   // WO: рабочая ветка → заголовок → первичный WO из первого промпта
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);
-  const active = (Date.now() - f.mtime) < ACTIVE_MS;
+  // Фоновые сабагенты: главный файл может простаивать, пока они активно пишут — учитываем их свежесть в active/working.
+  const bgRunning = sessionSubagents(f.projDir, f.id).filter((a) => a.running).length;
+  const active = (Date.now() - f.mtime) < ACTIVE_MS || bgRunning > 0;
   const st = wo ? wfStates.get(wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
@@ -292,7 +368,8 @@ function buildSessionSummary(f, wfStates) {
     ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
     mtime: f.mtime,
     active,
-    working: (Date.now() - f.mtime) < WORKING_MS,   // живая генерация прямо сейчас (< 20с)
+    working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0,   // живая генерация ИЛИ живой фоновый агент
+    bgRunning,
     column: columnByAge(f.mtime),
     tags: getTags(f.rel),                            // пользовательские теги (Deck-side)
     ...wf,
@@ -429,7 +506,11 @@ function apiSession(relFile) {
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   // WO: рабочая ветка → заголовок → первичный WO из первого промпта
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);
-  const active = (Date.now() - mtime) < ACTIVE_MS;
+  const projDir = path.basename(path.dirname(rp.resolved));
+  const sessionId = path.basename(rp.resolved).replace(/\.jsonl$/, '');
+  const agents = sessionAgentsDetail(projDir, sessionId);   // деталь: label/activity/tokens (открытая сессия — парсить можно)
+  const bgRunning = agents.filter((a) => a.running).length;
+  const active = (Date.now() - mtime) < ACTIVE_MS || bgRunning > 0;
   // Стадия/билд/MR/скоуп из dev-workflow — те же поля, что и на карточке, чтобы правый рейл их отражал.
   const st = wo ? loadWfStates().get(wo) : null;
   const wf = wfInfo(st, active);
@@ -437,7 +518,7 @@ function apiSession(relFile) {
   const baseBranch = pickBaseBranch(branches) || scope.targetEnv || '';
   const notes = notesFromClarifications(st && st.userClarifications);
   return {
-    id: path.basename(rp.resolved).replace(/\.jsonl$/, ''),
+    id: sessionId,
     file: relFile,
     title, lastPrompt, cwd,
     project: cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : '',
@@ -448,7 +529,9 @@ function apiSession(relFile) {
     ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
     mtime,
     active,
-    working: (Date.now() - mtime) < WORKING_MS,
+    working: (Date.now() - mtime) < WORKING_MS || bgRunning > 0,
+    bgRunning,
+    agents,
     blocks,
     count: msgCount,
     notes,
@@ -456,6 +539,16 @@ function apiSession(relFile) {
     ...wf,
     ...scope,
   };
+}
+
+// Живой статус фоновых агентов открытой сессии (клиент опрашивает раз в несколько секунд).
+function apiAgents(relFile) {
+  const rp = resolveSessionPath(relFile);
+  if (rp.error) return rp;
+  const projDir = path.basename(path.dirname(rp.resolved));
+  const sessionId = path.basename(rp.resolved).replace(/\.jsonl$/, '');
+  const agents = sessionAgentsDetail(projDir, sessionId);
+  return { agents, bgRunning: agents.filter((a) => a.running).length };
 }
 
 // Инкремент для live-tail: те же блоки, но отдаём только «хвост» после индекса after (poll+diff по числу блоков).
@@ -1083,6 +1176,12 @@ const server = http.createServer((req, res) => {
   }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
+  if (u.pathname === '/api/agents') {
+    const out = apiAgents(u.searchParams.get('file') || '');
+    if (out.error) { sendJSON(res, { error: out.error }, out.code || 400); return; }
+    sendJSON(res, out);
+    return;
+  }
   if (u.pathname === '/api/usage') { apiUsage(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }

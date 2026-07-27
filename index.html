@@ -457,6 +457,7 @@ let prevWorkingFiles = new Set();           // «работающие» сесс
 const notifiedDone = new Set();             // файлы, за чей текущий рабочий эпизод уже уведомили (дедуп)
 let pollTimer = null, polling = false;      // живой поллинг доски ~7с
 let tailTimer = null, tailCount = 0;        // live-tail открытой активной сессии (курсор = число блоков)
+let agentsTimer = null;                      // live-опрос фоновых сабагентов открытой сессии
 const MR_CACHE = {};                        // branch -> { ts, mrs } живые MR из GitLab (кэш клиента ~60с)
 let mrHydrating = false;                    // идёт фоновая подгрузка MR для карточек
 const JIRA_CACHE = {};                      // wo -> { ts, available, status, category, summary } живой статус Jira
@@ -504,7 +505,7 @@ function ctxMini(s){
   const p = pctOf(s);
   return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
 }
-function isWorking(s){ return !!s && (s.working === true || (!!streamingFile && s.file === streamingFile)); }
+function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!streamingFile && s.file === streamingFile)); }
 function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
   if (s.clientCu) out.push(`<span class="chip sc-cu">${esc(s.clientCu)}</span>`);
@@ -569,8 +570,9 @@ function cardHTML(s){
     tagsChipsHTML(s),
     wfChips,
   ].join('');
+  const bg = (s.bgRunning|0) > 0 ? ` · ${s.bgRunning} ${s.bgRunning===1?'агент':'агента'} в фоне` : '';
   const flag = working
-    ? `<div class="flag working"><span class="dot"></span>работает</div>`
+    ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
     : s.active ? `<div class="flag attention"><span class="dot"></span>активна · ${timeAgo(s.mtime)}</div>` : '';
   const buildPill = (s.wfBuildState && s.wfBuildState!=='none')
     ? `<span class="pill"><span class="d ${s.wfBuildState==='running'?'run':'pass'}"></span>билд</span>` : '';
@@ -792,6 +794,7 @@ function sideHTML(t){
       </div>
       ${(t.backend && Array.isArray(t.changedServices) && t.changedServices.length)?`<div class="rail-hint">сервисы: ${t.changedServices.map(esc).join(', ')}</div>`:''}
     </div>
+    <div class="sec" id="agentsSec"${(t.agents&&t.agents.length)?'':' hidden'}><div class="sec-label">Фоновые агенты</div><div id="agentsBox">${agentBoxHTML(t.agents||[])}</div></div>
     <div class="sec"><div class="sec-label">Теги</div>
       <div class="tags-wrap" id="tagsWrap"></div>
       <input class="tags-input" id="tagsInput" type="text" placeholder="добавить тег + Enter" autocomplete="off" spellcheck="false">
@@ -932,6 +935,28 @@ function wireTags(){
   const inp = document.getElementById('tagsInput'); if (!inp) return;
   inp.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); const v=inp.value.trim(); if (v){ const t=currentTags(); t.push(v); saveTags(t); inp.value=''; } } });
 }
+/* ---------- фоновые сабагенты открытой сессии ---------- */
+function agentBoxHTML(agents){
+  if (!agents || !agents.length) return '';
+  return agents.map(a=>{
+    const status = a.running ? '<span class="ag-dot run"></span>работает' : (a.stopped ? 'остановлен' : 'готово');
+    const tok = a.tokensIn ? ' · ' + kTok(a.tokensIn) : '';
+    return `<div class="ag-item${a.running?' live':''}"><div class="ag-head"><span class="ag-label">${esc(a.label)}</span><span class="ag-status">${status}${tok}</span></div>${a.activity?`<div class="ag-act">${esc(a.activity)}</div>`:''}</div>`;
+  }).join('');
+}
+function stopAgentsPoll(){ if (agentsTimer){ clearInterval(agentsTimer); agentsTimer = null; } }
+async function pollAgents(file){
+  if (currentFile !== file){ stopAgentsPoll(); return; }
+  let d; try { d = await (await fetch('/api/agents?file=' + encodeURIComponent(file), { cache:'no-store' })).json(); } catch { return; }
+  if (currentFile !== file || !d || d.error) return;
+  const sec = document.getElementById('agentsSec'), box = document.getElementById('agentsBox');
+  const agents = Array.isArray(d.agents) ? d.agents : [];
+  if (sec && box){ if (agents.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
+  // отражаем в кэше/списке, чтобы признак «работает» на карточке/лейбле держался, пока агенты живы
+  if (SESSION_CACHE[file]){ SESSION_CACHE[file].bgRunning = d.bgRunning; SESSION_CACHE[file].agents = agents; }
+  const se = SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
+}
+function startAgentsPoll(file){ stopAgentsPoll(); agentsTimer = setInterval(()=>pollAgents(file), 4000); pollAgents(file); }
 async function hydrateJira(){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с)
   if (jiraHydrating) return; jiraHydrating = true;
   const now = Date.now();
@@ -1137,6 +1162,7 @@ function stopStream(){
   if (currentES){ try { currentES.close(); } catch {} currentES = null; }
   if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
   stopTail();
+  stopAgentsPoll();
   streaming = false; liveFinish = null; streamingFile = null;
   promptQueue.length = 0; updateQueueIndicator();        // уходя с сессии — очередь сбрасываем
   // жёсткий сброс UI стрима: убрать индикатор «работает» и снять недостроенный live-блок из чата
@@ -1493,6 +1519,7 @@ async function openSession(file){
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
   wireTags();          // секция «Теги»: add/edit/delete
+  startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
@@ -1763,6 +1790,15 @@ function injectCSS(){
     .tag-chip .tag-x{ border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:11px; padding:0 3px; }
     .tag-chip .tag-x:hover{ color:var(--bad); }
     .tags-input{ width:100%; box-sizing:border-box; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:6px 10px; color:var(--text); font-family:var(--ui); font-size:12.5px; }
+    /* фоновые агенты в рейле */
+    .ag-item{ border:1px solid var(--border); border-radius:8px; padding:7px 10px; margin-bottom:7px; background:var(--surface-2); }
+    .ag-item.live{ border-left:3px solid var(--good); }
+    .ag-head{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+    .ag-label{ font-size:12.5px; color:var(--text); font-weight:560; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ag-status{ flex:none; display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:10.5px; color:var(--text-muted); }
+    .ag-dot{ width:6px; height:6px; border-radius:50%; background:var(--text-faint); }
+    .ag-dot.run{ background:var(--good); animation:pulse 2.4s infinite; }
+    .ag-act{ margin-top:4px; font-family:var(--mono); font-size:11px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
     /* карточка «работает сейчас» (зелёная) + тумблер уведомлений в топбаре */
     .flag.working{ background:var(--good-soft); color:var(--good); }
