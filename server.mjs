@@ -1415,6 +1415,18 @@ function apiAuthLogout(res) {
   });
 }
 
+// -------- статика web/ (D4c: клиент разбит на ES-модули + deck.css). Path-safe: только из web/. --------
+const WEB_DIR = path.join(HERE, 'web');
+const WEB_MIME = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.map': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
+function serveWeb(pathname, res) {
+  const base = path.resolve(WEB_DIR);
+  const resolved = path.resolve(base, pathname.replace(/^\/+/, ''));
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
+  let buf; try { buf = readFileSync(resolved); } catch { res.writeHead(404); res.end('not found'); return; }
+  res.writeHead(200, { 'Content-Type': WEB_MIME[path.extname(resolved).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+  res.end(buf);
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || '/', 'http://localhost');
   if (u.pathname === '/api/sessions') { apiSessions().then((d) => sendJSON(res, d)).catch((e) => sendJSON(res, { error: String(e && e.message || e) }, 500)); return; }
@@ -1460,6 +1472,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/auth/code') { apiAuthCode(req, res); return; }
   if (u.pathname === '/api/auth/cancel') { apiAuthCancel(req, res, u); return; }
   if (u.pathname === '/api/auth/logout') { apiAuthLogout(res); return; }
+  if (u.pathname.startsWith('/js/') || u.pathname.startsWith('/css/')) { serveWeb(u.pathname, res); return; }
   try {
     const html = readFileSync(path.join(HERE, 'index.html'));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
