@@ -231,6 +231,8 @@
     .auth-gate .ag-msg{ font-size:13px; color:var(--bad); font-weight:560; }
     .auth-gate .ag-btn{ height:28px; padding:0 14px; border-radius:8px; border:1px solid var(--bad); background:var(--bad); color:#fff; font-weight:600; font-size:12.5px; cursor:pointer; }
     .auth-gate .ag-btn:hover{ filter:brightness(1.08); }
+    /* атрибут hidden обязан скрывать даже элементы с заданным display (иначе .auth-gate{display:flex} и др. перебивают браузерное [hidden]{display:none}) */
+    [hidden]{ display:none !important; }
 
     /* поиск-дропдаун сессий (под полем #q, во всех видах) */
     .search{ position:relative; }
