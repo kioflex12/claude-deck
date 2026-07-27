@@ -1,0 +1,44 @@
+name: release
+
+# Собирает и публикует десктоп-сборки Deck в приватный GitHub Release.
+# Триггер — пуш тега vX.Y.Z (или ручной запуск). Подпись не настроена (unsigned):
+# Windows → SmartScreen-предупреждение, macOS → Gatekeeper (открывать через right-click → Open).
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # GITHUB_TOKEN должен уметь создавать релиз и загружать ассеты
+
+jobs:
+  windows:
+    runs-on: windows-latest   # раннер под админом → winCodeSign-симлинки распакуются штатно, шим НЕ нужен
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build & publish Windows (nsis + portable)
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # без сертификата — не пытаться подписывать
+
+  macos:
+    runs-on: macos-latest   # приватный репо: минуты macOS тарифицируются ×10, но для релизов по тегам это приемлемо
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build & publish macOS (dmg + zip)
+        run: npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'

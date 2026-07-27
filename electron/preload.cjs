@@ -9,4 +9,11 @@ contextBridge.exposeInMainWorld('deckNative', {
   notify: (opts) => ipcRenderer.invoke('deck:notify', opts),
   // main шлёт 'open-session' по клику на уведомление → renderer открывает нужную сессию.
   onOpenSession: (cb) => ipcRenderer.on('open-session', (_e, file) => { try { cb(file); } catch {} }),
+  // D3: версия + автообновление из приватного GitHub по личному токену.
+  appVersion: () => ipcRenderer.invoke('deck:appVersion'),
+  updateInfo: () => ipcRenderer.invoke('deck:updateInfo'),
+  setUpdateToken: (pat) => ipcRenderer.invoke('deck:setUpdateToken', pat),
+  checkForUpdates: () => ipcRenderer.invoke('deck:checkForUpdates'),
+  onOpenUpdates: (cb) => ipcRenderer.on('open-updates', () => { try { cb(); } catch {} }),
+  onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => { try { cb(s); } catch {} }),
 });

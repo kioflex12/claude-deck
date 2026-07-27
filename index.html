@@ -2315,6 +2315,53 @@ async function startLogin(){
   });
 }
 
+/* ---------- D3: обновления (только в Electron) — версия + PAT + проверка ---------- */
+let UPDATE_STATUS_EL = null;
+function renderUpdateStatus(s){
+  if (!UPDATE_STATUS_EL || !s) return;
+  const m = {
+    checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
+    available:'Доступна версия '+(s.version||'')+' — загружаю…',
+    downloading:'Загрузка… '+(s.percent||0)+'%',
+    downloaded:'Обновление '+(s.version||'')+' загружено — установится при перезапуске.',
+    error:'Ошибка обновления: '+(s.message||''), 'no-token':'Добавьте токен для автообновления.', dev:'Обновления доступны только в установленном приложении.',
+  };
+  UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
+}
+async function openUpdatesModal(){
+  if (!(window.deckNative && window.deckNative.updateInfo)) return;   // только в Electron
+  const info = await window.deckNative.updateInfo();
+  const back = modalBack('updatesBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Обновления</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b></div>
+      <div class="um-note">Автообновление из приватного GitHub-репозитория. Нужен персональный токен GitHub (PAT) со scope <b>repo</b> (чтение релизов). Токен хранится локально в зашифрованном виде (хранилище ОС) и не покидает машину.</div>
+      <label class="ns-lbl">GitHub Personal Access Token</label>
+      <input id="updTok" class="ns-inp" type="password" placeholder="${info.hasToken?'токен сохранён — вставьте новый, чтобы заменить':'ghp_… / github_pat_…'}" autocomplete="off">
+      <div class="ns-actions" style="justify-content:space-between">
+        <div>${info.hasToken?'<button class="btn-ghost" id="updClear" type="button">Удалить токен</button>':''}</div>
+        <div><button class="btn-ghost" id="updSave" type="button">Сохранить</button><button class="ns-start" id="updCheck" type="button">Проверить обновления</button></div>
+      </div>
+      <div class="um-note" id="updStatus" style="margin-top:8px"></div>
+      ${info.encryptionAvailable?'':'<div class="um-note" style="color:#e79">Безопасное хранилище ОС недоступно — токен сохранить нельзя.</div>'}
+      ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
+    </div></div>`;
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; });
+  back.classList.add('open');
+  const tok = back.querySelector('#updTok'); UPDATE_STATUS_EL = back.querySelector('#updStatus');
+  back.querySelector('#updSave').addEventListener('click', async ()=>{
+    const r = await window.deckNative.setUpdateToken(tok.value.trim());
+    UPDATE_STATUS_EL.textContent = r.ok ? (r.cleared?'Токен удалён.':'Токен сохранён.') : ('Ошибка: '+(r.error||'')); tok.value='';
+  });
+  const clr = back.querySelector('#updClear');
+  if (clr) clr.addEventListener('click', async ()=>{ await window.deckNative.setUpdateToken(''); UPDATE_STATUS_EL.textContent='Токен удалён.'; });
+  back.querySelector('#updCheck').addEventListener('click', async ()=>{
+    UPDATE_STATUS_EL.textContent='Проверяю…';
+    const r = await window.deckNative.checkForUpdates();
+    if (!r.ok) renderUpdateStatus({ state: r.reason==='no-token'?'no-token' : r.reason==='dev'?'dev' : 'error', message: r.reason });
+  });
+}
+
 injectCSS();
 ensureStatusTab();
 initNotifyToggle();
@@ -2322,6 +2369,9 @@ wireTopbar();
 loadAuth();
 // Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
 if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
+// Electron: открыть окно «Обновления» из меню/трея + принимать статусы автоапдейтера.
+if (window.deckNative && window.deckNative.onOpenUpdates) window.deckNative.onOpenUpdates(openUpdatesModal);
+if (window.deckNative && window.deckNative.onUpdateStatus) window.deckNative.onUpdateStatus(renderUpdateStatus);
 load();
 
 </script>

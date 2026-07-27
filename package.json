@@ -4,17 +4,21 @@
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
+  "author": "kioflex",
   "main": "electron/main.cjs",
   "scripts": {
     "start": "node server.mjs",
     "app": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "release": "electron-builder --publish always"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.217"
+    "@anthropic-ai/claude-agent-sdk": "0.3.217",
+    "electron-updater": "6.7.3"
   },
   "devDependencies": {
     "electron": "43.2.0",
@@ -23,22 +27,50 @@
   "build": {
     "appId": "com.kioflex.deck",
     "productName": "Deck",
+    "copyright": "Copyright © 2026 kioflex",
     "directories": { "output": "dist" },
     "files": [
       "electron/**",
       "server.mjs",
       "index.html",
-      "node_modules/@anthropic-ai/**"
+      "node_modules/@anthropic-ai/**",
+      "node_modules/electron-updater/**",
+      "node_modules/builder-util-runtime/**",
+      "node_modules/fs-extra/**",
+      "node_modules/graceful-fs/**",
+      "node_modules/jsonfile/**",
+      "node_modules/universalify/**",
+      "node_modules/js-yaml/**",
+      "node_modules/argparse/**",
+      "node_modules/lazy-val/**",
+      "node_modules/lodash.escaperegexp/**",
+      "node_modules/lodash.isequal/**",
+      "node_modules/semver/**",
+      "node_modules/tiny-typed-emitter/**",
+      "node_modules/debug/**",
+      "node_modules/ms/**",
+      "node_modules/sax/**"
     ],
     "extraMetadata": { "main": "electron/main.cjs" },
+    "publish": [
+      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck", "private": true, "releaseType": "release" }
+    ],
     "win": {
       "target": ["nsis", "portable"],
       "icon": "electron/icon.png"
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Deck",
+      "uninstallDisplayName": "Deck ${version}"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools"
     }
   }
 }

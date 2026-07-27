@@ -1,10 +1,15 @@
 // Deck — Electron main process (Node). Поднимает встроенный localhost-сервер Deck на свободном порту
 // и грузит его в BrowserWindow. Весь UI/логика — переиспользованный server.mjs + index.html.
 'use strict';
-const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notification, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notification, screen, dialog, safeStorage } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
+
+// Приватный GitHub-репозиторий с релизами (автообновление). Токен НЕ вшит — вводится пользователем, хранится через safeStorage.
+const GH_OWNER = 'kioflex12';
+const GH_REPO = 'claude-deck';
 
 // AppUserModelID нужен Windows, иначе нативные уведомления идут без имени/иконки приложения.
 app.setAppUserModelId('com.kioflex.deck');
@@ -85,6 +90,8 @@ async function start() {
   refreshMenus();
   createTray();
   mainWindow.loadURL(serverHandle.url);
+  // Тихая проверка обновлений на старте (в dev / без токена — молча выходит).
+  mainWindow.webContents.once('did-finish-load', () => { checkForUpdates(); });
 
   // Внешние ссылки (Jira/GitLab/OAuth) — в системный браузер, не в новое окно приложения.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
@@ -137,6 +144,9 @@ function buildTrayMenu() {
     { label: 'Автозапуск при входе', type: 'checkbox', checked: getAutostart(), click: (mi) => setAutostart(mi.checked) },
     { label: 'Сворачивать в трей', type: 'checkbox', checked: deckState.minimizeToTray, click: (mi) => { deckState.minimizeToTray = mi.checked; saveState(); refreshMenus(); } },
     { type: 'separator' },
+    { label: 'Проверить обновления…', click: openUpdatesUI },
+    { label: 'О программе', click: showAbout },
+    { type: 'separator' },
     { label: 'Выход', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
 }
@@ -159,6 +169,79 @@ ipcMain.handle('deck:notify', (_e, opts) => {
 // Мост для UI: открыть URL в системном браузере (для OAuth-логина Claude).
 ipcMain.handle('deck:openExternal', (_e, url) => { if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url); return true; });
 
+// --- автообновление из приватного GitHub Releases по личному токену пользователя (D3) ---
+// Токен шифруется safeStorage (OS keychain/DPAPI) и лежит в userData; в бандл НЕ вшивается.
+const tokenFile = () => path.join(app.getPath('userData'), 'update-token.bin');
+function encryptionOk() { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } }
+function readToken() {
+  try { if (!encryptionOk()) return null; return safeStorage.decryptString(fs.readFileSync(tokenFile())) || null; } catch { return null; }
+}
+function writeToken(pat) {
+  if (!encryptionOk()) throw new Error('OS-хранилище недоступно');
+  fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
+  fs.writeFileSync(tokenFile(), safeStorage.encryptString(String(pat)));
+}
+function clearToken() { try { fs.unlinkSync(tokenFile()); } catch {} }
+function hasToken() { try { return fs.existsSync(tokenFile()); } catch { return false; } }
+
+function sendUpdateStatus(state, extra) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', { state, ...(extra || {}) });
+}
+let updaterWired = false;
+function wireUpdater() {
+  if (updaterWired) return; updaterWired = true;
+  autoUpdater.autoDownload = true;             // update-available → сразу качаем
+  autoUpdater.autoInstallOnAppQuit = true;     // установка при выходе
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
+  autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
+  autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
+  autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', { percent: Math.round(p && p.percent || 0) }));
+  autoUpdater.on('update-downloaded', (i) => { sendUpdateStatus('downloaded', { version: i && i.version }); promptInstall(i); });
+  autoUpdater.on('error', (e) => sendUpdateStatus('error', { message: String((e && e.message) || e) }));
+}
+// Возвращает {ok, reason?}: 'dev' — не упакован; 'no-token' — токен не задан.
+async function checkForUpdates() {
+  if (!app.isPackaged) { sendUpdateStatus('dev'); return { ok: false, reason: 'dev' }; }
+  const pat = readToken();
+  if (!pat) { sendUpdateStatus('no-token'); return { ok: false, reason: 'no-token' }; }
+  wireUpdater();
+  autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_REPO, private: true, token: pat });
+  try { await autoUpdater.checkForUpdates(); return { ok: true }; }
+  catch (e) { const reason = String((e && e.message) || e); sendUpdateStatus('error', { message: reason }); return { ok: false, reason }; }
+}
+function notifyUpdate(info) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title: 'Доступно обновление Deck', body: 'Версия ' + ((info && info.version) || '') + ' загружается…' });
+  n.on('click', showWindow); n.show();
+}
+async function promptInstall(info) {
+  const r = await dialog.showMessageBox(mainWindow, {
+    type: 'info', buttons: ['Перезапустить и обновить', 'Позже'], defaultId: 0, cancelId: 1,
+    title: 'Обновление готово', message: 'Deck ' + ((info && info.version) || '') + ' загружено',
+    detail: 'Установить сейчас? Приложение перезапустится.',
+  });
+  if (r.response === 0) { app.isQuitting = true; autoUpdater.quitAndInstall(); }
+}
+function showAbout() {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info', title: 'О программе Deck', message: 'Deck ' + app.getVersion(),
+    detail: 'Локальный менеджер контекстов Claude Code:\nдоска сессий + рабочая консоль.\n\n© 2026 kioflex',
+    buttons: ['OK'],
+  });
+}
+function openUpdatesUI() { showWindow(); if (mainWindow) mainWindow.webContents.send('open-updates'); }
+
+ipcMain.handle('deck:appVersion', () => app.getVersion());
+ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), hasToken: hasToken(), encryptionAvailable: encryptionOk(), packaged: app.isPackaged }));
+ipcMain.handle('deck:setUpdateToken', (_e, pat) => {
+  try {
+    const v = pat != null ? String(pat).trim() : '';
+    if (v) { writeToken(v); return { ok: true }; }
+    clearToken(); return { ok: true, cleared: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
+
 function refreshMenus() {
   Menu.setApplicationMenu(buildMenu());
   if (tray) tray.setContextMenu(buildTrayMenu());
@@ -178,6 +261,11 @@ function buildMenu() {
     { label: 'Правка', submenu: [ { role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' } ] },
     { label: 'Вид', submenu: [ { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' } ] },
     { label: 'Окно', submenu: [ { role: 'minimize' }, { role: 'zoom' } ] },
+    { label: 'Помощь', role: 'help', submenu: [
+      { label: 'Проверить обновления…', click: openUpdatesUI },
+      { type: 'separator' },
+      { label: 'О программе', click: showAbout },
+    ] },
   ]);
 }
 
