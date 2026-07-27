@@ -5,6 +5,8 @@ const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notificatio
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
+const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 // Приватный GitHub-репозиторий с релизами (автообновление). Токен НЕ вшит — вводится пользователем, хранится через safeStorage.
@@ -168,6 +170,63 @@ ipcMain.handle('deck:notify', (_e, opts) => {
 
 // Мост для UI: открыть URL в системном браузере (для OAuth-логина Claude).
 ipcMain.handle('deck:openExternal', (_e, url) => { if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url); return true; });
+
+// --- Запуск Unity инстанса по клику на cu-тег карточки. Пути машинно-зависимые → из cwd/настроек, не хардкод. ---
+function readDeckConfig() { try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'deck-config.json'), 'utf8')) || {}; } catch { return {}; } }
+// Папка Unity-проекта: (1) из cwd, если в нём есть сегмент client-unity-<N> — берём путь ДО и включая его;
+// (2) иначе <clientUnityParent из настроек>/client-unity-<N> (N из cu).
+function resolveUnityProject(cu, cwd, cfg) {
+  const segs = String(cwd || '').split(/[\\/]/);
+  const idx = segs.findIndex((s) => /^client-unity-\d+$/i.test(s));
+  if (idx >= 0) return segs.slice(0, idx + 1).join(path.sep);
+  const n = String(cu || '').match(/\d+/);
+  if (cfg.clientUnityParent && n) return path.join(cfg.clientUnityParent, 'client-unity-' + n[0]);
+  return null;
+}
+// Кандидаты редактора Unity под версию проекта: override из настроек + Unity Hub secondaryInstallPath + дефолт по ОС.
+function unityEditorCandidates(version, cfg) {
+  const dirs = [];
+  if (cfg.unityEditorsDir) dirs.push(cfg.unityEditorsDir);
+  try { const sp = fs.readFileSync(path.join(app.getPath('appData'), 'UnityHub', 'secondaryInstallPath.json'), 'utf8').trim().replace(/^"|"$/g, ''); if (sp) dirs.push(sp); } catch {}
+  if (process.platform === 'win32') dirs.push('C:\\Program Files\\Unity\\Hub\\Editor');
+  else if (process.platform === 'darwin') dirs.push('/Applications/Unity/Hub/Editor');
+  else dirs.push(path.join(os.homedir(), 'Unity', 'Hub', 'Editor'));
+  const tail = process.platform === 'win32' ? ['Editor', 'Unity.exe']
+    : process.platform === 'darwin' ? ['Unity.app', 'Contents', 'MacOS', 'Unity']
+    : ['Editor', 'Unity'];
+  return dirs.filter(Boolean).map((d) => path.join(d, version || '', ...tail));
+}
+function launchDetached(cmd, args) { spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref(); }
+async function openUnity({ cu, cwd } = {}) {
+  try {
+    const cfg = readDeckConfig();
+    const dir = resolveUnityProject(cu, cwd, cfg);
+    if (!dir) return { ok: false, error: 'Не удалось определить папку проекта — укажи «Папка client-unity копий» в ⚙ Настройки' };
+    const verFile = path.join(dir, 'ProjectSettings', 'ProjectVersion.txt');
+    if (!fs.existsSync(verFile)) return { ok: false, error: 'Не Unity-проект: ' + dir + ' — проверь путь в ⚙ Настройки' };
+    let version = '';
+    try { const m = fs.readFileSync(verFile, 'utf8').match(/m_EditorVersion:\s*(\S+)/); version = m ? m[1] : ''; } catch {}
+    for (const exe of unityEditorCandidates(version, cfg)) {
+      if (!fs.existsSync(exe)) continue;
+      if (process.platform === 'darwin') { const appPath = exe.replace(/\/Contents\/MacOS\/Unity$/, ''); launchDetached('open', ['-a', appPath, '--args', '-projectPath', dir]); }
+      else launchDetached(exe, ['-projectPath', dir]);
+      return { ok: true, launched: 'Unity ' + version };
+    }
+    // Фолбэк — Unity Hub.
+    if (process.platform === 'win32') {
+      const hub = cfg.unityHubPath || 'C:\\Program Files\\Unity Hub\\Unity Hub.exe';
+      if (fs.existsSync(hub)) { launchDetached(hub, ['--', '--projectPath', dir]); return { ok: true, launched: 'Unity Hub' }; }
+    } else if (process.platform === 'darwin') {
+      const hub = cfg.unityHubPath || '/Applications/Unity Hub.app';
+      if (fs.existsSync(hub)) { launchDetached('open', ['-a', hub, '--args', '--', '--projectPath', dir]); return { ok: true, launched: 'Unity Hub' }; }
+    } else {
+      const hub = cfg.unityHubPath || '';
+      if (hub && fs.existsSync(hub)) { launchDetached(hub, ['--', '--projectPath', dir]); return { ok: true, launched: 'Unity Hub' }; }
+    }
+    return { ok: false, error: 'Unity ' + (version || '') + ' / Hub не найден — укажи путь в ⚙ Настройки' };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+ipcMain.handle('deck:open-unity', (_e, opts) => openUnity(opts || {}));
 
 // --- автообновление из приватного GitHub Releases по личному токену пользователя (D3) ---
 // Токен шифруется safeStorage (OS keychain/DPAPI) и лежит в userData; в бандл НЕ вшивается.

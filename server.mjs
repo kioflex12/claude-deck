@@ -53,7 +53,7 @@ function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
 function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 function saveConfig(patch) {
   const c = loadConfig();
-  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost']) if (k in patch) c[k] = String(patch[k] || '');
+  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath']) if (k in patch) c[k] = String(patch[k] || '');
   try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
 }
 // Секретные токены (Jira/TeamCity/GitLab): в Electron шифруем safeStorage'ом (как update-token в D3) в userData/<svc>-token.bin;
@@ -1377,6 +1377,7 @@ function configView() {
     jira: { host: JIRA_HOST, email: JIRA_EMAIL, tokenSet: !!JIRA_TOKEN, enabled: JIRA_ENABLED },
     teamcity: { host: TC_HOST, tokenSet: !!TC_TOKEN },
     gitlab: { host: GL_HOST, tokenSet: !!GL_TOKEN },
+    unity: (() => { const c = loadConfig(); return { clientUnityParent: c.clientUnityParent || '', editorsDir: c.unityEditorsDir || '', hubPath: c.unityHubPath || '' }; })(),
     electron: !!getElectron(),   // можно ли безопасно сохранить токен (safeStorage) или только через .env
     defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects'), teamcityHost: 'https://teamcity.example.com', gitlabHost: 'https://gitlab.example.com' },
   };

@@ -78,7 +78,7 @@ function ctxMini(s){
 function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!streamingFile && s.file === streamingFile)); }
 function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
-  if (s.clientCu) out.push(`<span class="chip sc-cu">${esc(s.clientCu)}</span>`);
+  if (s.clientCu) out.push(`<span class="chip sc-cu sc-cu-run" data-cu="${esc(s.clientCu)}" data-cwd="${esc(s.cwd||'')}" title="Запустить Unity (${esc(s.clientCu)})">${esc(s.clientCu)}</span>`);
   if (s.backend)  out.push(`<span class="chip sc-be">backend</span>`);
   if (s.statics)  out.push(`<span class="chip sc-st">статика</span>`);
   if (s.baseBranch) out.push(`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(s.baseBranch)}${s.merged?' ✓':''}</span>`);
@@ -164,6 +164,18 @@ function renderBoard(animate){
     el.addEventListener('click',()=>openSession(el.dataset.file));
     el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openSession(el.dataset.file); } });
   });
+  board.querySelectorAll('.sc-cu-run').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); launchUnity(el.dataset.cu, el.dataset.cwd); });   // тап по cu-тегу → Unity, НЕ открывать карточку
+  });
+}
+async function launchUnity(cu, cwd){
+  if (!(window.deckNative && window.deckNative.openUnity)){ toast('Запуск Unity доступен только в приложении'); return; }
+  toast('Запускаю Unity ' + cu + '…');
+  try {
+    const r = await window.deckNative.openUnity({ cu, cwd });
+    if (r && r.ok) toast('Unity ' + cu + ' запускается' + (r.launched ? ' · ' + r.launched : ''));
+    else toast('Unity не запущен: ' + ((r && r.error) || 'неизвестная ошибка'));
+  } catch (e) { toast('Ошибка запуска Unity: ' + ((e && e.message) || e)); }
 }
 function renderNow(){
   const now = document.getElementById('now');
@@ -1686,7 +1698,7 @@ async function openUpdatesModal(){
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
 async function openSettingsModal(){
   let cfg = {}; try { cfg = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch {}
-  const jira = cfg.jira || {}, tc = cfg.teamcity || {}, gl = cfg.gitlab || {};
+  const jira = cfg.jira || {}, tc = cfg.teamcity || {}, gl = cfg.gitlab || {}, unity = cfg.unity || {};
   const tokHint = cfg.electron ? '<div class="um-note">Токены хранятся локально в зашифрованном виде (хранилище ОС).</div>'
     : '<div class="um-note" style="color:#e79">Standalone: токены безопасно сохранить нельзя — задайте их в .env (JIRA_TOKEN / TEAMCITY_TOKEN / GITLAB_TOKEN) рядом с server.mjs. Хосты и Jira email сохранятся.</div>';
   const back = modalBack('settingsBack');
@@ -1713,6 +1725,13 @@ async function openSettingsModal(){
       <input id="setGh" class="ns-inp" type="text" placeholder="${esc((cfg.defaults&&cfg.defaults.gitlabHost)||'https://…')}" value="${esc(gl.host||'')}">
       <label class="ns-lbl">GitLab token${gl.tokenSet?' — задан':''}</label>
       <input id="setGt" class="ns-inp" type="password" placeholder="${gl.tokenSet?'сохранён — вставьте новый, чтобы заменить':'вставьте private-токен'}" autocomplete="off">
+      <div class="um-note" style="margin-top:12px">Unity — запуск инстанса по клику на cu-тег карточки (только в приложении).</div>
+      <label class="ns-lbl">Папка client-unity копий (родительская)</label>
+      <input id="setCup" class="ns-inp" type="text" placeholder="напр. D:/wo — тогда cu2 → D:/wo/client-unity-2 (если не выводится из cwd)" value="${esc(unity.clientUnityParent||'')}">
+      <label class="ns-lbl">Путь к редакторам Unity / Unity Hub Editor dir (опц.)</label>
+      <input id="setUed" class="ns-inp" type="text" placeholder="дефолт C:\\Program Files\\Unity\\Hub\\Editor" value="${esc(unity.editorsDir||'')}">
+      <label class="ns-lbl">Путь к Unity Hub (опц., фолбэк)</label>
+      <input id="setUhub" class="ns-inp" type="text" placeholder="дефолт C:\\Program Files\\Unity Hub\\Unity Hub.exe" value="${esc(unity.hubPath||'')}">
       ${tokHint}
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="setSave" type="button">Сохранить</button></div>
       <div class="um-note" id="setStatus" style="margin-top:8px"></div>
@@ -1731,6 +1750,9 @@ async function openSettingsModal(){
       jiraEmail: back.querySelector('#setJe').value.trim(),
       teamcityHost: back.querySelector('#setTh').value.trim(),
       gitlabHost: back.querySelector('#setGh').value.trim(),
+      clientUnityParent: back.querySelector('#setCup').value.trim(),
+      unityEditorsDir: back.querySelector('#setUed').value.trim(),
+      unityHubPath: back.querySelector('#setUhub').value.trim(),
     };
     const jt = back.querySelector('#setJt').value; if (jt) payload.jiraToken = jt;
     const tt = back.querySelector('#setTt').value; if (tt) payload.teamcityToken = tt;

@@ -276,3 +276,6 @@
     .mcp-refresh:hover{ border-color:var(--accent); }
     .mcp-refresh:disabled{ opacity:.5; cursor:default; }
     .mcp-head{ display:flex; align-items:center; gap:12px; }
+    /* cu-тег кликабелен → запуск Unity инстанса */
+    .sc-cu-run{ cursor:pointer; }
+    .sc-cu-run:hover{ border-color:var(--accent); color:var(--accent); }
