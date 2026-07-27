@@ -368,9 +368,9 @@ const COLUMNS = [
 ];
 /* доска по стадии workflow (основная) */
 const WF_COLUMNS = [
-  { key:'blocked',    title:'Заблокировано',    dot:'var(--bad)' },
   { key:'todo',       title:'Ждёт',             dot:'var(--text-faint)' },
   { key:'active',     title:'В работе',         dot:'var(--accent)' },
+  { key:'blocked',    title:'Заблокировано',    dot:'var(--bad)' },
   { key:'build',      title:'Build In Progress', dot:'var(--warn)' },
   { key:'qa',         title:'На QA',            dot:'var(--info)' },
   { key:'readymerge', title:'Ждёт мерджа',      dot:'var(--info)' },
@@ -523,7 +523,7 @@ function effectiveColumn(s){
   let jm = null;
   if (s.wo){ const j = JIRA_CACHE[s.wo]; if (j && j.available && j.status) jm = jiraColumn(j.status, j.category, s); }
   if (jm && jm.blocked) return { col:'blocked', blocked:true };            // 1. Заблокировано
-  if (s.wfBuildState === 'running') return { col:'build', blocked:false }; // 2. Build In Progress — только пока билд идёт
+  if (s.buildActive === true) return { col:'build', blocked:false };       // 2. Build In Progress — ТОЛЬКО живой билд TeamCity (не stale buildTriggered)
   let col = s.wfColumn || (s.active ? 'active' : 'todo');                  // done/readymerge/qa/active/todo — из dev-workflow…
   if (jm && jm.col && jm.col !== 'build') col = jm.col;                    // …или из Jira, если доступен
   if (col === 'build') col = 'qa';                                        // 3. билд завершён (не идёт) → «На QA»
@@ -794,7 +794,7 @@ function sideHTML(t){
       </div>
       ${(t.backend && Array.isArray(t.changedServices) && t.changedServices.length)?`<div class="rail-hint">сервисы: ${t.changedServices.map(esc).join(', ')}</div>`:''}
     </div>
-    <div class="sec" id="agentsSec"${(t.agents&&t.agents.length)?'':' hidden'}><div class="sec-label">Фоновые агенты</div><div id="agentsBox">${agentBoxHTML(t.agents||[])}</div></div>
+    <div class="sec" id="agentsSec"${runningAgents(t.agents).length?'':' hidden'}><div class="sec-label">Фоновые агенты</div><div id="agentsBox">${agentBoxHTML(t.agents||[])}</div></div>
     <div class="sec"><div class="sec-label">Теги</div>
       <div class="tags-wrap" id="tagsWrap"></div>
       <input class="tags-input" id="tagsInput" type="text" placeholder="добавить тег + Enter" autocomplete="off" spellcheck="false">
@@ -882,7 +882,7 @@ async function hydrateMrs(){   // фоновая подгрузка MR для к
 // Маппинг Jira-статус → колонка (клиент, т.к. In Progress зависит от состояния билда). Возвращает {col, blocked}.
 function jiraColumn(status, category, s){
   const n = String(status||'').toLowerCase();
-  const inProg = () => ({ col:(s && s.wfBuildState==='running')?'build':'active', blocked:false });   // In Progress → build если билд идёт, иначе active
+  const inProg = () => ({ col:(s && s.buildActive===true)?'build':'active', blocked:false });   // In Progress → build ТОЛЬКО если билд реально идёт (TeamCity), иначе active
   if (/block|блок/.test(n)) return { col:null, blocked:true };            // blocked — стадию не меняем, только бейдж
   if (/ready\s*(to|for)?\s*merge|к\s*мерж|готов.*мерж/.test(n)) return { col:'readymerge', blocked:false };
   if (/done|release|closed|resolved|готово|релиз|закрыт/.test(n) || category==='done') return { col:'done', blocked:false };
@@ -936,12 +936,13 @@ function wireTags(){
   inp.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); const v=inp.value.trim(); if (v){ const t=currentTags(); t.push(v); saveTags(t); inp.value=''; } } });
 }
 /* ---------- фоновые сабагенты открытой сессии ---------- */
-function agentBoxHTML(agents){
-  if (!agents || !agents.length) return '';
-  return agents.map(a=>{
-    const status = a.running ? '<span class="ag-dot run"></span>работает' : (a.stopped ? 'остановлен' : 'готово');
+function runningAgents(agents){ return (Array.isArray(agents)?agents:[]).filter(a=>a && a.running); }
+function agentBoxHTML(agents){   // ТОЛЬКО активные (running); завершённые/остановленные не показываем
+  const live = runningAgents(agents);
+  if (!live.length) return '';
+  return live.map(a=>{
     const tok = a.tokensIn ? ' · ' + kTok(a.tokensIn) : '';
-    return `<div class="ag-item${a.running?' live':''}"><div class="ag-head"><span class="ag-label">${esc(a.label)}</span><span class="ag-status">${status}${tok}</span></div>${a.activity?`<div class="ag-act">${esc(a.activity)}</div>`:''}</div>`;
+    return `<div class="ag-item live"><div class="ag-head"><span class="ag-label">${esc(a.label)}</span><span class="ag-status"><span class="ag-dot run"></span>работает${tok}</span></div>${a.activity?`<div class="ag-act">${esc(a.activity)}</div>`:''}</div>`;
   }).join('');
 }
 function stopAgentsPoll(){ if (agentsTimer){ clearInterval(agentsTimer); agentsTimer = null; } }
@@ -951,7 +952,8 @@ async function pollAgents(file){
   if (currentFile !== file || !d || d.error) return;
   const sec = document.getElementById('agentsSec'), box = document.getElementById('agentsBox');
   const agents = Array.isArray(d.agents) ? d.agents : [];
-  if (sec && box){ if (agents.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
+  const live = runningAgents(agents);
+  if (sec && box){ if (live.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
   // отражаем в кэше/списке, чтобы признак «работает» на карточке/лейбле держался, пока агенты живы
   if (SESSION_CACHE[file]){ SESSION_CACHE[file].bgRunning = d.bgRunning; SESSION_CACHE[file].agents = agents; }
   const se = SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
@@ -1935,6 +1937,11 @@ function notifyDone(file, title, heading){       // одно уведомлен�
   } catch {}
 }
 
+// Сидим JIRA_CACHE из серверного payload сессий — чтобы effectiveColumn был верен уже на ПЕРВОМ рендере (без прыжков).
+function seedJiraFromSessions(){
+  const now = Date.now();
+  for (const s of SESSIONS){ if (s.wo && s.jira && s.jira.available && s.jira.status) JIRA_CACHE[s.wo] = { ts: now, available:true, status:s.jira.status, category:s.jira.category }; }
+}
 /* ---------- живой поллинг доски (~7с) ---------- */
 async function pollSessions(){
   if (polling) return; polling = true;
@@ -1943,6 +1950,7 @@ async function pollSessions(){
     const data = await r.json();
     if (Array.isArray(data.sessions)) SESSIONS = data.sessions;
   } catch { polling = false; return; }
+  seedJiraFromSessions();
   const nowSet = workingSet();
   for (const file of nowSet){ if (!prevWorkingFiles.has(file)) notifiedDone.delete(file); }   // снова «работает» → перевзвести дедуп
   for (const file of prevWorkingFiles){                 // working → idle = сессия завершила работу
@@ -2102,6 +2110,7 @@ async function load(){
     const data = await r.json();
     SESSIONS = Array.isArray(data.sessions) ? data.sessions : [];
   } catch (e) { SESSIONS = []; }
+  seedJiraFromSessions();              // Jira уже в payload → колонки верны на первом рендере
   prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
   renderFilters();
   renderNow();

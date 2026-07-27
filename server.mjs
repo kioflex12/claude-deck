@@ -377,11 +377,30 @@ function buildSessionSummary(f, wfStates) {
   };
 }
 
-function apiSessions() {
+async function apiSessions() {
   const all = listSessionFiles().sort((a, b) => b.mtime - a.mtime);
   const top = all.slice(0, LIST_CAP);
   const wfStates = loadWfStates();   // читается один раз на запрос
   const sessions = top.map((f) => buildSessionSummary(f, wfStates));
+
+  // ЖИВОЙ билд-статус — только для кандидатов (wfBuildState==='running'), параллельно, с кэшем 60с.
+  const buildCands = sessions.filter((s) => s.wfBuildState === 'running');
+  await Promise.all(buildCands.map(async (s) => { s.buildActive = await buildActiveFor(s.gitBranch, s.wo); }));
+  for (const s of sessions) if (s.buildActive === undefined) s.buildActive = false;
+
+  // Резолв Jira на сервере (параллельно, кэш 30с) — чтобы колонки были верны уже на ПЕРВОМ рендере (без прыжков).
+  if (JIRA_ENABLED) {
+    const wos = [...new Set(sessions.filter((s) => s.wo).map((s) => s.wo))];
+    const map = new Map();
+    await Promise.all(wos.map(async (wo) => { map.set(wo, await jiraStatus(wo)); }));
+    for (const s of sessions) {
+      const d = s.wo && map.get(s.wo);
+      s.jira = (d && d.available && d.status) ? { status: d.status, category: d.category, available: true } : null;
+    }
+  } else {
+    for (const s of sessions) s.jira = null;
+  }
+
   return { dir: PROJECTS_DIR, statesDir: WO_STATES_DIR, total: all.length, shown: sessions.length, sessions };
 }
 
@@ -1048,6 +1067,26 @@ async function tcLatestBuild(btId, branch, wo) {
   }
   return null;
 }
+// ЖИВОЙ признак «билд реально идёт» (running/queued в TeamCity) — вызывается ТОЛЬКО для кандидатов
+// (у кого wfBuildState==='running' по локальной аппроксимации). Кэш по branch|wo, TTL 60с.
+const _buildActiveCache = new Map();
+const BUILD_ACTIVE_TTL = 60 * 1000;
+async function buildActiveFor(branch, wo) {
+  if (!TC_TOKEN) return false;
+  const key = (branch || '') + '|' + (wo || '');
+  const c = _buildActiveCache.get(key);
+  if (c && Date.now() - c.ts < BUILD_ACTIVE_TTL) return c.v;
+  let active = false;
+  try {
+    for (const bt of TC_BUILD_TYPES) {
+      const b = await tcLatestBuild(bt.id, branch, wo);
+      const state = b && String(b.state || '').toLowerCase();
+      if (state === 'running' || state === 'queued') { active = true; break; }   // finished/none → не активен
+    }
+  } catch { active = false; }
+  _buildActiveCache.set(key, { ts: Date.now(), v: active });
+  return active;
+}
 async function apiBuild(res, u) {
   const branch = u.searchParams.get('branch') || '';
   const wo = u.searchParams.get('wo') || '';
@@ -1124,12 +1163,14 @@ const JIRA_TOKEN = process.env.JIRA_TOKEN || '';
 const _jiraCache = new Map();   // wo -> { ts, data }
 const JIRA_TTL = 30000;
 
-async function apiJira(res, u) {
-  const wo = String(u.searchParams.get('wo') || '').trim();
-  if (!JIRA_TOKEN || !JIRA_EMAIL || !JIRA_HOST) { sendJSON(res, { available: false, reason: 'no JIRA_HOST/JIRA_EMAIL/JIRA_TOKEN in server env' }); return; }
-  if (!/^WO-\d+$/i.test(wo)) { sendJSON(res, { available: true, status: null }); return; }
+const JIRA_ENABLED = !!(JIRA_TOKEN && JIRA_EMAIL && JIRA_HOST);
+// Реюзабельный резолвер статуса Jira (кэш 30с). Возвращает {available,status,category,summary}. Не бросает.
+async function jiraStatus(wo) {
+  wo = String(wo || '').trim();
+  if (!JIRA_ENABLED) return { available: false, reason: 'no JIRA token/email/host' };
+  if (!/^WO-\d+$/i.test(wo)) return { available: true, status: null };
   const cached = _jiraCache.get(wo);
-  if (cached && Date.now() - cached.ts < JIRA_TTL) { sendJSON(res, cached.data); return; }
+  if (cached && Date.now() - cached.ts < JIRA_TTL) return cached.data;
   try {
     const auth = Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');
     const r = await fetch('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '?fields=status,summary', {
@@ -1139,22 +1180,20 @@ async function apiJira(res, u) {
     if (!r.ok) throw new Error('Jira HTTP ' + r.status);
     const j = await r.json();
     const st = j.fields && j.fields.status;
-    const data = {
-      available: true,
-      status: st ? st.name : null,
-      category: st && st.statusCategory ? st.statusCategory.key : '',
-      summary: (j.fields && j.fields.summary) || '',
-    };
+    const data = { available: true, status: st ? st.name : null, category: st && st.statusCategory ? st.statusCategory.key : '', summary: (j.fields && j.fields.summary) || '' };
     _jiraCache.set(wo, { ts: Date.now(), data });
-    sendJSON(res, data);
+    return data;
   } catch (e) {
-    sendJSON(res, { available: false, reason: (e && e.message) || String(e) });
+    const data = { available: false, reason: (e && e.message) || String(e) };
+    _jiraCache.set(wo, { ts: Date.now(), data });   // кэшируем и неудачу — не долбим на каждый поллинг
+    return data;
   }
 }
+async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '')); }
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || '/', 'http://localhost');
-  if (u.pathname === '/api/sessions') { sendJSON(res, apiSessions()); return; }
+  if (u.pathname === '/api/sessions') { apiSessions().then((d) => sendJSON(res, d)).catch((e) => sendJSON(res, { error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/session') {
     const out = apiSession(u.searchParams.get('file') || '');
     if (out.error) { sendJSON(res, { error: out.error }, out.code || 400); return; }
