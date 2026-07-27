@@ -302,14 +302,13 @@
       <button class="tab" data-v="skills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 8h6l-3 12"/></svg>Скиллы</button>
       <button class="tab" data-v="mcp" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>MCP</button>
     </div>
-    <button id="ctxLabel" class="ctx-label" type="button" title="Открыть контекст в Deck" hidden></button>
     <div class="spacer"></div>
-    <button id="newSessionBtn" class="new-sess-btn" type="button" title="Новая сессия">＋ Новая</button>
     <button id="usageInd" class="usage-ind" type="button" title="Использование лимитов Claude"><span class="ui-bar"><i id="usageBarFill"></i></span><span class="ui-pct" id="usagePct">—</span></button>
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      <input id="q" type="text" placeholder="фильтр задач…" autocomplete="off" spellcheck="false">
+      <input id="q" type="text" placeholder="Поиск…" autocomplete="off" spellcheck="false">
       <kbd class="kbd" id="palTrigger" title="Командная палитра">Ctrl K</kbd>
+      <div class="q-drop" id="qDrop" hidden></div>
     </label>
     <div class="filters" id="filters">
       <button class="fchip" data-f="all" aria-pressed="true">Все</button>
@@ -599,16 +598,23 @@ function renderBoard(animate){
 }
 function renderNow(){
   const now = document.getElementById('now');
-  const s = SESSIONS[0];
-  if (!s){ now.innerHTML = `<span class="now-label">нет сессий</span>`; return; }
+  // кнопка «Новая сессия» — ВСЕГДА (даже без активного контекста)
+  const newBtn = `<button class="btn-resume now-btn" id="nowNewBtn" title="Создать новую сессию"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg> Новая сессия</button>`;
+  const s = contextSession();
+  if (!s){
+    now.innerHTML = `<span class="now-label">нет открытого контекста</span><span class="spacer"></span>${newBtn}`;
+    const nb = now.querySelector('#nowNewBtn'); if (nb) nb.addEventListener('click', openNewSessionDialog);
+    return;
+  }
   const p = pctOf(s);
   now.innerHTML = `
     <span class="now-label">${isWorking(s)?'<span class="pulse"></span>работает · ':''}текущий контекст</span>
-    <span class="now-id">${esc(s.project)}</span><span class="now-title">${esc(s.title)}</span>
+    <a class="now-ctx-link" href="#" data-file="${esc(s.file)}" title="Открыть сессию в Deck"><span class="now-id">${esc(s.project)}</span><span class="now-title">${esc(s.title)}</span></a>
     <span class="now-meta hide-sm"><span>${esc(s.model)}</span><span><b>${s.msgs}</b> сообщ.</span><span>${timeAgo(s.mtime)}</span>
       <span style="display:flex;align-items:center;gap:8px">окно<span class="ctxbar" style="width:120px"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span><b style="font-family:var(--mono)">${p}%</b></span></span>
-    <button class="btn-resume now-btn" data-file="${esc(s.file)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> Открыть сессию</button>`;
-  now.querySelector('.now-btn').addEventListener('click',e=>openSession(e.currentTarget.dataset.file));
+    ${newBtn}`;
+  now.querySelector('.now-ctx-link').addEventListener('click', e => { e.preventDefault(); openSession(e.currentTarget.dataset.file); });
+  const nb = now.querySelector('#nowNewBtn'); if (nb) nb.addEventListener('click', openNewSessionDialog);
 }
 function renderFilters(){
   const projects = [...new Set(SESSIONS.map(s=>s.project).filter(Boolean))].sort();
@@ -618,94 +624,75 @@ function renderFilters(){
 }
 
 /* ---------- skills (статический контент макета вкладки) ---------- */
-const SKILLS = [
-  { cmd:'next-task', cat:'workflow', does:'Взять верхнюю TODO-задачу с готовой AI-спекой, перевести в InProgress и провести clarify-сессию.', trig:'«следующая задача», «дай задачу в работу»' },
-  { cmd:'dev-workflow', cat:'workflow', does:'Оркестратор задач: start / next / status / list по WO-XXXX.', trig:'«/dev-workflow next», «статус задачи»' },
-  { cmd:'commit-work-result', cat:'workflow', does:'Собрать корректный commit message по правилам проекта и закоммитить результат.', trig:'«закоммить результат», «оформи коммит»' },
-  { cmd:'estimate-task', cat:'workflow', does:'Предварительная оценка трудозатрат (T-shirt + диапазон) с калибровкой под AI-разработку.', trig:'«оцени задачу», «сколько займёт WO-XXXX»' },
-  { cmd:'bugfix', cat:'bugfix', does:'Структурный багфикс: гипотезы, диагностические логи, документация в docs/specs/fixes.', trig:'«почини баг», «разберись почему падает»' },
-  { cmd:'bugfix-preprod', cat:'bugfix', does:'Тихий флоу починки от актуального preprod: ветка → фикс → MR → Ready To QA → Jira → Discord.', trig:'«багфикс препрод <WO> <target>»' },
-  { cmd:'already-fixed', cat:'bugfix', does:'Проверить, не починил ли кто-то уже — скан связанных задач Jira + свежих мержей.', trig:'«уже пофикшено?», перед гипотезами' },
-  { cmd:'batchfix', cat:'bugfix', does:'Эпик-пакет багфиксов: один эпик + общая ветка вместо per-task MR.', trig:'«создай эпик багов», «добавь баг в батчфикс»' },
-  { cmd:'jira-report', cat:'jira', does:'Компактный комментарий в Jira: track / qa / done / bug / blocker / plan.', trig:'«отпиши в jira», «отчёт по задаче»' },
-  { cmd:'jira-link', cat:'jira', does:'Привязать личный аккаунт Jira через OAuth — тикеты и комментарии от твоего имени.', trig:'«привяжи jira», «тикеты от моего имени»' },
-  { cmd:'daily-report', cat:'jira', does:'Дейли «Делал / В планах» по вчерашним коммитам и багам в работе.', trig:'«сделай дейли», «что я делал вчера»' },
-  { cmd:'sql-patch', cat:'statics', does:'Создать SQL-патч к статика-БД (идемпотентно + GRANT/OWNER для новых таблиц).', trig:'«новый sql патч», «добавь колонку в статику»' },
-  { cmd:'apply-sql-patch', cat:'statics', does:'Накатить db-patches.sql на статика-БД окружения (v<version>-<env>).', trig:'«накатить патч на статику»' },
-  { cmd:'statics-explorer', cat:'statics', does:'Читать игровую статику (герои, здания, эффекты, цены) с CDN любой версии.', trig:'«покажи статику героя», «цена здания»' },
-  { cmd:'create-mapper', cat:'statics', does:'Полный пайплайн маппера статики по управляющей Google-таблице.', trig:'«создай маппер», «смаппь таблицу»' },
-  { cmd:'create-window', cat:'client', does:'Скаффолд нового Unity-окна: код, префаб, addressable, DI-биндинг.', trig:'«создай окно», «новое окно»' },
-  { cmd:'prefab-builder', cat:'client', does:'Свёрстать uGUI по макету через Unity MCP, переиспользуя UIKit-префабы.', trig:'«свёрстай по макету», «собери панель»' },
-  { cmd:'create-operation', cat:'client', does:'Создать op/команду клиент↔сервер, подобрать opType по Confluence-реестру.', trig:'«новая операция», «новый opType»' },
-  { cmd:'deploy', cat:'infra', does:'Запустить деплой бэкенд-сервиса или клиентской сборки в TeamCity.', trig:'«/deploy client-android squad-6»' },
-  { cmd:'gitlab-mr', cat:'infra', does:'Создать / смёржить / проверить MR в GitLab для sub-repos.', trig:'«/gitlab-mr WO-XXXX», «создай MR»' },
-  { cmd:'merge', cat:'infra', does:'Интерактивный git merge с активным разрешением конфликтов.', trig:'«смёржи ветку», «разреши конфликты»' },
-  { cmd:'fix-squad', cat:'infra', does:'Диагностика и починка типовых пост-wipe поломок squad-окружения.', trig:'«почини сквад N», «что не так со squad-N»' },
-  { cmd:'db-investigator', cat:'data', does:'Read-only SQL по игровым БД (town/map/shared), статике и ClickHouse на любом окружении.', trig:'«посмотри в town/map», «стейт игрока»' },
-  { cmd:'get-user', cat:'data', does:'Найти активного игрока по уровню водокачки на окружении.', trig:'«найди игрока», «дай юзера с водокачкой N»' },
-  { cmd:'e2e-game-play', cat:'e2e', does:'Автономный прогон игровых сценариев в живом Unity-клиенте.', trig:'«пройди сценарий», «сыграй до X»' },
-  { cmd:'google-sheets', cat:'sheets', does:'Чтение / запись Google Sheets под личным аккаунтом (ADC, корпоративный OAuth).', trig:'«работа с таблицами», «выгрузи лист»' },
-  { cmd:'skills-wiki', cat:'nav', does:'Каталог, поиск и рекомендация по скиллам, командам и агентам проекта.', trig:'«найди скилл», «подскажи скилл для X»' },
-];
-const CATS = [
-  { key:'all', label:'Все скиллы' }, { key:'workflow', label:'Dev-workflow' }, { key:'bugfix', label:'Багфиксы' },
-  { key:'jira', label:'Jira / отчёты' }, { key:'statics', label:'Статика' }, { key:'client', label:'Клиент / UI' },
-  { key:'infra', label:'Деплой / инфра' }, { key:'data', label:'БД / данные' }, { key:'e2e', label:'E2E' },
-  { key:'sheets', label:'Google Sheets' }, { key:'nav', label:'Навигация' },
-];
-const MCP_SERVERS = [
-  {name:'mcp-tools', status:'active', tools:'120+', cat:'Проект WO', desc:'Jira, Confluence, GitLab, TeamCity, k8s, статика, игровые БД, ClickHouse, метрики, RAG-поиск по knowledge.'},
-  {name:'unity-mcp', status:'active', tools:'60+', cat:'Unity', desc:'Управление Unity-редактором: сцены, префабы, компоненты, скрипты, тесты, билды. Мульти-инстанс cu1–cu4.'},
-  {name:'discord', status:'active', tools:'90+', cat:'Коммуникация', desc:'Каналы, сообщения, роли, вебхуки, багрепорты команды (preprod / preupdate / prod).'},
-  {name:'Atlassian', status:'active', tools:'40', cat:'claude.ai · Atlassian', desc:'Jira и Confluence через коннектор claude.ai.'},
-  {name:'Figma', status:'active', tools:'35', cat:'claude.ai · Дизайн', desc:'Чтение и генерация макетов, Code Connect, ассеты, диаграммы.'},
-  {name:'Miro', status:'active', tools:'40', cat:'claude.ai · Дизайн', desc:'Доски, диаграммы, таблицы, макеты, прототипы.'},
-  {name:'Context7', status:'auth', tools:'—', cat:'claude.ai · Документация', desc:'Актуальная документация библиотек. Нужна авторизация коннектора в настройках claude.ai.'},
-  {name:'Gmail', status:'auth', tools:'—', cat:'claude.ai · Почта', desc:'Черновики и письма (напр. скилл отпусков). Требует авторизации коннектора.'},
-  {name:'Google Calendar', status:'auth', tools:'—', cat:'claude.ai · Календарь', desc:'События и встречи. Требует авторизации коннектора.'},
-  {name:'Google Drive', status:'auth', tools:'—', cat:'claude.ai · Хранилище', desc:'Файлы и документы. Требует авторизации коннектора.'},
-  {name:'Krisp', status:'auth', tools:'—', cat:'claude.ai · Встречи', desc:'Транскрипты созвонов. Требует авторизации коннектора.'},
-];
+/* TECH-2: списки НЕ захардкожены — тянутся с сервера (реальные скиллы/MCP из файлов окружения). */
+let SKILLS = [], MCP_SERVERS = [], skillsLoaded = false, mcpLoaded = false;
+const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
+async function loadSkillsCatalog(){
+  try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); SKILLS = Array.isArray(d.skills) ? d.skills : []; }
+  catch { SKILLS = []; }
+  skillsLoaded = true;
+  if (activeView === 'skills') renderSkills();
+}
+async function loadMcpCatalog(){
+  try { const r = await fetch('/api/mcp', { cache:'no-store' }); const d = await r.json(); MCP_SERVERS = Array.isArray(d.servers) ? d.servers : []; }
+  catch { MCP_SERVERS = []; }
+  mcpLoaded = true;
+  if (activeView === 'mcp') renderMcp();
+}
 function skillMatch(sk){
   if (skillCat !== 'all' && sk.cat !== skillCat) return false;
-  if (query && !(sk.cmd + ' ' + sk.does + ' ' + sk.trig).toLowerCase().includes(query)) return false;
+  if (query && !((sk.cmd||'') + ' ' + (sk.does||'') + ' ' + (sk.trig||'')).toLowerCase().includes(query)) return false;
   return true;
 }
+function skillCats(){   // категории строятся динамически из того, что реально пришло
+  const counts = {};
+  for (const s of SKILLS){ const c = s.cat || 'прочее'; counts[c] = (counts[c]||0) + 1; }
+  const keys = Object.keys(counts).sort((a,b)=>counts[b]-counts[a] || a.localeCompare(b));
+  return [{ key:'all', label:'Все скиллы' }].concat(keys.map(k=>({ key:k, label: SCAT_LABEL[k] || k })));
+}
 function renderSkills(){
+  if (!skillsLoaded){ loadSkillsCatalog(); }
+  const cats = skillCats();
   const rail = document.getElementById('rail');
-  rail.innerHTML = `<div class="rail-label">Категории</div>` + CATS.map(c => {
-    const n = c.key==='all' ? SKILLS.length : SKILLS.filter(s=>s.cat===c.key).length;
-    return `<button class="cat" data-c="${c.key}" aria-pressed="${c.key===skillCat}">${c.label}<span class="c-count">${n}</span></button>`;
+  rail.innerHTML = `<div class="rail-label">Категории</div>` + cats.map(c => {
+    const n = c.key==='all' ? SKILLS.length : SKILLS.filter(s=>(s.cat||'прочее')===c.key).length;
+    return `<button class="cat" data-c="${esc(c.key)}" aria-pressed="${c.key===skillCat}">${esc(c.label)}<span class="c-count">${n}</span></button>`;
   }).join('');
   rail.querySelectorAll('.cat').forEach(b => b.addEventListener('click', () => { skillCat = b.dataset.c; renderSkills(); }));
   const grid = document.getElementById('skillsGrid');
   const items = SKILLS.filter(skillMatch);
-  const catLabel = k => (CATS.find(c=>c.key===k)||{}).label || k;
+  const catLabel = k => { const c = cats.find(x=>x.key===k); return c ? c.label : (SCAT_LABEL[k]||k); };
+  if (!skillsLoaded){ grid.innerHTML = `<div class="empty">Загрузка скиллов…</div>`; return; }
   grid.innerHTML = items.length ? items.map((s,i)=>`
     <div class="skill-card" style="animation-delay:${i*25}ms">
-      <div class="skill-head"><span class="skill-cmd-tag">/${s.cmd}</span><span class="skill-cat-chip">${catLabel(s.cat)}</span></div>
-      <div class="skill-does">${s.does}</div>
-      <div class="skill-trig"><b>когда зовётся</b>${s.trig}</div>
-      <div class="skill-foot"><button class="skill-run"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${s.cmd}</button>${aStub(GL+'vibecode/-/blob/preprod/.claude/skills/'+s.cmd+'/SKILL.md', 'SKILL.md', 'skill-file')}</div>
-    </div>`).join('') : `<div class="empty">Ничего не найдено</div>`;
+      <div class="skill-head"><span class="skill-cmd-tag">/${esc(s.cmd)}</span><span class="skill-cat-chip">${esc(catLabel(s.cat||'прочее'))}</span></div>
+      <div class="skill-does">${esc(s.does||'')}</div>
+      ${s.trig?`<div class="skill-trig"><b>когда зовётся</b>${esc(s.trig)}</div>`:''}
+      <div class="skill-foot"><button class="skill-run" data-cmd="${esc(s.cmd)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${esc(s.cmd)}</button></div>
+    </div>`).join('') : `<div class="empty">${SKILLS.length?'Ничего не найдено':'Скиллы не найдены'}</div>`;
+  grid.querySelectorAll('.skill-run').forEach(b => b.addEventListener('click', () => {
+    const cmd = '/' + b.dataset.cmd;
+    const ta = document.getElementById('composer-ta');
+    if (currentFile && ta){ ta.value = cmd + ' '; ta.focus(); }   // открыта сессия — вставляем в композер
+    else if (navigator.clipboard){ navigator.clipboard.writeText(cmd).catch(()=>{}); }   // иначе — в буфер
+  }));
 }
 
-/* ---------- mcp (статический контент макета) ---------- */
-function mcpMatch(m){ return !query || (m.name+' '+m.desc+' '+m.cat).toLowerCase().includes(query); }
+/* ---------- mcp (реальный конфиг из файлов) ---------- */
+function mcpMatch(m){ return !query || ((m.name||'')+' '+(m.desc||'')+' '+(m.command||'')+' '+(m.scope||'')).toLowerCase().includes(query); }
 function renderMcp(){
-  const active = MCP_SERVERS.filter(m=>m.status==='active').length;
-  const auth = MCP_SERVERS.filter(m=>m.status==='auth').length;
+  if (!mcpLoaded){ loadMcpCatalog(); }
   const items = MCP_SERVERS.filter(mcpMatch);
+  const body = !mcpLoaded ? `<div class="empty">Загрузка MCP…</div>`
+    : (items.length ? `<div class="mcp-grid">${items.map((m,i)=>`
+      <div class="mcp-card" style="animation-delay:${i*25}ms">
+        <div class="mcp-top"><span class="mcp-name">${esc(m.name)}</span><span class="mcp-scope">${esc(m.scope||'')}</span></div>
+        ${m.desc?`<div class="mcp-desc">${esc(m.desc)}</div>`:''}
+        <div class="mcp-foot"><span class="mcp-cat">${esc(m.transport||'')}</span><span class="mcp-cmd" title="${esc(m.command||'')}">${esc((m.command||'').slice(0,60))}</span></div>
+      </div>`).join('')}</div>` : `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены в конфигах'}</div>`);
   document.getElementById('viewMcp').innerHTML = `<div class="mcp-main">
-    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${active} активных · ${auth} ждут авторизации</span></div>
-    <div class="mcp-grid">${items.map((m,i)=>{
-      const on = m.status==='active';
-      const btn = on ? `<button class="mcp-btn">Настроить</button>` : `<a class="mcp-btn activate" href="${CONN}" target="_blank" rel="noopener">Активировать${EI}</a>`;
-      return `<div class="mcp-card ${on?'':'authwait'}" style="animation-delay:${i*25}ms">
-        <div class="mcp-top"><span class="mcp-name">${m.name}</span><span class="mcp-status ${on?'on':'off'}"><span class="d ${on?'pass':'run'}"></span>${on?'активен':'нужна авторизация'}</span></div>
-        <div class="mcp-desc">${m.desc}</div>
-        <div class="mcp-foot"><span class="mcp-cat">${m.cat}</span><span class="mcp-tools">${on?m.tools+' инстр.':''}</span>${btn}</div>
-      </div>`; }).join('')}</div></div>`;
+    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${mcpLoaded?MCP_SERVERS.length+' серверов из конфигов':'загрузка…'}</span></div>
+    ${body}</div>`;
 }
 
 /* ---------- session: правый рейл контекста (плотные секции на реальных данных + wf) ---------- */
@@ -1405,7 +1392,6 @@ async function runPrompt(payload){
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       currentFile = d.file; streamingFile = d.file; tailCount = 0;
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = 'Новая сессия';
-      updateCtxLabel();
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
@@ -1502,8 +1488,8 @@ function palIndex(){
   idx.push({type:'Вид', label:'Скиллы', sub:'каталог', act:()=>setView('skills')});
   idx.push({type:'Вид', label:'MCP-инструменты', sub:'серверы', act:()=>setView('mcp')});
   SESSIONS.forEach(s=>idx.push({type:'Сессия', label:s.title, sub:s.project+(s.wo?' · '+s.wo:''), key:(s.title+' '+s.project+' '+(s.gitBranch||'')+' '+(s.lastPrompt||'')).toLowerCase(), act:()=>openSession(s.file)}));
-  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does, key:(s.cmd+' '+s.does+' '+s.trig).toLowerCase(), act:()=>{ setView('skills'); const q=document.getElementById('q'); q.value=s.cmd; query=s.cmd; renderSkills(); }}));
-  MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:m.status==='active'?'активен':'нужна авторизация', key:(m.name+' '+m.desc).toLowerCase(), act:()=>setView('mcp')}));
+  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does||'', key:(s.cmd+' '+(s.does||'')+' '+(s.trig||'')).toLowerCase(), act:()=>{ setView('skills'); skillCat='all'; query=''; const q=document.getElementById('q'); if(q) q.value=''; renderSkills(); }}));
+  MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:(m.scope||'')+(m.transport?' · '+m.transport:''), key:(m.name+' '+(m.desc||'')+' '+(m.command||'')).toLowerCase(), act:()=>setView('mcp')}));
   return idx;
 }
 let palItems = [], palSel = 0;
@@ -1537,7 +1523,13 @@ function setView(v){
   if (v==='skills') renderSkills(); else if (v==='mcp') renderMcp(); else renderBoard(true);
 }
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setView(b.dataset.v); });
-document.getElementById('q').addEventListener('input', e => { query = e.target.value.trim().toLowerCase(); if (activeView==='skills') renderSkills(); else if (activeView==='mcp') renderMcp(); else renderBoard(); });
+document.getElementById('q').addEventListener('input', e => {
+  query = e.target.value.trim().toLowerCase();
+  renderSearchDrop();                          // дропдаун сессий — во всех видах, включая открытую сессию
+  if (activeView==='skills') renderSkills(); else if (activeView==='mcp') renderMcp(); else if (activeView==='board'||activeView==='status') renderBoard();
+});
+document.getElementById('q').addEventListener('keydown', e => { if (e.key==='Escape'){ closeSearchDrop(); e.target.blur(); } });
+document.addEventListener('mousedown', e => { if (!e.target.closest('.search')) closeSearchDrop(); });   // клик-вне закрывает
 document.getElementById('filters').addEventListener('click', e => {
   const b = e.target.closest('.fchip'); if (!b) return;
   filter = b.dataset.f;
@@ -1773,6 +1765,26 @@ function injectCSS(){
     .ns-actions{ display:flex; justify-content:flex-end; margin-top:15px; }
     .ns-start{ height:34px; padding:0 16px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-weight:600; font-size:13px; cursor:pointer; }
     .ns-start:hover{ filter:brightness(1.06); }
+
+    /* поиск-дропдаун сессий (под полем #q, во всех видах) */
+    .search{ position:relative; }
+    .q-drop{ position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:55; background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:11px; box-shadow:var(--shadow-lift); max-height:60vh; overflow-y:auto; padding:5px; }
+    .qd-item{ display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; cursor:pointer; }
+    .qd-item:hover{ background:var(--surface-2); }
+    .qd-main{ display:flex; flex-direction:column; min-width:0; flex:1; }
+    .qd-title{ font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .qd-sub{ font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .qd-badge{ flex:none; font-family:var(--mono); font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:20px; }
+    .qd-empty{ padding:12px; text-align:center; font-size:12.5px; color:var(--text-faint); }
+
+    /* .now: лейбл-ссылка контекста + кнопка «Новая сессия» */
+    .now-ctx-link{ display:inline-flex; align-items:baseline; gap:8px; text-decoration:none; border-bottom:1px dashed transparent; cursor:pointer; min-width:0; }
+    .now-ctx-link:hover{ border-bottom-color:var(--accent); }
+    .now-ctx-link .now-title{ color:var(--accent-ink); }
+
+    /* MCP-карточки: реальные scope/transport/command */
+    .mcp-scope{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border); border-radius:20px; padding:2px 8px; }
+    .mcp-cmd{ font-family:var(--mono); font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:60%; }
   `;
   (document.head || document.documentElement).appendChild(st);
 }
@@ -1836,7 +1848,7 @@ async function pollSessions(){
   }
   prevWorkingFiles = nowSet;
   if (activeView==='board' || activeView==='status'){ renderNow(); renderBoard(false); hydrateMrs(); hydrateJira(); }  // session-view не трогаем
-  updateCtxLabel(); renderUsageBar();
+  renderUsageBar();
   polling = false;
 }
 function startPolling(){ if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(pollSessions, 7000); }
@@ -1903,19 +1915,31 @@ function openUsageModal(){
   back.classList.add('open');
 }
 
-/* ---------- лейбл текущего контекста (клик → открыть внутри Deck) ---------- */
+/* ---------- текущий контекст (для .now-лейбла и usage-фолбэка) ---------- */
 function contextSession(){
   if (currentFile) return SESSION_CACHE[currentFile] || SESSIONS.find(s=>s.file===currentFile) || null;
   return SESSIONS.find(isWorking) || SESSIONS.find(s=>s.active) || SESSIONS[0] || null;
 }
-function updateCtxLabel(){
-  const el = document.getElementById('ctxLabel'); if (!el) return;
-  const s = contextSession();
-  if (!s || !s.file){ el.hidden = true; return; }
-  el.hidden = false;
-  el.dataset.file = s.file;
-  const dot = isWorking(s) ? '<span class="cl-dot"></span>' : '';
-  el.innerHTML = `${dot}<span class="cl-proj">${esc(s.project||'')}</span><span class="cl-title">${esc(String(s.title||'').slice(0,44))}</span>`;
+
+/* ---------- поиск-дропдаун сессий (работает во всех видах) ---------- */
+function closeSearchDrop(){ const d = document.getElementById('qDrop'); if (d){ d.hidden = true; d.innerHTML = ''; } }
+function renderSearchDrop(){
+  const drop = document.getElementById('qDrop'), inp = document.getElementById('q'); if (!drop || !inp) return;
+  const q = inp.value.trim().toLowerCase();
+  if (!q){ closeSearchDrop(); return; }
+  const items = SESSIONS.filter(s => searchableText(s).includes(q)).slice(0, 12);
+  drop.hidden = false;
+  if (!items.length){ drop.innerHTML = `<div class="qd-empty">Ничего не найдено</div>`; return; }
+  drop.innerHTML = items.map(s => {
+    const st = cardStatus(s);
+    return `<div class="qd-item" data-file="${esc(s.file)}"><div class="qd-main"><span class="qd-title">${esc(s.title||s.project||'—')}</span><span class="qd-sub">${esc(s.project||'')}${s.wo?' · '+esc(s.wo):''}</span></div><span class="qd-badge cs-${esc(st.col)}">${esc(st.blocked?'Заблок.':st.text)}</span></div>`;
+  }).join('');
+  drop.querySelectorAll('.qd-item').forEach(el => el.addEventListener('mousedown', e => {
+    e.preventDefault();                          // до blur, чтобы клик сработал
+    const f = el.dataset.file; closeSearchDrop();
+    inp.value = ''; query = '';
+    openSession(f);
+  }));
 }
 
 /* ---------- новая сессия ---------- */
@@ -1984,14 +2008,13 @@ async function load(){
   startPolling();
   hydrateMrs();        // фоново подтянуть live-MR для карточек
   hydrateJira();       // фоново подтянуть live-статусы Jira
-  updateCtxLabel();
+  loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
+  loadMcpCatalog();    // TECH-2: реальные MCP-серверы
   loadUsage();
   if (!usageTimer) usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
 }
 function wireTopbar(){
   const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
-  const n = document.getElementById('newSessionBtn'); if (n) n.addEventListener('click', openNewSessionDialog);
-  const c = document.getElementById('ctxLabel'); if (c) c.addEventListener('click', () => { if (c.dataset.file) openSession(c.dataset.file); });
 }
 injectCSS();
 ensureStatusTab();

@@ -9,7 +9,7 @@
 //                 env WO_STATES_DIR -> дефолт ниже.
 
 import http from 'node:http';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -454,7 +454,7 @@ function readFrontmatter(file) {
   const m = text.match(/^﻿?---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return { name: '', description: '' };
   const lines = m[1].split(/\r?\n/);
-  let name = '', description = '';
+  let name = '', description = '', cat = '', trig = '';
   for (let i = 0; i < lines.length; i++) {
     const kv = lines[i].match(/^([A-Za-z0-9_-]+):[ \t]*(.*)$/);
     if (!kv) continue;
@@ -477,8 +477,10 @@ function readFrontmatter(file) {
     }
     if (key === 'name' && !name) name = val;
     else if (key === 'description' && !description) description = val;
+    else if ((key === 'cat' || key === 'category') && !cat) cat = val;
+    else if ((key === 'trig' || key === 'triggers' || key === 'when') && !trig) trig = val;
   }
-  return { name, description };
+  return { name, description, cat, trig };
 }
 function collectSkills(cwd) {
   if (SKILLS_CACHE.has(cwd)) return SKILLS_CACHE.get(cwd);
@@ -498,6 +500,78 @@ function collectSkills(cwd) {
   found.sort((a, b) => a.name.localeCompare(b.name));
   SKILLS_CACHE.set(cwd, found);
   return found;
+}
+
+// -------- TECH-2: агрегат реальных скиллов и MCP-серверов (из файлов, БЕЗ хардкода) --------
+// Уникальные cwd проектов из транскриптов сессий (читаем только начало файла — cwd в первой строке).
+let _cwdsCache = { ts: 0, list: [] };
+function firstCwdOfFile(full) {
+  let fd;
+  try {
+    fd = openSync(full, 'r');
+    const buf = Buffer.alloc(16384);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return firstString(buf.toString('utf8', 0, n), 'cwd') || '';
+  } catch { return ''; } finally { if (fd !== undefined) { try { closeSync(fd); } catch {} } }
+}
+function uniqueSessionCwds() {
+  if (Date.now() - _cwdsCache.ts < 60000) return _cwdsCache.list;
+  const set = new Set();
+  for (const f of listSessionFiles()) { const c = firstCwdOfFile(f.full); if (c) set.add(c); }
+  _cwdsCache = { ts: Date.now(), list: [...set] };
+  return _cwdsCache.list;
+}
+let _allSkills = { ts: 0, list: [] };
+function collectAllSkills() {
+  if (Date.now() - _allSkills.ts < 30000) return _allSkills.list;
+  const found = [], seen = new Set();
+  const add = (name, fm, scope) => {
+    name = String(name || '').trim(); const key = name.toLowerCase();
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    const cat = (fm && (fm.cat || '').trim()) || scope || 'прочее';
+    found.push({ cmd: name, does: ((fm && fm.description) || '').slice(0, 300), trig: (fm && fm.trig) || '', cat, scope });
+  };
+  const userSkills = path.join(os.homedir(), '.claude', 'skills');
+  for (const d of safeDirents(userSkills)) if (d.isDirectory()) { const fm = readFrontmatter(path.join(userSkills, d.name, 'SKILL.md')); add((fm && fm.name) || d.name, fm, 'user'); }
+  for (const cwd of uniqueSessionCwds()) {
+    const ps = path.join(cwd, '.claude', 'skills');
+    for (const d of safeDirents(ps)) if (d.isDirectory()) { const fm = readFrontmatter(path.join(ps, d.name, 'SKILL.md')); add((fm && fm.name) || d.name, fm, 'project'); }
+  }
+  found.sort((a, b) => a.cmd.localeCompare(b.cmd));
+  _allSkills = { ts: Date.now(), list: found };
+  return found;
+}
+function mcpEntryInfo(name, cfg, scope) {
+  cfg = cfg || {};
+  const transport = cfg.type || (cfg.command ? 'stdio' : (cfg.url ? 'http' : ''));
+  const command = cfg.command ? [cfg.command].concat(Array.isArray(cfg.args) ? cfg.args : []).join(' ') : (cfg.url || '');
+  return { name, scope, transport: transport || (cfg.url ? 'http' : cfg.command ? 'stdio' : ''), command, desc: cfg.description || '' };
+}
+function apiMcp(res) {
+  const found = new Map();   // name -> info, дедуп по имени (первый источник выигрывает)
+  const add = (name, cfg, scope) => { if (!name || found.has(name)) return; found.set(name, mcpEntryInfo(name, cfg, scope)); };
+  // ~/.claude.json — глобальные mcpServers + по-проектные projects[<path>].mcpServers
+  try {
+    const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
+    if (j.mcpServers) for (const [n, c] of Object.entries(j.mcpServers)) add(n, c, 'user');
+    if (j.projects && typeof j.projects === 'object') {
+      for (const pc of Object.values(j.projects)) { if (pc && pc.mcpServers) for (const [n, c] of Object.entries(pc.mcpServers)) add(n, c, 'project'); }
+    }
+  } catch {}
+  // .mcp.json в корне каждого проекта (по уникальным cwd)
+  for (const cwd of uniqueSessionCwds()) {
+    try { const j = JSON.parse(readFileSync(path.join(cwd, '.mcp.json'), 'utf8')); if (j.mcpServers) for (const [n, c] of Object.entries(j.mcpServers)) add(n, c, '.mcp.json'); } catch {}
+  }
+  // enabledMcpjsonServers из settings — только имена (конфиг может жить в другом месте): показываем нейтрально
+  for (const sf of ['settings.json', 'settings.local.json']) {
+    try {
+      const s = JSON.parse(readFileSync(path.join(os.homedir(), '.claude', sf), 'utf8'));
+      if (Array.isArray(s.enabledMcpjsonServers)) for (const n of s.enabledMcpjsonServers) add(n, {}, 'enabled');
+    } catch {}
+  }
+  const servers = [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  sendJSON(res, { count: servers.length, servers });
 }
 
 // -------- http --------
@@ -959,10 +1033,12 @@ const server = http.createServer((req, res) => {
   }
   if (u.pathname === '/api/skills') {
     const cwd = u.searchParams.get('cwd') || '';
-    const skills = collectSkills(cwd);
-    sendJSON(res, { cwd, count: skills.length, skills });
+    if (cwd) { const skills = collectSkills(cwd); sendJSON(res, { cwd, count: skills.length, skills }); return; }
+    const skills = collectAllSkills();   // без cwd — агрегат всех доступных скиллов (для вкладки «Скиллы»)
+    sendJSON(res, { count: skills.length, skills });
     return;
   }
+  if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/usage') { apiUsage(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
