@@ -854,6 +854,37 @@ async function apiMcpStatus(res, u) {
   _mcpStatus = { ts: Date.now(), data };
   sendJSON(res, data);
 }
+// Authenticate: `claude mcp login <name>` — OAuth-логин к серверу (HTTP/SSE/claude.ai-коннектор), открывает браузер и
+// самозавершается через колбэк (как claude auth login). Отвечаем сразу (браузер открыт), клиент поллит статус до connected.
+const _mcpLoginChildren = new Set();
+function apiMcpLogin(res, u) {
+  const name = u.searchParams.get('name') || '';
+  if (!name) { sendJSON(res, { ok: false, error: 'no name' }, 400); return; }
+  let child;
+  try { child = spawn(CLAUDE_BIN, ['mcp', 'login', name], { windowsHide: true, shell: process.platform === 'win32' }); }
+  catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); return; }
+  _mcpLoginChildren.add(child);
+  let buf = '', replied = false;
+  const reply = (o) => { if (replied) return; replied = true; sendJSON(res, o); };
+  const onData = (d) => { buf += String(d); const m = buf.match(/https?:\/\/\S+/); if (m) reply({ ok: true, name, url: m[0] }); };
+  child.stdout.on('data', onData); child.stderr.on('data', onData);
+  child.on('exit', () => { _mcpLoginChildren.delete(child); _mcpStatus = { ts: 0, data: null }; reply({ ok: true, name }); });
+  child.on('error', (e) => { _mcpLoginChildren.delete(child); reply({ ok: false, error: String((e && e.message) || e) }); });
+  setTimeout(() => reply({ ok: true, name }), 4000);   // браузер открылся — не ждём завершения OAuth
+}
+// Remove/Delete: `claude mcp remove <name> -s <scope>` — безопасно через CLI (без ручной правки JSON). Scope только user/project/local.
+function apiMcpRemove(res, u) {
+  const name = u.searchParams.get('name') || '';
+  const scope = u.searchParams.get('scope') || '';
+  if (!name) { sendJSON(res, { ok: false, error: 'no name' }, 400); return; }
+  const args = ['mcp', 'remove', name];
+  if (['user', 'project', 'local'].includes(scope)) args.push('-s', scope);
+  execFile(CLAUDE_BIN, args, { timeout: 15000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout, stderr) => {
+    _mcpStatus = { ts: 0, data: null };
+    if (err) sendJSON(res, { ok: false, error: String(stderr || (err && err.message) || err).trim().slice(0, 300) });
+    else sendJSON(res, { ok: true, output: String(stdout || '').trim().slice(0, 300) });
+  });
+}
 
 // -------- http --------
 
@@ -1617,6 +1648,8 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/api/mcp/status') { apiMcpStatus(res, u).catch((e) => sendJSON(res, { available: false, error: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/mcp/login') { apiMcpLogin(res, u); return; }
+  if (u.pathname === '/api/mcp/remove') { apiMcpRemove(res, u); return; }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
   if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }
