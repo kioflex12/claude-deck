@@ -296,7 +296,6 @@
 <div class="app">
   <header class="topbar">
     <div class="brand"><div class="brand-mark">D</div><div class="brand-name">Deck</div></div>
-    <span class="tag-concept">концепт</span>
     <div class="tabs" id="tabs">
       <button class="tab" data-v="board" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10" y="3" width="6" height="12" rx="1.5"/><rect x="17" y="3" width="4" height="8" rx="1.5"/></svg>Доска</button>
       <button class="tab" data-v="skills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 8h6l-3 12"/></svg>Скиллы</button>
@@ -312,6 +311,7 @@
       <div class="q-drop" id="qDrop" hidden></div>
     </label>
     <button id="notifyBtn" class="notify-btn" type="button" title="Уведомления о завершении" aria-pressed="false">🔕</button>
+    <button id="settingsBtn" class="notify-btn" type="button" title="Настройки">⚙</button>
   </header>
   <div id="authGate" class="auth-gate" hidden><span class="ag-msg">Вы не вошли в Claude — чат, лимиты и новые сессии недоступны.</span><button id="authGateBtn" class="ag-btn" type="button">Войти в Claude</button></div>
 
@@ -2238,6 +2238,7 @@ function wireTopbar(){
   const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
   const a = document.getElementById('authChip'); if (a) a.addEventListener('click', onAuthChip);
   const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);
+  const s = document.getElementById('settingsBtn'); if (s) s.addEventListener('click', openSettingsModal);
 }
 
 /* ---------- D1: авторизация Claude из приложения ---------- */
@@ -2362,6 +2363,53 @@ async function openUpdatesModal(){
     UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();
     if (!r.ok) renderUpdateStatus({ state: r.reason==='no-token'?'no-token' : r.reason==='dev'?'dev' : 'error', message: r.reason });
+  });
+}
+
+/* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
+async function openSettingsModal(){
+  let cfg = {}; try { cfg = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch {}
+  const jira = cfg.jira || {};
+  const back = modalBack('settingsBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <label class="ns-lbl">Папка состояний dev-workflow (WO_STATES_DIR)</label>
+      <input id="setWo" class="ns-inp" type="text" placeholder="пусто → колонка «Статусы» мягко деградирует" value="${esc(cfg.woStatesDir||'')}">
+      <label class="ns-lbl">Папка сессий Claude (CLAUDE_PROJECTS_DIR)</label>
+      <input id="setProj" class="ns-inp" type="text" placeholder="${esc((cfg.defaults&&cfg.defaults.claudeProjectsDir)||'~/.claude/projects')}" value="${esc(cfg.claudeProjectsDir||'')}">
+      <div class="um-note" style="margin-top:12px">Jira — для колонки «Статусы» и живых статусов задач.</div>
+      <label class="ns-lbl">Jira host</label>
+      <input id="setJh" class="ns-inp" type="text" placeholder="your-org.atlassian.net" value="${esc(jira.host||'')}">
+      <label class="ns-lbl">Jira email</label>
+      <input id="setJe" class="ns-inp" type="text" placeholder="you@example.com" value="${esc(jira.email||'')}">
+      <label class="ns-lbl">Jira API token${jira.tokenSet?' — задан':''}</label>
+      <input id="setJt" class="ns-inp" type="password" placeholder="${jira.tokenSet?'сохранён — вставьте новый, чтобы заменить':'вставьте API-токен'}" autocomplete="off">
+      ${cfg.electron?'<div class="um-note">Токен хранится локально в зашифрованном виде (хранилище ОС).</div>':'<div class="um-note" style="color:#e79">Standalone: токен безопасно сохранить нельзя — задайте JIRA_TOKEN в .env рядом с server.mjs (папки и host/email сохранятся).</div>'}
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="setSave" type="button">Сохранить</button></div>
+      <div class="um-note" id="setStatus" style="margin-top:8px"></div>
+    </div></div>`;
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('.dm-cancel').addEventListener('click', close);
+  back.classList.add('open');
+  const status = back.querySelector('#setStatus');
+  back.querySelector('#setSave').addEventListener('click', async ()=>{
+    status.textContent = 'Сохраняю…';
+    const payload = {
+      woStatesDir: back.querySelector('#setWo').value.trim(),
+      claudeProjectsDir: back.querySelector('#setProj').value.trim(),
+      jiraHost: back.querySelector('#setJh').value.trim(),
+      jiraEmail: back.querySelector('#setJe').value.trim(),
+    };
+    const jt = back.querySelector('#setJt').value;
+    if (jt) payload.jiraToken = jt;
+    let r; try { r = await (await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json(); } catch { status.textContent = 'Ошибка сохранения.'; return; }
+    let msg = 'Сохранено.';
+    if (r.tokenResult && r.tokenResult.ok === false && r.tokenResult.standalone) msg += ' Токен не сохранён (standalone) — используйте .env.';
+    status.textContent = msg + ' Обновляю доску…';
+    if (typeof pollSessions === 'function') await pollSessions();   // доска перечитает /api/sessions с новыми папками/Jira — без перезапуска
+    if (typeof loadUsage === 'function') loadUsage();
+    setTimeout(close, 900);
   });
 }
 

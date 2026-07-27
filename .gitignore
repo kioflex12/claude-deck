@@ -11,3 +11,6 @@ build/
 # Локальные теги сессий (привязаны к путям сессий конкретной машины)
 deck-tags.json
 deck-trash/
+# Локальный конфиг/секреты (standalone пишет рядом с server.mjs; в Electron — в userData)
+deck-config.json
+jira-token.bin

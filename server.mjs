@@ -14,6 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,8 +36,55 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 })();
 
 const PORT = Number(process.env.PORT) || 4317;
-const PROJECTS_DIR = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
-const WO_STATES_DIR = process.env.WO_STATES_DIR || 'D:/wo_vibecode/vibecode/.claude/skills/dev-workflow/workflow-states';
+
+// -------- Конфиг Deck (TECH-6): userData/deck-config.json в Electron, иначе рядом с server.mjs. --------
+// Резолв значений: config → env/.env → дефолт. Хардкода пути WO_STATES_DIR больше НЕТ: пусто → доска мягко деградирует.
+const _require = createRequire(import.meta.url);
+let _electron;
+function getElectron() {
+  if (_electron !== undefined) return _electron;
+  _electron = null;
+  // Реальный API `electron` есть только внутри Electron-main; в standalone `require('electron')` даёт строку-путь — не трогаем.
+  if (process.versions.electron) { try { _electron = _require('electron'); } catch {} }
+  return _electron;
+}
+function userDataDir() { const e = getElectron(); if (e && e.app) { try { return e.app.getPath('userData'); } catch {} } return HERE; }
+function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
+function jiraTokenFile() { return path.join(userDataDir(), 'jira-token.bin'); }
+function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
+function saveConfig(patch) {
+  const c = loadConfig();
+  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail']) if (k in patch) c[k] = String(patch[k] || '');
+  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
+}
+// Jira-токен: в Electron шифруем safeStorage'ом (как update-token в D3); в standalone безопасно сохранить нельзя — только .env.
+function readJiraTokenSecure() {
+  const e = getElectron();
+  if (e && e.safeStorage) { try { if (e.safeStorage.isEncryptionAvailable()) return e.safeStorage.decryptString(readFileSync(jiraTokenFile())) || ''; } catch {} }
+  return '';
+}
+function writeJiraTokenSecure(tok) {
+  tok = String(tok || '');
+  if (!tok) { try { rmSync(jiraTokenFile(), { force: true }); } catch {} return { ok: true, cleared: true }; }
+  const e = getElectron();
+  if (e && e.safeStorage && e.safeStorage.isEncryptionAvailable()) {
+    try { mkdirSync(path.dirname(jiraTokenFile()), { recursive: true }); writeFileSync(jiraTokenFile(), e.safeStorage.encryptString(tok)); return { ok: true, storage: 'safeStorage' }; }
+    catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
+  }
+  return { ok: false, standalone: true };   // standalone — задать токен можно только через .env
+}
+
+let PROJECTS_DIR, WO_STATES_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED;
+function applyConfig() {
+  const c = loadConfig();
+  PROJECTS_DIR = c.claudeProjectsDir || process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
+  WO_STATES_DIR = c.woStatesDir || process.env.WO_STATES_DIR || '';
+  JIRA_HOST = String(c.jiraHost || process.env.JIRA_HOST || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  JIRA_EMAIL = c.jiraEmail || process.env.JIRA_EMAIL || '';
+  JIRA_TOKEN = readJiraTokenSecure() || process.env.JIRA_TOKEN || '';
+  JIRA_ENABLED = !!(JIRA_TOKEN && JIRA_EMAIL && JIRA_HOST);
+}
+applyConfig();
 const CTX_LIMIT = 1_000_000;          // сессии на 1M-контексте
 const ACTIVE_MS = 30 * 60 * 1000;     // «активна», если mtime моложе 30 минут
 const WORKING_MS = 20 * 1000;         // «работает сейчас»: файл сессии писался < 20с назад (живая генерация)
@@ -337,36 +385,46 @@ function sessionAgentsDetail(projDir, sessionId) {
   return out;
 }
 
-function buildSessionSummary(f, wfStates) {
+// TECH-3: дорогая часть summary — парс транскрипта (readFileSync + регэкспы). Всё, что выводится ТОЛЬКО из текста
+// файла, стабильно пока не менялся mtime → кэшируем по ключу rel+':'+mtime. Смена mtime = новый ключ = перепарс.
+const _summaryCache = new Map();
+function textSummary(f) {
+  const key = f.rel + ':' + f.mtime;
+  const hit = _summaryCache.get(key);
+  if (hit) return hit;
   let text = '';
   try { text = readFileSync(f.full, 'utf8'); } catch { text = ''; }
   const cwd = firstString(text, 'cwd') || '';
   const branchesAll = allStrings(text, 'gitBranch');
-  // Рабочая (не-базовая) ветка сессии — см. pickWorkingBranch. cwd остаётся first (не меняется).
-  const gitBranch = pickWorkingBranch(branchesAll);
+  const gitBranch = pickWorkingBranch(branchesAll);        // рабочая (не-базовая) ветка сессии
+  const baseBranchText = pickBaseBranch(branchesAll) || '';   // базовая ветка из истории gitBranch (фолбэк — targetEnv, добавляется свежим)
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
   if (!title) title = (lastPrompt || '').split('\n')[0].slice(0, 80) || '(без заголовка)';
   const model = prettyModel(lastString(text, 'model'));
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
-  // WO: рабочая ветка → заголовок → первичный WO из первого промпта
-  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);
-  // Фоновые сабагенты: главный файл может простаивать, пока они активно пишут — учитываем их свежесть в active/working.
+  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
+  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo };
+  _summaryCache.set(key, c);
+  return c;
+}
+function buildSessionSummary(f, wfStates) {
+  const c = textSummary(f);   // кэшируемая (из файла) часть
+  // Свежее на каждый вызов: зависит от «сейчас» (время), mtime сабагентов, dev-workflow-состояния и тегов.
   const bgRunning = sessionSubagents(f.projDir, f.id).filter((a) => a.running).length;
   const active = (Date.now() - f.mtime) < ACTIVE_MS || bgRunning > 0;
-  const st = wo ? wfStates.get(wo) : null;
+  const st = c.wo ? wfStates.get(c.wo) : null;
   const wf = wfInfo(st, active);
-  const scope = scopeInfo(st, cwd);
-  // Базовая ветка (форк-источник ≈ таргет мерджа): из истории gitBranch, фолбэк — targetEnv из dev-workflow.
-  const baseBranch = pickBaseBranch(branchesAll) || scope.targetEnv || '';
+  const scope = scopeInfo(st, c.cwd);
+  const baseBranch = c.baseBranchText || scope.targetEnv || '';
   return {
     id: f.id,
     file: f.rel,
-    title, lastPrompt, cwd, project, gitBranch, wo, model, baseBranch,
-    msgs: countMessages(text),
-    winTokens,
-    ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
+    title: c.title, lastPrompt: c.lastPrompt, cwd: c.cwd, project: c.project, gitBranch: c.gitBranch, wo: c.wo, model: c.model, baseBranch,
+    msgs: c.msgs,
+    winTokens: c.winTokens,
+    ctxPct: Math.min(c.winTokens / CTX_LIMIT, 1),
     mtime: f.mtime,
     active,
     working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0,   // живая генерация ИЛИ живой фоновый агент
@@ -383,6 +441,9 @@ async function apiSessions() {
   const top = all.slice(0, LIST_CAP);
   const wfStates = loadWfStates();   // читается один раз на запрос
   const sessions = top.map((f) => buildSessionSummary(f, wfStates));
+  // Кэш парса ограничиваем текущим набором файлов (изменённые/исчезнувшие ключи выкидываем) — размер ≤ числа сессий.
+  const live = new Set(top.map((f) => f.rel + ':' + f.mtime));
+  for (const k of _summaryCache.keys()) if (!live.has(k)) _summaryCache.delete(k);
 
   // ЖИВОЙ билд-статус. Кандидаты = сессии с РАБОЧЕЙ (не-базовой) веткой И (свежая активность ИЛИ stale-флаг
   // dev-workflow). Так ловим реальные ручные/безфлаговые билды по фича-ветке, но НЕ долбим TC по базовым/no-branch/
@@ -1209,13 +1270,9 @@ async function apiMrs(res, u) {
 // -------- Jira: живой статус задачи (колонка «Статусы» приоритетнее локального dev-workflow) --------
 // Гейт по JIRA_HOST/JIRA_EMAIL/JIRA_TOKEN (кладутся через .env). Basic auth base64(email:token).
 // Возвращаем СЫРОЙ статус; маппинг статус→колонка делает клиент (нужен live-статус билда для In Progress).
-const JIRA_HOST = String(process.env.JIRA_HOST || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-const JIRA_EMAIL = process.env.JIRA_EMAIL || '';
-const JIRA_TOKEN = process.env.JIRA_TOKEN || '';
+// JIRA_HOST/EMAIL/TOKEN/JIRA_ENABLED резолвятся в applyConfig() (config → env/.env; токен из safeStorage либо .env).
 const _jiraCache = new Map();   // wo -> { ts, data }
 const JIRA_TTL = 30000;
-
-const JIRA_ENABLED = !!(JIRA_TOKEN && JIRA_EMAIL && JIRA_HOST);
 // Реюзабельный резолвер статуса Jira (кэш 30с). Возвращает {available,status,category,summary}. Не бросает.
 async function jiraStatus(wo) {
   wo = String(wo || '').trim();
@@ -1242,6 +1299,31 @@ async function jiraStatus(wo) {
   }
 }
 async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '')); }
+
+// -------- TECH-6: конфиг Deck (GET текущие значения / POST сохранить). Токен наружу НЕ отдаём, только флаг. --------
+function configView() {
+  return {
+    woStatesDir: WO_STATES_DIR,
+    claudeProjectsDir: PROJECTS_DIR,
+    jira: { host: JIRA_HOST, email: JIRA_EMAIL, tokenSet: !!JIRA_TOKEN, enabled: JIRA_ENABLED },
+    electron: !!getElectron(),   // можно ли безопасно сохранить токен (safeStorage) или только через .env
+    defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects') },
+  };
+}
+async function apiConfig(req, res) {
+  if (req.method === 'POST') {
+    let body; try { body = await readJsonBody(req, 64 * 1024); } catch { sendJSON(res, { error: 'bad body' }, 400); return; }
+    saveConfig(body);
+    let tokenResult = null;
+    if ('jiraToken' in body) tokenResult = writeJiraTokenSecure(body.jiraToken);
+    applyConfig();
+    _summaryCache.clear();   // могла смениться папка проектов → инвалидируем кэш парса
+    _jiraCache.clear();      // сменились host/email/token → сбросить кэш статусов
+    sendJSON(res, { ok: true, tokenResult, config: configView() });
+    return;
+  }
+  sendJSON(res, configView());
+}
 
 // -------- D1: авторизация Claude ИЗ приложения (без ручного терминала). Через CLI `claude auth`. --------
 // Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
@@ -1372,6 +1454,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
+  if (u.pathname === '/api/config') { apiConfig(req, res); return; }
   if (u.pathname === '/api/auth') { apiAuth(res); return; }
   if (u.pathname === '/api/auth/login') { apiAuthLogin(res); return; }
   if (u.pathname === '/api/auth/code') { apiAuthCode(req, res); return; }
@@ -1398,7 +1481,7 @@ export function startServer(preferredPort) {
       console.log('');
       console.log('  Deck — доска сессий Claude Code');
       console.log('  папка сессий:   ' + PROJECTS_DIR);
-      console.log('  папка статусов: ' + WO_STATES_DIR);
+      console.log('  папка статусов: ' + (WO_STATES_DIR || '(не задана — задайте в Настройках/WO_STATES_DIR)'));
       console.log('  адрес:          ' + url);
       console.log('');
       resolve({ port, url, close: () => new Promise((r) => server.close(() => r())) });
