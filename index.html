@@ -1949,7 +1949,8 @@ function paintNotifyBtn(){
 function initNotifyToggle(){
   const btn = document.getElementById('notifyBtn'); if (!btn) return;
   const supported = 'Notification' in window;
-  notifyEnabled = supported && Notification.permission === 'granted' && localStorage.getItem('deckNotify') !== 'off';
+  const nativeNotify = !!(window.deckNative && window.deckNative.notify);   // Electron: уведомления через main, разрешение браузера не нужно
+  notifyEnabled = (nativeNotify || (supported && Notification.permission === 'granted')) && localStorage.getItem('deckNotify') !== 'off';
   paintNotifyBtn();
   btn.addEventListener('click', async () => {
     if (!supported){ setStreamStatus('Браузер не поддерживает уведомления', 1800); return; }
@@ -1974,9 +1975,15 @@ async function ensureNotifyPermission(){        // тихий запрос пр�
 function notifyDone(file, title, heading){       // одно уведомление на рабочий эпизод (дедуп по sessionId)
   if (notifiedDone.has(file)) return;            // и Deck-finish, и poll-переход — одно и то же завершение
   notifiedDone.add(file);
-  if (!notifyEnabled || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
+  const head = (heading || 'Claude завершил') + (title ? ' · ' + title : '');
+  if (window.deckNative && window.deckNative.notify){   // Electron: через main — сработает и из свёрнутого в трей окна, клик сфокусит + откроет сессию
+    window.deckNative.notify({ title: head, body: 'Открыть сессию в Deck', file });
+    return;
+  }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;   // standalone-браузер: web-fallback
   try {
-    const n = new Notification((heading || 'Claude завершил') + (title ? ' · ' + title : ''), { body: 'Открыть сессию в Deck', tag: 'deck-'+file });
+    const n = new Notification(head, { body: 'Открыть сессию в Deck', tag: 'deck-'+file });
     n.onclick = () => { window.focus(); openSession(file); n.close(); };
   } catch {}
 }
@@ -2313,6 +2320,8 @@ ensureStatusTab();
 initNotifyToggle();
 wireTopbar();
 loadAuth();
+// Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
+if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
 load();
 
 </script>
