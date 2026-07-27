@@ -1266,13 +1266,29 @@ async function apiAuth(res) {
 // Логин: спавним `claude auth login --claudeai` (пайпы → режим «вставь код»), парсим OAuth-URL из stdout,
 // отдаём клиенту (тот открывает в системном браузере). Держим процесс до ввода кода.
 const logins = new Map();   // loginId -> { child, buf }
+let activeLoginId = null;   // single-flight: пока логин идёт, не спавним второй `claude auth login` (= второе окно браузера)
+function clearActiveLogin(id) { if (activeLoginId === id) activeLoginId = null; }
 function apiAuthLogin(res) {
+  // Уже есть незавершённый логин — переиспользуем его процесс/URL, а не плодим второй (двойной клик, повторный вызов).
+  if (activeLoginId) {
+    const cur = logins.get(activeLoginId);
+    if (cur && !cur.done) {
+      if (cur.url) { sendJSON(res, { loginId: activeLoginId, url: cur.url, reused: true }); return; }
+      const t0 = Date.now();   // URL ещё не распарсился — дождёмся его на уже запущенном процессе
+      const iv = setInterval(() => {
+        if (cur.url || cur.done || Date.now() - t0 > 8000) { clearInterval(iv); sendJSON(res, { loginId: activeLoginId, url: cur.url || '', reused: true }); }
+      }, 150);
+      return;
+    }
+    activeLoginId = null;   // прошлый логин уже завершён — можно начинать новый
+  }
   const loginId = 'lg_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   let child;
   try { child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], { windowsHide: true, shell: process.platform === 'win32' }); }
   catch (e) { sendJSON(res, { error: 'spawn failed: ' + (e && e.message) }, 500); return; }
   const rec = { child, buf: '', url: '', done: false, ok: false };
   logins.set(loginId, rec);
+  activeLoginId = loginId;
   let replied = false;
   const reply = (obj, code) => { if (replied) return; replied = true; sendJSON(res, obj, code); };
   const onData = (d) => {
@@ -1283,8 +1299,8 @@ function apiAuthLogin(res) {
   };
   child.stdout.on('data', onData);
   child.stderr.on('data', onData);
-  child.on('exit', (c) => { rec.done = true; if (rec.ok || c === 0) rec.ok = true; _authCache = { ts: 0, data: null }; });
-  child.on('error', () => { rec.done = true; });
+  child.on('exit', (c) => { rec.done = true; if (rec.ok || c === 0) rec.ok = true; clearActiveLogin(loginId); _authCache = { ts: 0, data: null }; });
+  child.on('error', () => { rec.done = true; clearActiveLogin(loginId); });
   setTimeout(() => reply({ loginId, url: rec.url || '' }), 8000);   // на случай, если URL не распарсился — вернём что есть
 }
 // Приём вставленного кода: пишем в stdin процесса логина, ждём завершения/успеха, отдаём свежий статус.
@@ -1298,13 +1314,16 @@ async function apiAuthCode(req, res) {
   const t0 = Date.now();
   while (!rec.done && Date.now() - t0 < 30000) { await new Promise((r) => setTimeout(r, 300)); }
   logins.delete(String(body.loginId));
+  clearActiveLogin(String(body.loginId));
   _authCache = { ts: 0, data: null };
   const status = await claudeAuthStatus();
   sendJSON(res, { ok: !!status.loggedIn, status });
 }
 function apiAuthCancel(req, res, u) {
-  const rec = logins.get(u.searchParams.get('id') || '');
-  if (rec) { try { rec.child.kill(); } catch {} logins.delete(u.searchParams.get('id')); }
+  const id = u.searchParams.get('id') || '';
+  const rec = logins.get(id);
+  if (rec) { try { rec.child.kill(); } catch {} logins.delete(id); }
+  clearActiveLogin(id);
   sendJSON(res, { ok: true });
 }
 function apiAuthLogout(res) {

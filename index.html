@@ -2276,17 +2276,20 @@ async function confirmLogout(){
   back.querySelector('.dm-danger').addEventListener('click', async ()=>{ back.classList.remove('open'); try { await fetch('/api/auth/logout', { method:'POST' }); } catch {} await loadAuth(); toast('Вы вышли из Claude'); });
   back.classList.add('open');
 }
+let loginInProgress = false;   // single-flight на клиенте: повторный клик во время активного логина не запускает второй вход
 async function startLogin(){
+  if (loginInProgress) return;   // логин уже идёт — не плодим второй процесс/окно браузера
+  loginInProgress = true;
   const back = modalBack('loginBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Вход в Claude</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
-      <div class="um-note" id="loginStep">Запускаю вход… открой ссылку в браузере, подтверди доступ и вставь код.</div>
-      <a class="btn-ghost" id="loginOpen" href="#" style="display:none;margin:8px 0">Открыть страницу входа</a>
+      <div class="um-note" id="loginStep">Открываю браузер для входа в Claude…</div>
+      <a class="btn-ghost" id="loginOpen" href="#" style="display:none;margin:8px 0">Открыть страницу входа вручную</a>
       <label class="ns-lbl">Код авторизации (со страницы Claude)</label>
       <input id="loginCode" class="ns-inp" type="text" placeholder="вставь код и нажми Подтвердить" autocomplete="off">
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="loginSubmit" type="button" disabled>Подтвердить</button></div>
     </div></div>`;
-  const close = ()=>{ back.classList.remove('open'); if (loginId) fetch('/api/auth/cancel?id='+encodeURIComponent(loginId)).catch(()=>{}); };
+  const close = ()=>{ back.classList.remove('open'); loginInProgress = false; if (loginId) fetch('/api/auth/cancel?id='+encodeURIComponent(loginId)).catch(()=>{}); };
   back.querySelector('.dm-x').addEventListener('click', close);
   back.querySelector('.dm-cancel').addEventListener('click', close);
   back.classList.add('open');
@@ -2295,10 +2298,10 @@ async function startLogin(){
     const d = await (await fetch('/api/auth/login', { method:'POST' })).json();
     loginId = d.loginId;
     if (d.url){
+      // Браузер открывает сам Claude CLI — Deck НЕ открывает URL повторно (иначе два окна). Ссылка ниже — ручной фолбэк.
       const link = back.querySelector('#loginOpen'); link.href = d.url; link.style.display = 'inline-flex';
       link.addEventListener('click', (e)=>{ e.preventDefault(); openExternal(d.url); });
-      back.querySelector('#loginStep').textContent = 'Открой страницу входа, подтверди доступ в Claude и вставь показанный код ниже.';
-      openExternal(d.url);   // сразу открыть системный браузер
+      back.querySelector('#loginStep').textContent = 'Браузер открыт — подтверди доступ в Claude и вставь показанный код ниже. Если браузер не открылся — нажми ссылку.';
     } else {
       back.querySelector('#loginStep').textContent = 'Не удалось получить ссылку входа. Проверь, что установлен Claude CLI.';
     }
@@ -2309,7 +2312,7 @@ async function startLogin(){
     submit.disabled = true; submit.textContent = 'Проверяю…';
     try {
       const r = await (await fetch('/api/auth/code', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ loginId, code: codeInp.value.trim() }) })).json();
-      if (r.ok){ back.classList.remove('open'); await loadAuth(); toast('Вход выполнен: ' + (AUTH.email||'')); }
+      if (r.ok){ back.classList.remove('open'); loginInProgress = false; await loadAuth(); toast('Вход выполнен: ' + (AUTH.email||'')); }
       else { back.querySelector('#loginStep').textContent = 'Код не принят — попробуй ещё раз.'; submit.disabled = false; submit.textContent = 'Подтвердить'; }
     } catch { submit.disabled = false; submit.textContent = 'Подтвердить'; }
   });
