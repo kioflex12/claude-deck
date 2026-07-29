@@ -471,6 +471,7 @@ function buildSessionSummary(f, wfStates) {
     active,
     working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0,   // живая генерация ИЛИ живой фоновый агент
     bgRunning,
+    wfHasState: !!st,   // есть ли dev-workflow-состояние (спеккит) для этой WO — иначе Jira одна не двигает в продвинутые колонки
     column: columnByAge(f.mtime),
     tags: getTags(f.rel),                            // пользовательские теги (Deck-side)
     ...wf,

@@ -22,9 +22,21 @@ test('effectiveColumn: приоритет blocked→build→qa→(jira)→done/a
   assert.deepEqual(effectiveColumn({ buildActive: true, wfColumn: 'active' }, {}), { col: 'build', blocked: false });
   assert.equal(effectiveColumn({ wfColumn: 'build', buildActive: false }, {}).col, 'qa', 'stale build без живого билда → На QA');
   assert.equal(effectiveColumn({ wfColumn: 'done' }, {}).col, 'done');
-  assert.equal(effectiveColumn({ wo: 'WO-2', wfColumn: 'active' }, { 'WO-2': { available: true, status: 'Ready to Merge' } }).col, 'readymerge', 'jira перебивает локальный wfColumn');
+  assert.equal(effectiveColumn({ wo: 'WO-2', wfColumn: 'active', wfHasState: true }, { 'WO-2': { available: true, status: 'Ready to Merge' } }).col, 'readymerge', 'jira уточняет стадию при наличии dev-workflow-состояния');
   assert.equal(effectiveColumn({ active: true }, {}).col, 'active');
   assert.equal(effectiveColumn({ active: false }, {}).col, 'todo');
+});
+
+test('effectiveColumn: QA требует согласия dev-workflow и Jira; research-сессия не улетает по Jira', () => {
+  // research: нет dev-workflow-состояния, задача в Jira-QA → сессия остаётся в своей стадии, НЕ в QA
+  assert.equal(effectiveColumn({ wo: 'WO-5', active: true }, { 'WO-5': { available: true, status: 'In QA' } }).col, 'active', 'Jira-QA без dev-workflow не тащит в QA');
+  assert.equal(effectiveColumn({ wo: 'WO-5b' }, { 'WO-5b': { available: true, status: 'Done' } }).col, 'todo', 'Jira-Done без dev-workflow не тащит в Готово');
+  // оба в QA → На QA
+  assert.equal(effectiveColumn({ wo: 'WO-6', wfColumn: 'qa', wfHasState: true }, { 'WO-6': { available: true, status: 'In QA' } }).col, 'qa', 'dev-workflow + Jira в QA → QA');
+  // dev-workflow в QA, Jira ещё в работе → не оба → не QA
+  assert.equal(effectiveColumn({ wo: 'WO-7', wfColumn: 'qa', wfHasState: true }, { 'WO-7': { available: true, status: 'In Progress' } }).col, 'active', 'Jira отстаёт от dev-workflow → не QA');
+  // dev-workflow в QA без данных Jira → QA (полагаемся на спеккит, это не «только Jira»)
+  assert.equal(effectiveColumn({ wo: 'WO-8', wfColumn: 'qa', wfHasState: true }, {}).col, 'qa', 'dev-workflow QA без Jira-данных → QA');
 });
 
 test('cardStatus: под-статус без дубля колонки', () => {

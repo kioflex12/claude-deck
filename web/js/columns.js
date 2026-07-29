@@ -30,11 +30,26 @@ export function jiraSubLabel(status){
 export function effectiveColumn(s, jiraCache){
   let jm = null;
   if (s.wo){ const j = jiraCache[s.wo]; if (j && j.available && j.status) jm = jiraColumn(j.status, j.category, s); }
-  if (jm && jm.blocked) return { col:'blocked', blocked:true };            // 1. Заблокировано
+  if (jm && jm.blocked) return { col:'blocked', blocked:true };            // 1. Заблокировано (бейдж)
   if (s.buildActive === true) return { col:'build', blocked:false };       // 2. Build In Progress — ТОЛЬКО живой билд TeamCity (не stale buildTriggered)
-  let col = s.wfColumn || (s.active ? 'active' : 'todo');                  // done/readymerge/qa/active/todo — из dev-workflow…
-  if (jm && jm.col && jm.col !== 'build') col = jm.col;                    // …или из Jira, если доступен
-  if (col === 'build') col = 'qa';                                        // 3. билд завершён (не идёт) → «На QA»
+
+  let wfCol = s.wfColumn || (s.active ? 'active' : 'todo');                // стадия dev-workflow (спеккит) — ОСНОВА
+  if (wfCol === 'build') wfCol = 'qa';                                     // 3. билд завершён (не идёт) → dev-workflow-стадия «На QA»
+  let col = wfCol;
+
+  // Jira только УТОЧНЯЕТ стадию, не подменяет её собой. Два правила против «полагаемся только на Jira»:
+  if (jm && jm.col && jm.col !== 'build'){
+    const advanced = jm.col === 'qa' || jm.col === 'readymerge' || jm.col === 'done';
+    if (advanced && !s.wfHasState){
+      // нет dev-workflow-состояния (research-сессия, лишь упоминающая задачу) → Jira одна не тащит в продвинутую
+      // колонку; оставляем стадию самой сессии (active/todo). Иначе research улетал в QA/Готово по статусу задачи.
+    } else if (jm.col === 'qa' || wfCol === 'qa'){
+      // «На QА» — только когда И dev-workflow, И Jira в QA; расходятся → берём НЕ-QA сторону.
+      col = (jm.col === 'qa' && wfCol === 'qa') ? 'qa' : (jm.col === 'qa' ? wfCol : jm.col);
+    } else {
+      col = jm.col;                                                        // done/readymerge/todo при наличии состояния — по Jira
+    }
+  }
   return { col, blocked:false };
 }
 // Статус-бар: НЕ дублирует колонку. Русский под-стадийный текст сверх колонки (или полный ярлык в «Доске»).
