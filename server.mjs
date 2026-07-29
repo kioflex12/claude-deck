@@ -124,6 +124,23 @@ function setTags(file, tags) {
   try { mkdirSync(path.dirname(tagsFile()), { recursive: true }); writeFileSync(tagsFile(), JSON.stringify(map, null, 2)); } catch {}
   return clean;
 }
+// Имя сессии, заданное пользователем при создании (переопределяет производный из транскрипта title). Стор — как теги.
+const namesFile = () => path.join(userDataDir(), 'deck-names.json');
+let _names = null;
+function loadNames() {
+  if (_names) return _names;
+  try { _names = JSON.parse(readFileSync(namesFile(), 'utf8')); if (!_names || typeof _names !== 'object') _names = {}; }
+  catch { _names = {}; }
+  return _names;
+}
+function nameOf(file) { const n = loadNames()[file]; return (typeof n === 'string' && n.trim()) ? n : ''; }
+function setName(file, name) {
+  const map = loadNames();
+  const clean = String(name || '').trim().slice(0, 120);
+  if (clean) map[file] = clean; else delete map[file];
+  try { mkdirSync(path.dirname(namesFile()), { recursive: true }); writeFileSync(namesFile(), JSON.stringify(map, null, 2)); } catch {}
+  return clean;
+}
 
 // -------- дешёвые экстракторы по сырому тексту (без JSON.parse каждой строки) --------
 
@@ -446,7 +463,7 @@ function buildSessionSummary(f, wfStates) {
   return {
     id: f.id,
     file: f.rel,
-    title: c.title, lastPrompt: c.lastPrompt, cwd: c.cwd, project: c.project, gitBranch: c.gitBranch, wo: c.wo, model: c.model, baseBranch,
+    title: nameOf(f.rel) || c.title, lastPrompt: c.lastPrompt, cwd: c.cwd, project: c.project, gitBranch: c.gitBranch, wo: c.wo, model: c.model, baseBranch,
     msgs: c.msgs,
     winTokens: c.winTokens,
     ctxPct: Math.min(c.winTokens / CTX_LIMIT, 1),
@@ -628,7 +645,7 @@ function apiSession(relFile) {
   return {
     id: sessionId,
     file: relFile,
-    title, lastPrompt, cwd,
+    title: nameOf(relFile) || title, lastPrompt, cwd,
     project: cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : '',
     gitBranch, baseBranch,
     wo,
@@ -1183,6 +1200,15 @@ async function apiTags(req, res) {   // POST {file, tags:[...]} — переза
   if (!file) { sendJSON(res, { error: 'no file' }, 400); return; }
   const tags = setTags(file, body.tags);
   sendJSON(res, { file, tags });
+}
+async function apiSessionName(req, res) {   // POST {file, name} — заданное пользователем имя сессии (override title)
+  let body;
+  try { body = await readJsonBody(req, 8 * 1024); }
+  catch (e) { sendJSON(res, { error: (e && e.message) || 'read error' }, 400); return; }
+  const file = String(body.file || '');
+  if (!file) { sendJSON(res, { error: 'no file' }, 400); return; }
+  const name = setName(file, body.name);   // nameOf() применяется при сборке сессии → override виден сразу
+  sendJSON(res, { file, name });
 }
 async function apiChatPrepare(req, res) {
   let body;
@@ -1814,6 +1840,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/unity/instances') { apiUnityInstances(res, u); return; }
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
+  if (u.pathname === '/api/session-name') { apiSessionName(req, res); return; }
   if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }
   if (u.pathname === '/api/agents') {
     const out = apiAgents(u.searchParams.get('file') || '');

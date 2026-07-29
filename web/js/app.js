@@ -63,6 +63,7 @@ const MODE_LABEL = { default:'Обычный', acceptEdits:'Авто-правк�
 let MODELS = [], EFFORTS = [];               // подтягиваются из /api/models (модели — алиасы + additionalModelOptionsCache)
 let sessionModel = localStorage.getItem('deckModel') || '';    // выбор модели (пусто = дефолт), сохраняется между сессиями
 let sessionEffort = localStorage.getItem('deckEffort') || '';  // выбор reasoning-effort
+let pendingNewSession = null;                // {cwd, name}: новая сессия создаётся ПЕРВЫМ промтом (файла ещё нет)
 async function loadModelsCatalog(){
   try { const d = await (await fetch('/api/models', { cache:'no-store' })).json(); MODELS = Array.isArray(d.models)?d.models:[]; EFFORTS = Array.isArray(d.efforts)?d.efforts:[]; }
   catch { MODELS = []; EFFORTS = []; }
@@ -1051,12 +1052,13 @@ function sendMessage(){
   if (!requireAuth()) return;                             // чат требует логина в Claude
   const text = ta.value.trim();
   const attachments = attachDraft.slice();                // P4: приложенные файлы
-  if ((!text && !attachments.length) || !currentFile) return;
+  if ((!text && !attachments.length) || (!currentFile && !pendingNewSession)) return;
   slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
   ta.value = ''; ta.style.height = 'auto';
   attachDraft.length = 0; renderAttachDraft();            // черновик вложений очищаем
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
   const payload = { text, mode: sessionMode, model: sessionModel, effort: sessionEffort, attachments };
+  if (!currentFile && pendingNewSession){ payload.newSessionCwd = pendingNewSession.cwd; payload.pendingName = pendingNewSession.name; }  // первый промт → создать именованную сессию
   if (streaming){ enqueuePrompt(payload); return; }       // идёт стрим → в очередь
   runPrompt(payload);
 }
@@ -1201,7 +1203,10 @@ async function runPrompt(payload){
       if (stick) scrollBottom();
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       currentFile = d.file; streamingFile = d.file; tailCount = 0;
-      const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = 'Новая сессия';
+      const nm = payload.pendingName || (pendingNewSession && pendingNewSession.name) || '';
+      const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = nm || 'Новая сессия';
+      if (nm){ fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: d.file, name: nm }) }).catch(()=>{}); }  // закрепляем имя как заголовок карточки
+      pendingNewSession = null;   // сессия создана — pending снят
     } else if (d.type === 'start'){
       if (d.streamId) currentStreamId = d.streamId;   // для гарантированного /api/stop
     } else if (d.type === 'error'){
@@ -1578,37 +1583,76 @@ function renderSearchDrop(){
 }
 
 /* ---------- новая сессия ---------- */
-function openNewSessionDialog(){
+async function openNewSessionDialog(){
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
+  if (!MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
   const cwds = [...new Set(SESSIONS.map(s=>s.cwd).filter(Boolean))].sort();
-  const opts = cwds.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const preferred = cwds.find(c=>/vibecode/i.test(c)) || cwds[0] || '';   // приоритетная папка — vibecode
+  const opts = cwds.map(c=>`<option value="${esc(c)}"${c===preferred?' selected':''}>${esc(c)}</option>`).join('');
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
+  const modelOpts = (MODELS.length?MODELS:[{value:'',label:'по умолчанию'}]).map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
+  const effOpts = (EFFORTS.length?EFFORTS:[{value:'',label:'по умолчанию'}]).map(e=>`<option value="${esc(e.value)}"${e.value===sessionEffort?' selected':''}>${esc(e.label)}</option>`).join('');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Новая сессия</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <label class="ns-lbl">Рабочая папка (cwd)</label>
       <select id="nsCwd" class="ns-inp">${opts || '<option value="">нет известных папок</option>'}</select>
-      <label class="ns-lbl">Первый промпт</label>
-      <textarea id="nsPrompt" class="ns-inp" rows="4" placeholder="Что сделать в новой сессии…"></textarea>
+      <label class="ns-lbl">Имя сессии (так будет называться карточка)</label>
+      <input id="nsName" class="ns-inp" type="text" placeholder="напр. Рефакторинг чата" autocomplete="off">
+      <label class="ns-lbl">Модель</label>
+      <select id="nsModel" class="ns-inp">${modelOpts}</select>
+      <label class="ns-lbl">Reasoning effort</label>
+      <select id="nsEffort" class="ns-inp">${effOpts}</select>
       <label class="ns-lbl">Режим разрешений</label>
       <select id="nsMode" class="ns-inp">${modeOpts}</select>
-      <div class="ns-actions"><button id="nsStart" class="ns-start" type="button">Создать и отправить</button></div>
+      <div class="um-note">Сессия откроется пустой — промты пишешь уже в ней. Настройки применятся к первому запросу.</div>
+      <div class="ns-actions"><button id="nsStart" class="ns-start" type="button">Создать</button></div>
     </div></div>`;
   back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
-  back.querySelector('#nsStart').addEventListener('click', ()=>{
+  const submit = ()=>{
     const cwd = back.querySelector('#nsCwd').value;
-    const prompt = back.querySelector('#nsPrompt').value.trim();
+    const name = back.querySelector('#nsName').value.trim();
     const mode = back.querySelector('#nsMode').value;
-    if (!cwd || !prompt){ back.querySelector('#nsPrompt').focus(); return; }
+    const model = back.querySelector('#nsModel').value;
+    const effort = back.querySelector('#nsEffort').value;
+    if (!cwd || !name){ back.querySelector('#nsName').focus(); return; }
     back.classList.remove('open');
-    openNewSession(cwd, prompt, mode);
-  });
+    openPendingNewSession(cwd, name, mode, model, effort);
+  };
+  back.querySelector('#nsStart').addEventListener('click', submit);
+  back.querySelector('#nsName').addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } });
   back.classList.add('open');
-  setTimeout(()=>{ const p = back.querySelector('#nsPrompt'); if (p) p.focus(); }, 60);
+  setTimeout(()=>{ const p = back.querySelector('#nsName'); if (p) p.focus(); }, 60);
 }
-function openNewSession(cwd, prompt, mode, forkFile){
+// Пустая именованная сессия: файла ещё нет — создастся первым промтом; имя закрепится в session-событии.
+function openPendingNewSession(cwd, name, mode, model, effort){
   stopStream();
   currentFile = null;
+  pendingNewSession = { cwd, name };
+  sessionMode = mode || 'default'; sessionModel = model || ''; sessionEffort = effort || '';
+  localStorage.setItem('deckModel', sessionModel); localStorage.setItem('deckEffort', sessionEffort);
+  returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
+  document.getElementById('viewBoard').style.display='none';
+  document.getElementById('viewSkills').style.display='none';
+  document.getElementById('viewMcp').style.display='none';
+  document.getElementById('viewSession').style.display='flex';
+  document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
+  const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
+  const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(name)}</span>`;
+  document.getElementById('backBtn').addEventListener('click', ()=>setView(returnView));
+  document.getElementById('sessionSide').innerHTML = `<div class="sec"><div class="rail-hint">Новая сессия «${esc(name)}» — напишите первый промпт, и она создастся.</div></div>`;
+  document.getElementById('thread').innerHTML = '<div class="cx-console"><div class="empty">Пустая сессия. Напишите первый промпт ниже.</div></div>';
+  wireConsole();
+  renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:name, project: proj });
+  paintMode();
+  loadSkills(cwd);     // «/»-скиллы для нового cwd
+  setTimeout(()=>{ const ta = document.getElementById('composer-ta'); if (ta) ta.focus(); }, 60);
+}
+// Форк остаётся с промтом (продолжение контекста): создаём и сразу отправляем.
+function openNewSession(cwd, prompt, mode, forkFile){
+  stopStream();
+  currentFile = null; pendingNewSession = null;
   returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
   document.getElementById('viewBoard').style.display='none';
   document.getElementById('viewSkills').style.display='none';
@@ -1625,7 +1669,7 @@ function openNewSession(cwd, prompt, mode, forkFile){
   sessionMode = mode;
   renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:'Новая сессия', project: proj });
   paintMode();
-  loadSkills(cwd);     // «/»-скиллы для нового cwd (перефильтрует дропдаун по готовности)
+  loadSkills(cwd);
   runPrompt(forkFile ? { text: prompt, mode, attachments: [], forkFile } : { text: prompt, mode, attachments: [], newSessionCwd: cwd });
 }
 /* ---------- обработчики действий рейла: форк + удаление ---------- */
