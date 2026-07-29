@@ -842,7 +842,7 @@ function renderComposer(t){
     const files = items.filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
     if (files.length){ e.preventDefault(); addAttachments(files); }   // скриншот из буфера — главный сценарий
   });
-  sessionMode = 'default'; paintMode();   // per-session: на открытии — обычный режим
+  paintMode();   // режим/модель/effort задаёт вызывающий (openSession сбрасывает на default; new/fork — выбранное в окне)
   if (!MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
   attachDraft.length = 0; renderAttachDraft();
   setTimeout(()=>ta.focus(), 60);
@@ -945,8 +945,8 @@ function paintMode(){
 // доступные effort-уровни для модели (из /api/models, не хардкод); всегда с «по умолчанию» первым
 function effortsForModel(mv){
   const m = MODELS.find(x=>x.value===mv);
-  const allowed = m && Array.isArray(m.efforts) ? m.efforts : null;
-  if (!allowed || !allowed.length) return EFFORTS.filter(e=>!e.value);
+  const allowed = m && Array.isArray(m.efforts) && m.efforts.length ? m.efforts : null;
+  if (!allowed) return EFFORTS;   // модель без явного списка (или синтетический «по умолчанию») → все доступные уровни
   return EFFORTS.filter(e=>!e.value || allowed.includes(e.value));
 }
 // Поповер «Режимы» (как в расширении): список режимов + выбор модели + ползунок effort. Значения подтягиваются.
@@ -958,6 +958,7 @@ const MODE_META = {
 };
 function openModePop(){
   const pop = document.getElementById('modePop'); if (!pop) return;
+  if (!MODELS.length){ loadModelsCatalog().then(()=>{ const p=document.getElementById('modePop'); if (p && !p.hidden) openModePop(); }); }   // каталог ещё грузится — дорисуем модели/эффорты как придут
   const modeRows = MODE_ORDER.map(m=>{ const me=MODE_META[m]||{}; const sel=m===sessionMode; return `<div class="mp-mode${sel?' sel':''}" data-m="${m}"><span class="mp-ic">${me.i||''}</span><span class="mp-txt"><b>${esc(MODE_LABEL[m]||m)}</b><span>${esc(me.d||'')}</span></span>${sel?'<span class="mp-check">✓</span>':''}</div>`; }).join('');
   const models = MODELS.length?MODELS:[{value:'',label:'по умолчанию'}];
   const modelOpts = models.map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
@@ -1179,8 +1180,18 @@ async function runPrompt(payload){
       delete SESSION_CACHE[f];
       setTimeout(() => { if (currentFile === f) openSession(f); }, 500);
     } else if (isNewRun && currentFile){
-      // новая сессия завершилась — .jsonl уже на диске: полноценно открываем её (рейл/сборки/tail)
-      setTimeout(() => { if (currentFile === f) openSession(f); }, 700);
+      // новая сессия завершилась. Если в файле есть блоки — полноценно открываем (рейл/сборки/tail). Если 0 блоков
+      // (запуск ничего не выдал — напр. сбой SDK) — НЕ вайпаем консоль, оставляем видимым промт + ошибку, освежаем лишь рейл.
+      setTimeout(async () => {
+        if (currentFile !== f) return;
+        let t = null; try { t = await (await fetch('/api/session?file=' + encodeURIComponent(f), { cache:'no-store' })).json(); } catch {}
+        if (t && !t.error && Array.isArray(t.blocks) && t.blocks.length){ if (currentFile === f) openSession(f); return; }
+        if (t && !t.error && currentFile === f){   // пусто — консоль не трогаем, обновим правый рейл
+          SESSION_CACHE[f] = t;
+          const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); loadBuilds(t); loadMrs(t); loadJira(t); }
+          appendHTML(cons, '<div class="cx-note">Запуск не дал ответа — сообщений в сессии нет. Если это упакованное приложение и ошибка повторяется, пришлите текст ошибки выше.</div>');
+        }
+      }, 700);
     } else {
       // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление)
       setTimeout(async () => {
@@ -1275,6 +1286,7 @@ async function openSession(file){
   wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
+  sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
   loadBuilds(t);       // live-статус сборок TeamCity в рейл
@@ -1752,6 +1764,11 @@ function openForkDialog(t){
 
 /* ---------- загрузка реальных сессий ---------- */
 async function load(){
+  // Мгновенный каркас ДО данных: топбар уже привязан (wireTopbar), сразу показываем борд и кнопки (пустыми) —
+  // иначе на холодном старте после апдейта интерфейс «мёртв», пока грузится /api/sessions.
+  renderFilters();
+  renderNow();
+  setView('status');
   try {
     const r = await fetch('/api/sessions', { cache:'no-store' });
     const data = await r.json();
@@ -1761,14 +1778,17 @@ async function load(){
   prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
   renderFilters();
   renderNow();
-  setView('status');
+  if (activeView === 'status' || activeView === 'board') renderBoard(true);   // дорисовать борд с данными (scroll сохраняется)
   startPolling();
   hydrateMrs();        // фоново подтянуть live-MR для карточек
   hydrateJira();       // фоново подтянуть live-статусы Jira
   loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
-  loadMcpCatalog();    // TECH-2: реальные MCP-серверы
-  loadUsage();
-  if (!usageTimer) usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
+  // Тяжёлые SDK-пробы (spawn claude) — ПОСЛЕ подъёма борда, чтобы не конкурировать за старт и не морозить UI.
+  setTimeout(() => {
+    loadMcpCatalog();  // реальные MCP-серверы
+    loadUsage();
+    if (!usageTimer) usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
+  }, 1500);
 }
 function wireTopbar(){
   const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
