@@ -1202,6 +1202,31 @@ async function apiSessionName(req, res) {   // POST {file, name} — задан�
   const name = setName(file, body.name);   // nameOf() применяется при сборке сессии → override виден сразу
   sendJSON(res, { file, name });
 }
+// Чтение текстового файла для встроенного просмотрщика (клик по ссылке .md/.txt в выводе). ТОЛЬКО в пределах cwd
+// сессии — Deck слушает localhost, произвольный FS читать нельзя. :line-суффикс снимаем; бинарь/вне cwd → отказ (клиент
+// откроет во внешнем приложении). Размер режем VIEWER_MAX.
+const VIEWER_TEXT_EXT = new Set(['md','markdown','txt','json','yml','yaml','toml','ini','cfg','conf','log','csv','tsv','sql','sh','bash','ps1','py','js','mjs','cjs','ts','tsx','jsx','cs','go','rs','java','kt','c','h','cpp','hpp','css','html','xml','patch','diff','env','gitignore','dockerfile']);
+const VIEWER_MAX = 2 * 1024 * 1024;
+function apiFile(res, u) {
+  let p = String(u.searchParams.get('path') || '').trim();
+  const cwd = String(u.searchParams.get('cwd') || '').trim();
+  if (!p) { sendJSON(res, { ok: false, error: 'empty' }, 400); return; }
+  if (!cwd) { sendJSON(res, { ok: false, error: 'no cwd' }, 400); return; }
+  p = p.replace(/:\d+(?::\d+)?$/, '');                                   // file.md:42[:col] → file.md
+  const base = path.resolve(cwd);
+  const abs = path.resolve(base, p);                                     // относительный → от cwd; абсолютный — как есть
+  if (abs !== base && !abs.startsWith(base + path.sep)) { sendJSON(res, { ok: false, outside: true }, 200); return; }   // не читаем вне cwd
+  const name = path.basename(abs);
+  const ext = (name.match(/\.([a-z0-9]+)$/i) || [, ''])[1].toLowerCase();
+  const isText = VIEWER_TEXT_EXT.has(ext) || !/\.[a-z0-9]+$/i.test(name);   // без расширения — пробуем как текст
+  if (!isText) { sendJSON(res, { ok: false, binary: true, name }, 200); return; }
+  let st; try { st = statSync(abs); } catch { sendJSON(res, { ok: false, notfound: true }, 200); return; }
+  if (!st.isFile()) { sendJSON(res, { ok: false, error: 'not a file' }, 200); return; }
+  let text; try { text = readFileSync(abs, 'utf8'); } catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }, 200); return; }
+  let truncated = false;
+  if (text.length > VIEWER_MAX) { text = text.slice(0, VIEWER_MAX); truncated = true; }
+  sendJSON(res, { ok: true, name, ext, text, truncated });
+}
 async function apiChatPrepare(req, res) {
   let body;
   try { body = await readJsonBody(req, STAGE_MAX_BYTES); }
@@ -1828,6 +1853,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
   if (u.pathname === '/api/session-name') { apiSessionName(req, res); return; }
+  if (u.pathname === '/api/file') { apiFile(res, u); return; }
   if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }
   if (u.pathname === '/api/agents') {
     const out = apiAgents(u.searchParams.get('file') || '');

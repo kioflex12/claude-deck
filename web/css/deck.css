@@ -228,6 +228,12 @@
     .dm-x{ border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:14px; }
     .dm-x:hover{ color:var(--text); }
     .dm-body{ padding:15px 16px; max-height:70vh; overflow-y:auto; }
+    .deck-modal.fileview{ width:min(920px,94vw); }
+    .fileview .dm-body{ max-height:80vh; }
+    .fileview .fv-name{ font-family:var(--mono); font-size:12.5px; max-width:72%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .fv-actions{ display:flex; align-items:center; gap:10px; }
+    .fv-ext{ border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:14px; }
+    .fv-ext:hover{ color:var(--text); }
     .um-win{ margin-bottom:13px; }
     .um-row{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:5px 0; }
     .um-k{ font-size:12.5px; color:var(--text-muted); } .um-ell{ max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

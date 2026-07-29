@@ -1276,14 +1276,12 @@ async function openSession(file){
     }
   }
   if (currentFile !== file) return;
-  // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira
-  const woChip = t.wo
-    ? (jiraUrl(t.wo)
-        ? `<a class="sb-wo-tag" href="${jiraUrl(t.wo)}" target="_blank" rel="noopener" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></a>`
-        : `<span class="sb-wo-tag" title="${esc(t.wo)}">${esc(t.wo)}</span>`)
-    : '';
+  // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
+  // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
+  const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
+  const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
   document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));   // cu-тег в рейле → Unity (фокус/запуск)
   wireTags();          // секция «Теги»: add/edit/delete
@@ -1360,7 +1358,7 @@ function palIndex(){
   idx.push({type:'Вид', label:'Скиллы', sub:'каталог', act:()=>setView('skills')});
   idx.push({type:'Вид', label:'MCP-инструменты', sub:'серверы', act:()=>setView('mcp')});
   SESSIONS.forEach(s=>idx.push({type:'Сессия', label:s.title, sub:s.project+(s.wo?' · '+s.wo:''), key:(s.title+' '+s.project+' '+(s.gitBranch||'')+' '+(s.lastPrompt||'')).toLowerCase(), act:()=>openSession(s.file)}));
-  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does||'', key:(s.cmd+' '+(s.does||'')+' '+(s.trig||'')).toLowerCase(), act:()=>{ setView('skills'); skillCat='all'; query=''; const q=document.getElementById('q'); if(q) q.value=''; renderSkills(); }}));
+  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does||'', key:(s.cmd+' '+(s.does||'')+' '+(s.trig||'')).toLowerCase(), act:()=>{ setView('skills'); skillCat='all'; query=''; const q=document.getElementById('q'); if(q) q.value=''; const c=document.getElementById('qClear'); if(c) c.hidden=true; renderSkills(); }}));
   MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:(m.scope||'')+(m.transport?' · '+m.transport:''), key:(m.name+' '+(m.desc||'')+' '+(m.command||'')).toLowerCase(), act:()=>setView('mcp')}));
   return idx;
 }
@@ -1394,10 +1392,19 @@ function setView(v){
 }
 setInterval(() => { if (activeView === 'mcp' && !mcpDetail) loadUnityInstances(); }, 15000);   // live-цикл авто-дискавери Unity-инстансов
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setView(b.dataset.v); });
-document.getElementById('q').addEventListener('input', e => {
-  query = e.target.value.trim().toLowerCase();
+function applySearchQuery(){                    // единый ре-рендер под текущий query (после ввода/очистки)
   renderSearchDrop();                          // дропдаун сессий — во всех видах, включая открытую сессию
   if (activeView==='skills') renderSkills(); else if (activeView==='mcp') renderMcp(); else if (activeView==='board'||activeView==='status') renderBoard();
+}
+document.getElementById('q').addEventListener('input', e => {
+  query = e.target.value.trim().toLowerCase();
+  document.getElementById('qClear').hidden = !e.target.value;   // крестик — только когда в поле есть текст
+  applySearchQuery();
+});
+document.getElementById('qClear').addEventListener('click', () => {
+  const inp = document.getElementById('q'); inp.value = ''; query = '';
+  document.getElementById('qClear').hidden = true;
+  closeSearchDrop(); applySearchQuery(); inp.focus();
 });
 document.getElementById('q').addEventListener('keydown', e => { if (e.key==='Escape'){ closeSearchDrop(); e.target.blur(); } });
 document.addEventListener('mousedown', e => { if (!e.target.closest('.search')) closeSearchDrop(); });   // клик-вне закрывает
@@ -1611,7 +1618,7 @@ function renderSearchDrop(){
   drop.querySelectorAll('.qd-item').forEach(el => el.addEventListener('mousedown', e => {
     e.preventDefault();                          // до blur, чтобы клик сработал
     const f = el.dataset.file; closeSearchDrop();
-    inp.value = ''; query = '';
+    inp.value = ''; query = ''; const c = document.getElementById('qClear'); if (c) c.hidden = true;
     openSession(f);
   }));
 }
@@ -1808,13 +1815,36 @@ function openExternal(url){   // системный браузер: в Electron 
   if (window.deckNative && window.deckNative.openExternal) window.deckNative.openExternal(url);
   else window.open(url, '_blank', 'noopener');
 }
+// Клик по тегу задачи → задача в Jira. URL строим на хосте из /api/config; если не подгрузился к моменту клика — дотягиваем и повторяем.
+async function openWoJira(wo){
+  let url = jiraUrl(wo);
+  if (!url){ await loadServicesGate(); url = jiraUrl(wo); }
+  if (url) openExternal(url);
+  else toast('Укажите хост Jira в настройках (⚙), чтобы открывать задачи');
+}
 // Локальный ресурс из вывода (ссылка на .md и т.п.): открыть файл в дефолтном приложении ОС, НЕ навигировать окно Deck.
 function openLocalResource(rawHref){
   const cwd = (currentFile && SESSION_CACHE[currentFile] && SESSION_CACHE[currentFile].cwd) || '';
+  openFileViewer(rawHref, cwd);
+}
+// Встроенный просмотрщик локального файла (клик по ссылке .md/.txt в выводе): читаем через /api/file и показываем
+// в модалке (markdown → html, прочее — текст). Не текст / вне cwd / нет файла → отдаём ОС (внешнее приложение).
+async function openFileViewer(rawHref, cwd){
   let p = rawHref;
-  try { const u = new URL(rawHref, location.origin); if (u.origin === location.origin) p = decodeURIComponent(u.pathname).replace(/^\//, ''); } catch {}
-  if (window.deckNative && window.deckNative.openPath) window.deckNative.openPath({ path: p, cwd }).then(r => { if (!r || !r.ok) toast('Не удалось открыть: ' + p + (r && r.error ? ' ('+r.error+')' : '')); });
-  else toast('Локальный ресурс: ' + p + (cwd ? ' (в ' + cwd + ')' : ''));
+  try { const uu = new URL(rawHref, location.origin); if (uu.origin === location.origin) p = decodeURIComponent(uu.pathname).replace(/^\//, ''); } catch {}
+  const openExt = () => { if (window.deckNative && window.deckNative.openPath) window.deckNative.openPath({ path: p, cwd }).then(r => { if (!r || !r.ok) toast('Не удалось открыть: ' + p); }); else toast('Локальный ресурс: ' + p); };
+  let d; try { d = await (await fetch('/api/file?path=' + encodeURIComponent(p) + '&cwd=' + encodeURIComponent(cwd || ''), { cache:'no-store' })).json(); } catch { d = null; }
+  if (!d || !d.ok){ openExt(); return; }        // бинарь / вне cwd / не найден → внешнее приложение ОС
+  const isMd = d.ext === 'md' || d.ext === 'markdown';
+  const body = isMd ? `<div class="cx-md">${mdToHtml(d.text)}</div>` : `<pre class="cx-code"><button class="code-copy" type="button" title="Копировать">⧉</button><code>${esc(d.text)}</code></pre>`;
+  const back = modalBack('fileViewBack');
+  back.innerHTML = `<div class="deck-modal fileview"><div class="dm-head">
+    <span class="fv-name" title="${esc(p)}">${esc(d.name)}${d.truncated?' · фрагмент':''}</span>
+    <span class="fv-actions"><button class="fv-ext" id="fvExt" type="button" title="Открыть во внешнем приложении">↗</button><button class="dm-x" id="fvClose" type="button">✕</button></span>
+    </div><div class="dm-body">${body}</div></div>`;
+  back.classList.add('open');
+  back.querySelector('#fvClose').addEventListener('click', ()=> back.classList.remove('open'));
+  back.querySelector('#fvExt').addEventListener('click', openExt);
 }
 // Единый перехват кликов по ссылкам (вывод, рейл, везде): внешние http(s) → системный браузер; локальные/относительные
 // (резолвятся в origin Deck) → открыть как файл, а не как страницу Deck. Capture — до дефолтной навигации/target=_blank.
