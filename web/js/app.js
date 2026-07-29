@@ -540,17 +540,17 @@ async function loadMrs(t){
     if (baseEl && m0.target_branch) baseEl.innerHTML = '⎇ ' + esc(m0.target_branch) + (m0.state === 'merged' ? ' ✓' : '');
   }
 }
-async function hydrateMrs(){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама)
+async function hydrateMrs(fresh){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама). fresh — рефреш дашборда: мимо кэшей
   if (mrHydrating) return; mrHydrating = true;
   const now = Date.now();
   const branches = [...new Set(SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
   let changed = false;
   for (const br of branches){
     const c = MR_CACHE[br];
-    if (c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
+    if (!fresh && c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
     const s = SESSIONS.find(x => x.gitBranch === br);
     try {
-      const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || ''), { cache:'no-store' });
+      const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || '') + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
       if (d && d.available){ MR_CACHE[br] = { ts: Date.now(), mrs: d.mrs || [] }; changed = true; }
       else MR_CACHE[br] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
@@ -636,16 +636,16 @@ async function pollAgents(file){
   const se = SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
 }
 function startAgentsPoll(file){ stopAgentsPoll(); agentsTimer = setInterval(()=>pollAgents(file), 4000); pollAgents(file); }
-async function hydrateJira(){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с)
+async function hydrateJira(fresh){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с). fresh — рефреш дашборда: мимо кэшей
   if (jiraHydrating) return; jiraHydrating = true;
   const now = Date.now();
   const wos = [...new Set(SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 30);
   let changed = false, gated = false;
   for (const wo of wos){
     const c = JIRA_CACHE[wo];
-    if (c && now - c.ts < LIVE_TTL) continue;
+    if (!fresh && c && now - c.ts < LIVE_TTL) continue;
     try {
-      const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo), { cache:'no-store' });
+      const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo) + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
       if (!d.available){ gated = true; break; }   // нет токена — не долбим по всем wo
       JIRA_CACHE[wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
@@ -1791,8 +1791,8 @@ async function load(){
   renderNow();
   if (activeView === 'status' || activeView === 'board') renderBoard(true);   // дорисовать борд с данными (scroll сохраняется)
   startPolling();
-  hydrateMrs();        // фоново подтянуть live-MR для карточек
-  hydrateJira();       // фоново подтянуть live-статусы Jira
+  hydrateMrs(true);    // рефреш страницы (F5) → live-MR СРАЗУ, мимо кэшей (не ждать цикл поллинга)
+  hydrateJira(true);   // рефреш страницы (F5) → live-статусы Jira СРАЗУ, мимо кэшей
   loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
   // Тяжёлые SDK-пробы (spawn claude) — ПОСЛЕ подъёма борда, чтобы не конкурировать за старт и не морозить UI.
   setTimeout(() => {

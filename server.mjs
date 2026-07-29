@@ -1530,8 +1530,9 @@ async function apiMrs(res, u) {
   if (!GL_TOKEN || !GL_HOST) { sendJSON(res, { available: false, reason: 'GitLab не настроен (host/token)', host: GL_HOST }); return; }
   if (!branch && !wo) { sendJSON(res, { available: true, host: GL_HOST, mrs: [] }); return; }
   const key = branch + '|' + wo;
+  const fresh = u.searchParams.get('refresh') === '1';   // рефреш дашборда — обойти кэш
   const cached = _mrCache.get(key);
-  if (cached && Date.now() - cached.ts < MR_TTL) { sendJSON(res, cached.data); return; }
+  if (!fresh && cached && Date.now() - cached.ts < MR_TTL) { sendJSON(res, cached.data); return; }
   try {
     let list = [];
     // По source_branch ищем только для рабочих (не-базовых) веток — у preprod/preupdate это бессмысленно.
@@ -1555,12 +1556,12 @@ async function apiMrs(res, u) {
 const _jiraCache = new Map();   // wo -> { ts, data }
 const JIRA_TTL = 30000;
 // Реюзабельный резолвер статуса Jira (кэш 30с). Возвращает {available,status,category,summary}. Не бросает.
-async function jiraStatus(wo) {
+async function jiraStatus(wo, fresh) {
   wo = String(wo || '').trim();
   if (!JIRA_ENABLED) return { available: false, reason: 'no JIRA token/email/host' };
   if (!/^WO-\d+$/i.test(wo)) return { available: true, status: null };
   const cached = _jiraCache.get(wo);
-  if (cached && Date.now() - cached.ts < JIRA_TTL) return cached.data;
+  if (!fresh && cached && Date.now() - cached.ts < JIRA_TTL) return cached.data;   // refresh=1 (рефреш дашборда) обходит кэш
   try {
     const auth = Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');
     const r = await fetch('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '?fields=status,summary', {
@@ -1579,7 +1580,7 @@ async function jiraStatus(wo) {
     return data;
   }
 }
-async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '')); }
+async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '', u.searchParams.get('refresh') === '1')); }
 
 // -------- TECH-6: конфиг Deck (GET текущие значения / POST сохранить). Токен наружу НЕ отдаём, только флаг. --------
 function configView() {
