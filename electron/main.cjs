@@ -304,8 +304,8 @@ function sendUpdateStatus(state, extra) {
 let updaterWired = false;
 function wireUpdater() {
   if (updaterWired) return; updaterWired = true;
-  autoUpdater.autoDownload = true;             // update-available → сразу качаем
-  autoUpdater.autoInstallOnAppQuit = true;     // установка при выходе
+  autoUpdater.autoDownload = false;            // НЕ качаем сами: загрузка только по кнопке «Обновить» (deck:downloadUpdate)
+  autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
   autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
   autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
@@ -323,7 +323,7 @@ async function checkForUpdates() {
 }
 function notifyUpdate(info) {
   if (!Notification.isSupported()) return;
-  const n = new Notification({ title: 'Доступно обновление Deck', body: 'Версия ' + ((info && info.version) || '') + ' загружается…' });
+  const n = new Notification({ title: 'Доступно обновление Deck', body: 'Версия ' + ((info && info.version) || '') + ' — откройте Deck и нажмите «Обновить».' });
   n.on('click', showWindow); n.show();
 }
 async function promptInstall(info) {
@@ -349,6 +349,13 @@ function openPaletteUI() { showWindow(); if (mainWindow) mainWindow.webContents.
 ipcMain.handle('deck:appVersion', () => app.getVersion());
 ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), packaged: app.isPackaged }));
 ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
+// Явная загрузка обновления (кнопка «Обновить»). Фид/подписки уже подняты предшествующим checkForUpdates.
+ipcMain.handle('deck:downloadUpdate', async () => {
+  if (!app.isPackaged) return { ok: false, reason: 'dev' };
+  wireUpdater();
+  try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+  catch (e) { const reason = String((e && e.message) || e); sendUpdateStatus('error', { message: reason }); return { ok: false, reason }; }
+});
 // Нативный выбор папки/файла для полей путей в Настройках (opts.file=true → файл, иначе папка).
 // Все ЗАПУЩЕННЫЕ Unity-редакторы из списка процессов (надёжнее pidfile'ов MCP-for-Unity: их пишет не каждый проект).
 ipcMain.handle('deck:unity-running', () => {

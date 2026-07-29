@@ -1940,14 +1940,18 @@ async function startLogin(){
 }
 
 /* ---------- D3: обновления (только в Electron) — версия + PAT + проверка ---------- */
-let UPDATE_STATUS_EL = null, UPDATE_INSTALL_EL = null;
+let UPDATE_STATUS_EL = null, UPDATE_INSTALL_EL = null, UPDATE_DOWNLOAD_EL = null;
 function renderUpdateStatus(s){
   if (!s) return;
-  if (UPDATE_INSTALL_EL) UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // кнопка перезапуска только когда загружено
+  if (UPDATE_DOWNLOAD_EL){
+    UPDATE_DOWNLOAD_EL.style.display = (s.state === 'available') ? '' : 'none';   // «Обновить» — только когда апдейт найден и загрузка ещё не начата
+    if (s.state === 'available'){ UPDATE_DOWNLOAD_EL.textContent = '↓ Обновить до ' + (s.version||''); UPDATE_DOWNLOAD_EL.disabled = false; }
+  }
+  if (UPDATE_INSTALL_EL) UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // «Перезапустить» — только когда загружено
   if (!UPDATE_STATUS_EL) return;
   const m = {
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
-    available:'Доступна версия '+(s.version||'')+' — загружаю…',
+    available:'Доступна версия '+(s.version||'')+'. Нажмите «Обновить».',
     downloading:'Загрузка… '+(s.percent||0)+'%',
     downloaded:'Обновление '+(s.version||'')+' загружено — нажмите «Перезапустить и установить».',
     error:'Ошибка обновления: '+(s.message||''), dev:'Обновления доступны только в установленном приложении.',
@@ -1961,26 +1965,32 @@ async function openUpdatesModal(){
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Обновления</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b></div>
-      <div class="um-note">Обновление одним кликом из публичного репозитория релизов — без токенов и настройки. Нажмите «Проверить обновления»: новая версия скачается сама, затем появится кнопка перезапуска.</div>
-      <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить обновления</button></div>
+      <div class="um-note">Нажмите «Проверить» — если появилась новая версия, покажется кнопка «Обновить» (скачает и установит с перезапуском). Пока не нажмёте «Обновить», ничего не качается.</div>
+      <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить</button></div>
+      <button class="ns-start" id="updDownload" type="button" style="display:none;width:100%;margin-top:10px">↓ Обновить</button>
       <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; UPDATE_INSTALL_EL=null; });
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; UPDATE_INSTALL_EL=null; UPDATE_DOWNLOAD_EL=null; });
   back.classList.add('open');
-  UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall');
+  UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall'); UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload');
   async function doUpdCheck(){
     UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();
     if (!r.ok) renderUpdateStatus({ state: r.reason==='dev'?'dev':'error', message: r.reason });
   }
   back.querySelector('#updCheck').addEventListener('click', doUpdCheck);
+  UPDATE_DOWNLOAD_EL.addEventListener('click', async ()=>{
+    UPDATE_DOWNLOAD_EL.disabled = true; UPDATE_STATUS_EL.textContent='Загрузка…';
+    const r = await window.deckNative.downloadUpdate();
+    if (r && !r.ok) renderUpdateStatus({ state:'error', message: r.reason });
+  });
   UPDATE_INSTALL_EL.addEventListener('click', async ()=>{
     UPDATE_STATUS_EL.textContent='Перезапуск и установка…';
     try { await window.deckNative.quitAndInstall(); } catch { UPDATE_STATUS_EL.textContent='Не удалось установить — попробуйте ещё раз.'; }
   });
-  if (info.packaged) doUpdCheck();   // открыли окно → автопроверка (autoDownload сам скачает → появится кнопка установки)
+  if (info.packaged) doUpdCheck();   // открыли окно → только ПРОВЕРКА (без загрузки); при наличии апдейта покажется кнопка «Обновить»
 }
 
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
