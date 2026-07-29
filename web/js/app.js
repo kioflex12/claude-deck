@@ -60,6 +60,13 @@ const promptQueue = [];                     // очередь промтов, о
 let sessionMode = 'default';                 // P3: режим разрешений текущей сессии (shift-tab цикл)
 const MODE_ORDER = ['default','acceptEdits','plan','bypassPermissions'];
 const MODE_LABEL = { default:'Обычный', acceptEdits:'Авто-правки', plan:'План', bypassPermissions:'Байпас' };
+let MODELS = [], EFFORTS = [];               // подтягиваются из /api/models (модели — алиасы + additionalModelOptionsCache)
+let sessionModel = localStorage.getItem('deckModel') || '';    // выбор модели (пусто = дефолт), сохраняется между сессиями
+let sessionEffort = localStorage.getItem('deckEffort') || '';  // выбор reasoning-effort
+async function loadModelsCatalog(){
+  try { const d = await (await fetch('/api/models', { cache:'no-store' })).json(); MODELS = Array.isArray(d.models)?d.models:[]; EFFORTS = Array.isArray(d.efforts)?d.efforts:[]; }
+  catch { MODELS = []; EFFORTS = []; }
+}
 const attachDraft = [];                      // P4: черновик вложений текущего сообщения [{name, mediaType, kind, dataB64|text, preview}]
 const ATTACH_MAX_BYTES = 18 * 1024 * 1024;   // суммарный лимит вложений ~18МБ
 const SKILLS_CACHE = {};
@@ -392,9 +399,11 @@ function sideHTML(t){
 
   // репозиторий выводим из URL MR (`…/-/merge_requests/NNNN`) — для ссылки на ветку в GitLab
   const repoBase = t.wfMrUrl ? String(t.wfMrUrl).replace(/\/-\/merge_requests\/.*$/,'').replace(/\/$/,'') : '';
-  const branchTxt = esc(t.gitBranch||'—');
-  const branchCell = (repoBase && t.gitBranch && t.wo)
-    ? aReal(repoBase+'/-/tree/'+encodeURIComponent(t.gitBranch), branchTxt, 'plain')
+  // ветка ЗАДАЧИ: wfBranch из dev-workflow (реальная), иначе gitBranch cwd-репо (часто preprod у основного репо)
+  const workBranch = t.wfBranch || t.gitBranch || '';
+  const branchTxt = esc(workBranch||'—');
+  const branchCell = (repoBase && workBranch && t.wo)
+    ? aReal(repoBase+'/-/tree/'+encodeURIComponent(workBranch), branchTxt, 'plain')
     : `<span class="ri-v">${branchTxt}</span>`;
 
   // стадия dev-workflow
@@ -442,7 +451,7 @@ function sideHTML(t){
       <div class="row-item" style="margin-top:10px"><span class="ri-k">стадия</span><span class="ri-v">${stageMeta}</span></div>
     </div>
     <div class="sec"><div class="sec-label">Ветка</div>
-      <div class="row-item"><span class="ri-k">${esc(t.project||'проект')}</span>${branchCell}${t.wo?`<span class="ri-badge chip">${esc(t.wo)}</span>`:''}</div>
+      <div class="row-item"><span class="ri-k">${esc(t.project||'проект')}</span><span id="branchVal">${branchCell}</span>${t.wo?`<span class="ri-badge chip">${esc(t.wo)}</span>`:''}</div>
       <div class="rail-hint"><code>${esc(t.cwd||'—')}</code></div>
     </div>
     ${t.wo?`<div class="sec"><div class="sec-label">Статус Jira</div><div id="jiraBox"><div class="rail-hint">проверяю Jira…</div></div></div>`:''}
@@ -521,10 +530,15 @@ async function loadMrs(t){
     `<div class="row-item"><span class="ri-k">merge</span>${aReal(m.web_url, '!'+m.iid+' → '+esc(m.target_branch), 'plain')}${mrPillHTML(m)}</div>`
     + (m.project ? `<div class="rail-hint">${esc(m.project)}</div>` : '')
   ).join('');
-  // база/таргет — авторитетно из MR (куда реально мёржим), а не из шумной истории gitBranch (там мелькает дефолтный preprod)
+  // ветка/база — авторитетно из MR (реальная source_branch и target_branch), а не из шумной истории gitBranch (там мелькает preprod)
   const m0 = d.mrs.find(x => x.state === 'opened') || d.mrs[0];
-  const baseEl = document.querySelector('#sessionSide .sc-base');
-  if (baseEl && m0 && m0.target_branch) baseEl.innerHTML = '⎇ ' + esc(m0.target_branch) + (m0.state === 'merged' ? ' ✓' : '');
+  if (m0){
+    const repoBase = String(m0.web_url||'').replace(/\/-\/merge_requests\/.*$/,'').replace(/\/$/,'');
+    const branchEl = document.getElementById('branchVal');
+    if (branchEl && m0.source_branch) branchEl.innerHTML = repoBase ? aReal(repoBase+'/-/tree/'+encodeURIComponent(m0.source_branch), esc(m0.source_branch), 'plain') : `<span class="ri-v">${esc(m0.source_branch)}</span>`;
+    const baseEl = document.querySelector('#sessionSide .sc-base');
+    if (baseEl && m0.target_branch) baseEl.innerHTML = '⎇ ' + esc(m0.target_branch) + (m0.state === 'merged' ? ' ✓' : '');
+  }
 }
 async function hydrateMrs(){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама)
   if (mrHydrating) return; mrHydrating = true;
@@ -783,6 +797,8 @@ function renderComposer(t){
           <span class="cx-queue" id="queueInd" hidden></span>
         </div>
         <div class="cx-foot-r">
+          <select class="cx-sel" id="modelSel" title="Модель"></select>
+          <select class="cx-sel" id="effortSel" title="Reasoning effort"></select>
           <button class="cx-mode" id="modeBtn" type="button" title="Режим разрешений (Shift+Tab)">${ICON.bolt}<span id="modeLabel">Обычный</span></button>
           <button class="send-btn" id="sendBtn" type="button" disabled>${ICON.send}</button>
         </div>
@@ -808,7 +824,7 @@ function renderComposer(t){
   document.getElementById('skillBtn').addEventListener('click', () => { if (streaming) return; if (ta.value[0] !== '/') ta.value = '/' + ta.value; ta.focus(); updateSlash(); });
   document.getElementById('compactBtn').addEventListener('click', () => {   // /compact — сжать контекст текущей сессии
     if (!currentFile || !requireAuth()) return;
-    const payload = { text: '/compact', mode: sessionMode, attachments: [] };
+    const payload = { text: '/compact', mode: sessionMode, model: sessionModel, effort: sessionEffort, attachments: [] };
     if (streaming){ enqueuePrompt(payload); toast('/compact добавлен в очередь'); return; }
     toast('Сжимаю контекст сессии…'); runPrompt(payload);
   });
@@ -827,6 +843,8 @@ function renderComposer(t){
     if (files.length){ e.preventDefault(); addAttachments(files); }   // скриншот из буфера — главный сценарий
   });
   sessionMode = 'default'; paintMode();   // per-session: на открытии — обычный режим
+  if (MODELS.length) wireModelEffort();   // селекты модели/эффорта — из /api/models (подтягиваются)
+  else loadModelsCatalog().then(()=>{ if (document.getElementById('modelSel')) wireModelEffort(); });
   attachDraft.length = 0; renderAttachDraft();
   setTimeout(()=>ta.focus(), 60);
 }
@@ -837,6 +855,7 @@ function stopStream(){
   if (currentES){ try { currentES.close(); } catch {} currentES = null; }
   if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
   stopTail();
+  stopRailRefresh();
   stopAgentsPoll();
   streaming = false; liveFinish = null; streamingFile = null; currentStreamId = null;
   promptQueue.length = 0; updateQueueIndicator();        // уходя с сессии — очередь сбрасываем
@@ -920,6 +939,27 @@ function paintMode(){
   const lbl = btn.querySelector('#modeLabel'); if (lbl) lbl.textContent = MODE_LABEL[sessionMode] || 'Обычный';
   btn.classList.toggle('cx-mode-bypass', sessionMode === 'bypassPermissions');   // байпас — предупреждающе (красный)
   btn.title = 'Режим разрешений: ' + (MODE_LABEL[sessionMode] || 'Обычный') + ' (Shift+Tab)';
+}
+// селекты модели/эффорта в футере — значения ПОДТЯГИВАЮТСЯ из /api/models (supportedModels), не хардкод
+function fillSel(sel, items, cur){
+  if (!sel) return;
+  sel.innerHTML = (items||[]).map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}>${esc(o.label)}</option>`).join('');
+  if (![...sel.options].some(o=>o.value===cur)) sel.selectedIndex = 0;   // текущего нет в списке → «по умолчанию»
+}
+function effortsForModel(mv){
+  const m = MODELS.find(x=>x.value===mv);
+  const allowed = m && Array.isArray(m.efforts) ? m.efforts : null;
+  if (!allowed || !allowed.length) return EFFORTS.filter(e=>!e.value);   // модель без эффортов → только «по умолчанию»
+  return EFFORTS.filter(e=>!e.value || allowed.includes(e.value));
+}
+function wireModelEffort(){
+  const ms = document.getElementById('modelSel'), es = document.getElementById('effortSel');
+  fillSel(ms, MODELS, sessionModel);
+  if (ms && ms.value !== sessionModel){ sessionModel = ms.value; localStorage.setItem('deckModel', sessionModel); }
+  fillSel(es, effortsForModel(sessionModel), sessionEffort);
+  if (es && es.value !== sessionEffort){ sessionEffort = es.value; localStorage.setItem('deckEffort', sessionEffort); }
+  if (ms) ms.onchange = ()=>{ sessionModel = ms.value; localStorage.setItem('deckModel', sessionModel); fillSel(es, effortsForModel(sessionModel), sessionEffort); if (es && es.value!==sessionEffort){ sessionEffort=es.value; localStorage.setItem('deckEffort', sessionEffort); } };
+  if (es) es.onchange = ()=>{ sessionEffort = es.value; localStorage.setItem('deckEffort', sessionEffort); };
 }
 function cycleMode(){
   const i = MODE_ORDER.indexOf(sessionMode);
@@ -1016,12 +1056,13 @@ function sendMessage(){
   ta.value = ''; ta.style.height = 'auto';
   attachDraft.length = 0; renderAttachDraft();            // черновик вложений очищаем
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
-  const payload = { text, mode: sessionMode, attachments };
+  const payload = { text, mode: sessionMode, model: sessionModel, effort: sessionEffort, attachments };
   if (streaming){ enqueuePrompt(payload); return; }       // идёт стрим → в очередь
   runPrompt(payload);
 }
 async function runPrompt(payload){
   const text = payload.text || '', mode = payload.mode || 'default', attachments = payload.attachments || [];
+  const model = payload.model || '', effort = payload.effort || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
   if (queuedEl && queuedEl.parentElement){                // это был поставленный в очередь блок — снимаем метку
@@ -1073,10 +1114,10 @@ async function runPrompt(payload){
     try {
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
       const body = isFork
-        ? { prompt: text, mode, fork: true, sessionFile: payload.forkFile, attachments: slim }
+        ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim }
         : payload.newSessionCwd
-        ? { prompt: text, mode, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
-        : { prompt: text, mode, sessionFile: currentFile, attachments: slim };
+        ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
+        : { prompt: text, mode, model, effort, sessionFile: currentFile, attachments: slim };
       const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.token) throw new Error(d && d.error ? d.error : 'stage failed');
@@ -1089,7 +1130,7 @@ async function runPrompt(payload){
       streamingFile = null; drainQueue(); return;
     }
   } else {
-    streamUrl = '/api/chat?file=' + encodeURIComponent(currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode);
+    streamUrl = '/api/chat?file=' + encodeURIComponent(currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode) + '&model=' + encodeURIComponent(model) + '&effort=' + encodeURIComponent(effort);
   }
   const es = new EventSource(streamUrl);
   currentES = es;
@@ -1216,6 +1257,7 @@ async function openSession(file){
   loadBuilds(t);       // live-статус сборок TeamCity в рейл
   loadMrs(t);          // live-MR из GitLab в рейл
   loadJira(t);         // live-статус Jira в рейл
+  if (t.active || streamingFile === file) startRailRefresh(file);   // активная сессия → ветка/MR/сборки/Jira обновляются по ходу работы
 }
 /* ---------- лента блоков + live-tail активной сессии ---------- */
 function renderThread(t){
@@ -1230,6 +1272,22 @@ function renderThread(t){
 }
 function stopTail(){ if (tailTimer){ clearInterval(tailTimer); tailTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
 function startTail(file){ stopTail(); tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
+// Живой рефреш рейла: по мере работы над контекстом ветка/MR/сборки/Jira меняются — периодически перечитываем
+// состояние сессии и обновляем секции (MR/сборки/Jira/ветка) на месте, не трогая теги/скролл/композер.
+let railTimer = null;
+function stopRailRefresh(){ if (railTimer){ clearInterval(railTimer); railTimer = null; } }
+function startRailRefresh(file){
+  stopRailRefresh();
+  railTimer = setInterval(async () => {
+    if (currentFile !== file){ stopRailRefresh(); return; }
+    let t2 = null;
+    try { const r = await fetch('/api/session?file=' + encodeURIComponent(file), { cache:'no-store' }); t2 = await r.json(); } catch {}
+    if (!t2 || t2.error || currentFile !== file) return;
+    SESSION_CACHE[file] = t2;
+    loadMrs(t2); loadJira(t2); loadBuilds(t2);     // секции сами обновляют свои боксы (+ #branchVal/#sc-base из MR)
+    if (!t2.active && !streaming){ stopRailRefresh(); }   // сессия затихла и Deck не стримит → рефреш больше не нужен
+  }, 25000);
+}
 function updateTailIndicator(on){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');

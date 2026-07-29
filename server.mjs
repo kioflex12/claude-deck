@@ -107,11 +107,12 @@ const MSG_CAP = 8000;                 // максимум символов на 
 const SYSREM = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
 // -------- пользовательские теги на сессию (Deck-side, сессии read-only). Ключ = rel-путь файла. --------
-const TAGS_FILE = path.join(HERE, 'deck-tags.json');
+// В упакованном app HERE = внутри app.asar (это ФАЙЛ) → запись под HERE даёт ENOTDIR. Пишем в userData (как конфиг/токены).
+const tagsFile = () => path.join(userDataDir(), 'deck-tags.json');
 let _tags = null;
 function loadTags() {
   if (_tags) return _tags;
-  try { _tags = JSON.parse(readFileSync(TAGS_FILE, 'utf8')); if (!_tags || typeof _tags !== 'object') _tags = {}; }
+  try { _tags = JSON.parse(readFileSync(tagsFile(), 'utf8')); if (!_tags || typeof _tags !== 'object') _tags = {}; }
   catch { _tags = {}; }
   return _tags;
 }
@@ -120,7 +121,7 @@ function setTags(file, tags) {
   const map = loadTags();
   const clean = [...new Set((Array.isArray(tags) ? tags : []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
   if (clean.length) map[file] = clean; else delete map[file];
-  try { writeFileSync(TAGS_FILE, JSON.stringify(map, null, 2)); } catch {}
+  try { mkdirSync(path.dirname(tagsFile()), { recursive: true }); writeFileSync(tagsFile(), JSON.stringify(map, null, 2)); } catch {}
   return clean;
 }
 
@@ -279,9 +280,13 @@ function wfInfo(st, active) {
   const handed = !!(st.readyForQA || st.qaReportPosted || st.deviceVerified || st.verifiedLocallyByUser);
   const wfQa = col === 'qa' ? (handed ? 'qa' : 'localcheck') : '';
 
+  // Реальная ветка ЗАДАЧИ из dev-workflow (не ветка cwd-репо, который у Deck-сессий = основной vibecode на preprod).
+  const beBranch = (() => { const b = (st.backend && st.backend.branches) || {}; for (const v of Object.values(b)) if (v && String(v).trim()) return String(v); return ''; })();
+  const wfBranch = (st.client && st.client.branch) || beBranch || (st.statics && st.statics.branch) || '';
+
   return {
     wfColumn: col, wfStep: step, wfMr: mrUrl || hasMr, wfBuild: build,
-    wfMrUrl: mrUrl || null, wfMrState: mrState, wfBuildState: buildState, wfQa,
+    wfMrUrl: mrUrl || null, wfMrState: mrState, wfBuildState: buildState, wfQa, wfBranch,
   };
 }
 
@@ -1004,6 +1009,54 @@ async function fetchUsageRaw() {
     throw lastErr || streamErr || new Error('usage unavailable');
   } finally { try { ac.abort(); } catch {} }
 }
+// Список моделей — рантаймовый control-request SDK supportedModels() (реальные value/displayName + какие effort-уровни
+// каждая поддерживает). Ничего не хардкодим: и модели, и набор эффортов выводим из ответа CLI. Кэш 5 мин.
+async function fetchModelsRaw() {
+  const query = await getSdkQuery();
+  const ac = new AbortController();
+  async function* openInput() { await new Promise((r) => setTimeout(r, 30000)); }
+  const q = query({ prompt: openInput(), options: { permissionMode: 'plan', settingSources: [], abortController: ac } });
+  let ready = false, streamErr = null;
+  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
+  try {
+    const t0 = Date.now();
+    while (!ready && !streamErr && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 200));
+    let lastErr;
+    for (let i = 0; i < 5; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1200));
+      try { const m = await q.supportedModels(); if (Array.isArray(m)) return m; } catch (e) { lastErr = e; }
+    }
+    throw lastErr || streamErr || new Error('models unavailable');
+  } finally { try { ac.abort(); } catch {} }
+}
+let _models = { ts: 0, data: null };
+const MODELS_TTL = 5 * 60 * 1000;
+async function apiModels(res) {
+  if (_models.data && Date.now() - _models.ts < MODELS_TTL) { sendJSON(res, _models.data); return; }
+  const models = [{ value: '', label: 'Модель: по умолчанию' }];
+  const effortSet = new Set();
+  try {
+    const raw = await fetchModelsRaw();
+    for (const m of raw) {
+      const v = String((m && m.value) || '').trim(); if (!v) continue;
+      const efs = Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels : [];
+      models.push({ value: v, label: String(m.displayName || v), efforts: efs });
+      for (const e of efs) effortSet.add(e);
+    }
+  } catch {
+    // проба не удалась (напр. вне Electron/без логина) — модели из additionalModelOptionsCache конфига, без хардкода
+    try {
+      const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
+      for (const e of (j.additionalModelOptionsCache || [])) { const v = String((e && e.value) || '').trim(); if (v) models.push({ value: v, label: String((e && e.label) || v), efforts: [] }); }
+    } catch {}
+  }
+  const rank = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4 };
+  const efforts = [{ value: '', label: 'Effort: по умолчанию' }].concat(
+    [...effortSet].sort((a, b) => (rank[a] ?? 99) - (rank[b] ?? 99)).map((e) => ({ value: e, label: e.charAt(0).toUpperCase() + e.slice(1) })));
+  const data = { models, efforts };
+  _models = { ts: Date.now(), data };
+  sendJSON(res, data);
+}
 function mapUsage(u) {
   if (!u || !u.rate_limits_available || !u.rate_limits) return { available: false, reason: 'аккаунт-лимиты недоступны для этого логина/сессии' };
   const rl = u.rate_limits;
@@ -1030,6 +1083,7 @@ const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
 const activeStreams = new Map();      // streamId -> AbortController (для гарантированного /api/stop)
 const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
 const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions']);   // P3: режимы разрешений
+const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);               // уровни reasoning-effort SDK
 const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoWrite']);
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);   // правки файлов — авто-принимаются в acceptEdits
 function isReadOnlyTool(name) {
@@ -1106,7 +1160,7 @@ async function apiDeleteSession(req, res) {
   try {
     const base = path.basename(rp.resolved);
     const sessionId = base.replace(/\.jsonl$/, '');
-    const trashDir = path.join(HERE, 'deck-trash');
+    const trashDir = path.join(userDataDir(), 'deck-trash');   // userData, не HERE (в сборке HERE в asar → ENOTDIR)
     mkdirSync(trashDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');   // сервер — не воркфлоу-скрипт, Node Date разрешён
     const dest = path.join(trashDir, ts + '-' + base);
@@ -1115,7 +1169,7 @@ async function apiDeleteSession(req, res) {
     let subsMoved = false;
     if (existsSync(subs)) { try { movePath(subs, path.join(trashDir, ts + '-' + sessionId)); subsMoved = true; } catch {} }
     delete loadTags()[body.file];                                 // теги удалённой сессии тоже чистим
-    try { writeFileSync(TAGS_FILE, JSON.stringify(loadTags(), null, 2)); } catch {}
+    try { writeFileSync(tagsFile(), JSON.stringify(loadTags(), null, 2)); } catch {}
     sendJSON(res, { ok: true, trash: dest, subsMoved });
   } catch (e) {
     sendJSON(res, { error: (e && e.message) || String(e) }, 500);
@@ -1137,6 +1191,8 @@ async function apiChatPrepare(req, res) {
   const sessionFile = String(body.sessionFile || '');
   const prompt = String(body.prompt || '');
   let mode = String(body.mode || 'default'); if (!VALID_MODES.has(mode)) mode = 'default';
+  const model = String(body.model || '').slice(0, 80);   // алиас/ID модели ('' = по умолчанию)
+  const effort = String(body.effort || '').slice(0, 12); // low|medium|high|xhigh|max ('' = по умолчанию)
   const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 20) : [];
   const newSession = body.newSession === true;         // Part 3: создать НОВУЮ сессию (без resume) в cwd
   const fork = body.fork === true;                     // форк: resume + forkSession — новый id с контекстом исходной
@@ -1147,7 +1203,7 @@ async function apiChatPrepare(req, res) {
   const now = Date.now();
   for (const [k, v] of stagedRequests) if (now - v.ts > 5 * 60 * 1000) stagedRequests.delete(k);   // sweep старьё
   const token = 'st_' + now.toString(36) + Math.random().toString(36).slice(2, 10);
-  stagedRequests.set(token, { sessionFile, prompt, mode, attachments, newSession, cwd, fork, ts: now });
+  stagedRequests.set(token, { sessionFile, prompt, mode, model, effort, attachments, newSession, cwd, fork, ts: now });
   sendJSON(res, { token });
 }
 
@@ -1162,7 +1218,7 @@ async function apiChat(req, res, u) {
   const fail = (msg) => { send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };
 
   // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
-  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false;
+  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '';
   const token = u.searchParams.get('token');
   if (token) {
     const staged = stagedRequests.get(token);
@@ -1171,6 +1227,7 @@ async function apiChat(req, res, u) {
     relFile = staged.sessionFile || '';
     prompt = staged.prompt || '';
     mode = staged.mode || 'default';
+    model = staged.model || ''; effort = staged.effort || '';
     attachments = Array.isArray(staged.attachments) ? staged.attachments : [];
     isNew = staged.newSession === true;                             // Part 3: новая сессия без resume
     isFork = staged.fork === true;                                  // форк: resume исходной + forkSession
@@ -1179,8 +1236,10 @@ async function apiChat(req, res, u) {
     relFile = u.searchParams.get('file') || '';
     prompt = u.searchParams.get('prompt') || '';
     mode = u.searchParams.get('mode') || 'default';                 // P3: режим разрешений из чата (shift-tab)
+    model = u.searchParams.get('model') || ''; effort = u.searchParams.get('effort') || '';
   }
   if (!VALID_MODES.has(mode)) mode = 'default';                     // неизвестное → безопасный default
+  if (effort && !VALID_EFFORTS.has(effort)) effort = '';            // неизвестный effort → по умолчанию
   if (!prompt.trim() && !attachments.length) return fail('empty prompt');
 
   // Резолв контекста: новая сессия → cwd напрямую (файла ещё нет); иначе — из файла существующей сессии.
@@ -1271,6 +1330,8 @@ async function apiChat(req, res, u) {
       abortController: ac,
       maxTurns: 24,
     };
+    if (model) options.model = model;          // выбор модели из футера ('' = дефолт сессии/аккаунта)
+    if (effort) options.effort = effort;       // выбор reasoning-effort из футера
     if (!isNew) options.resume = sessionId;   // существующая сессия / форк — resume; новая — без resume
     if (isFork) options.forkSession = true;   // форк: resume создаёт НОВЫЙ session_id (контекст исходной), оригинал не трогаем
     // claude_code-preset + append: дефолтный системный промпт Claude Code ПЛЮС правила проекта (вместо CLAUDE.md-автозагрузки)
@@ -1761,6 +1822,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/api/usage') { apiUsage(res); return; }
+  if (u.pathname === '/api/models') { apiModels(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }

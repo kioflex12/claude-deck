@@ -168,6 +168,8 @@
     .cx-ibtn:disabled{ opacity:.4; cursor:default; }
     .cx-ibtn.cx-stop:not(:disabled){ color:var(--bad); border-color:var(--bad); }
     .cx-mode{ display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text-muted); font-family:var(--ui); font-size:12px; font-weight:560; cursor:pointer; transition:.13s; }
+    .cx-sel{ height:28px; max-width:130px; padding:0 6px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text-muted); font-family:var(--ui); font-size:12px; cursor:pointer; }
+    .cx-sel:hover{ border-color:var(--accent); }
     .cx-mode:hover{ border-color:var(--border-strong); color:var(--text); }
     .cx-mode svg{ color:var(--warn); }
     .cx-run{ display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px; color:var(--accent-ink); margin-left:2px; }
