@@ -762,6 +762,7 @@ function renderComposer(t){
         <div class="cx-foot-l">
           <button class="cx-ibtn" id="attachBtn" type="button" title="Прикрепить (скоро)">${ICON.attach}</button>
           <button class="cx-ibtn" id="skillBtn" type="button" title="Скиллы (/)">/</button>
+          <button class="cx-ibtn" id="compactBtn" type="button" title="Сжать контекст сессии (/compact)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg></button>
           <button class="cx-ibtn cx-stop" id="stopBtn" type="button" title="Остановить">${ICON.stop}</button>
           <span class="cx-queue" id="queueInd" hidden></span>
         </div>
@@ -789,6 +790,12 @@ function renderComposer(t){
   stopBtn.disabled = !streaming;   // состояние Стоп = чистая функция от факта живого стрима (переживает перерисовку)
   stopBtn.addEventListener('click', userStop);
   document.getElementById('skillBtn').addEventListener('click', () => { if (streaming) return; if (ta.value[0] !== '/') ta.value = '/' + ta.value; ta.focus(); updateSlash(); });
+  document.getElementById('compactBtn').addEventListener('click', () => {   // /compact — сжать контекст текущей сессии
+    if (!currentFile || !requireAuth()) return;
+    const payload = { text: '/compact', mode: sessionMode, attachments: [] };
+    if (streaming){ enqueuePrompt(payload); toast('/compact добавлен в очередь'); return; }
+    toast('Сжимаю контекст сессии…'); runPrompt(payload);
+  });
   document.getElementById('modeBtn').addEventListener('click', cycleMode);
   // P4: вложения — пикер, drag-drop, вставка скриншота
   const fileInput = document.getElementById('attachInput');

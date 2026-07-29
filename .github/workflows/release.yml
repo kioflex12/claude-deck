@@ -30,7 +30,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # без сертификата — не пытаться подписывать
 
   macos:
-    runs-on: macos-latest   # приватный репо: минуты macOS тарифицируются ×10, но для релизов по тегам это приемлемо
+    needs: windows   # Windows идёт первым и создаёт релиз с latest.yml; иначе mac создаёт релиз раньше — и Windows-апдейтер ловит 404 на latest.yml
+    runs-on: macos-latest   # минуты macOS тарифицируются ×10, но для релизов по тегам это приемлемо
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

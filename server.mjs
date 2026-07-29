@@ -954,11 +954,30 @@ function sendJSON(res, obj, code = 200) {
 // БЕЗ отдельного ANTHROPIC_API_KEY (init.apiKeySource === 'none'). permissionMode:'plan' —
 // read-only: модель читает/планирует, но НЕ применяет правки и не выполняет side-effect bash.
 // SDK грузится лениво, чтобы отказ импорта не ронял остальные эндпоинты.
+// Путь к платформенному бинарю claude, который спавнит SDK. В упакованном app он физически лежит в
+// app.asar.unpacked (spawn не умеет запускать из asar), а SDK по умолчанию строит путь через app.asar →
+// процесс не поднимается и любой control-request падает «ProcessTransport is not ready for writing».
+// Возвращаем реальный (unpacked) путь; в standalone это тот же файл в node_modules — поведение не меняется.
+function claudeExePath() {
+  const plat = process.platform === 'win32' ? 'win32-x64'
+    : process.platform === 'darwin' ? (process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64')
+    : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
+  const bin = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const p = path.join(HERE, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-' + plat, bin);
+  const unpacked = p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');   // spawn читает физический файл, не asar-виртуальный
+  try { if (existsSync(unpacked)) return unpacked; } catch {}
+  try { if (existsSync(p)) return p; } catch {}
+  return null;
+}
 let _sdkQuery = null;
 async function getSdkQuery() {
   if (_sdkQuery) return _sdkQuery;
   const mod = await import('@anthropic-ai/claude-agent-sdk');
-  _sdkQuery = mod.query;
+  const exe = claudeExePath();
+  // Внедряем корректный путь к бинарю во ВСЕ запросы (chat/usage/mcp) — иначе в сборке транспорт не поднимается.
+  _sdkQuery = exe
+    ? (args) => mod.query({ ...args, options: { ...((args && args.options) || {}), pathToClaudeCodeExecutable: exe } })
+    : mod.query;
   return _sdkQuery;
 }
 
