@@ -306,6 +306,11 @@
     /* cu-тег кликабелен → запуск Unity инстанса */
     .sc-cu-run{ cursor:pointer; }
     .sc-cu-run:hover{ border-color:var(--accent); color:var(--accent); }
+    /* кликабельные ссылки (MR/сборки/ветка) — подсветка при наведении, как у cu-тега */
+    .lnk{ cursor:pointer; transition:color .12s ease, border-color .12s ease; }
+    .lnk:hover{ color:var(--accent); }
+    .build-row{ transition:background .12s ease; border-radius:6px; }
+    .build-row:hover{ background:var(--accent-soft); }
     /* MCP: вид расширения Claude Code — список по scope + детальный вид */
     .mcp-group{ margin-bottom:14px; }
     .mcp-grouphd{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); padding:4px 2px; display:flex; align-items:center; gap:6px; }

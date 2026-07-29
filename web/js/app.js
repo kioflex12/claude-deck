@@ -213,8 +213,20 @@ let MCP_STATUS = { available: false, live: false, servers: [] }, mcpLoading = fa
 const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
 let unityInstances = [];         // авто-обнаруженные запущенные Unity-инстансы (из RunState-реестра)
 async function loadUnityInstances(){
-  try { const d = await (await fetch('/api/unity/instances', { cache:'no-store' })).json(); unityInstances = Array.isArray(d.instances) ? d.instances : []; }
-  catch { unityInstances = []; }
+  // Источник истины — реальные процессы (Electron): показывает ВСЕ запущенные редакторы, не только те, где есть
+  // pidfile MCP-for-Unity. Порт бриджа (если есть) добираем из /api/unity/instances по совпадению пути/cu.
+  let procList = null;
+  if (window.deckNative && window.deckNative.unityRunning){
+    try { const r = await window.deckNative.unityRunning(); if (r && Array.isArray(r.instances)) procList = r.instances; } catch {}
+  }
+  let apiList = [];
+  try { const d = await (await fetch('/api/unity/instances', { cache:'no-store' })).json(); apiList = Array.isArray(d.instances) ? d.instances : []; } catch {}
+  if (procList){
+    const portOf = (u) => { const m = apiList.find(a => (a.projectPath && u.projectPath && a.projectPath.toLowerCase() === u.projectPath.toLowerCase()) || (a.cu && u.cu && a.cu === u.cu)); return m ? m.port : null; };
+    unityInstances = procList.map(u => ({ cu: u.cu || '', projectPath: u.projectPath || '', port: portOf(u), status: 'up' }));
+  } else {
+    unityInstances = apiList;
+  }
   if (activeView === 'mcp' && !mcpDetail) renderMcp();   // появились/исчезли → перерисовать секцию
 }
 const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
@@ -354,7 +366,7 @@ function renderMcp(){
   // Авто-обнаруженные Unity-инстансы (появляются/исчезают сами по RunState-реестру) — отдельной секцией сверху.
   const shortP = p => String(p||'').split(/[\\/]/).slice(-2).join('/');
   const unityHtml = unityInstances.length ? `<div class="mcp-group"><div class="mcp-grouphd">Unity инстансы <span class="mcp-gcount">${unityInstances.length}</span></div>`
-    + unityInstances.map(u=>`<div class="unity-row" data-cu="${esc(u.cu||'')}" data-cwd="${esc(u.projectPath||'')}" title="Запустить/сфокусировать Unity: ${esc(u.projectPath||'')}"><span class="mcp-rowname">${esc(u.cu||'unity')} <span class="unity-path">${esc(shortP(u.projectPath))}</span></span><span class="unity-port">:${esc(String(u.port||''))}</span><span class="mcp-badge st-connected">up</span></div>`).join('')
+    + unityInstances.map(u=>`<div class="unity-row" data-cu="${esc(u.cu||'')}" data-cwd="${esc(u.projectPath||'')}" title="Запустить/сфокусировать Unity: ${esc(u.projectPath||'')}"><span class="mcp-rowname">${esc(u.cu||'unity')} <span class="unity-path">${esc(shortP(u.projectPath))}</span></span>${u.port?`<span class="unity-port">:${esc(String(u.port))}</span>`:''}<span class="mcp-badge st-connected">up</span></div>`).join('')
     + `</div>` : '';
   const body = (mcpLoading && !MCP_SERVERS.length) ? unityHtml + `<div class="empty">Опрашиваю MCP…</div>`
     : (items.length ? unityHtml+groups+otherHtml : unityHtml + `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
@@ -437,7 +449,7 @@ function sideHTML(t){
     <div class="sec"><div class="sec-label">Скоуп</div>
       <div class="chips">
         ${t.wo?`<span class="chip">${esc(t.wo)}</span>`:''}
-        ${t.clientCu?`<span class="chip sc-cu">${esc(t.clientCu)}</span>`:''}
+        ${t.clientCu?`<span class="chip sc-cu sc-cu-run" data-cu="${esc(t.clientCu)}" data-cwd="${esc(t.cwd||'')}" title="Открыть/запустить Unity (${esc(t.clientCu)})">${esc(t.clientCu)}</span>`:''}
         ${t.backend?`<span class="chip sc-be">backend</span>`:''}
         ${t.statics?`<span class="chip sc-st">статика</span>`:''}
         ${t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:''}
@@ -509,6 +521,10 @@ async function loadMrs(t){
     `<div class="row-item"><span class="ri-k">merge</span>${aReal(m.web_url, '!'+m.iid+' → '+esc(m.target_branch), 'plain')}${mrPillHTML(m)}</div>`
     + (m.project ? `<div class="rail-hint">${esc(m.project)}</div>` : '')
   ).join('');
+  // база/таргет — авторитетно из MR (куда реально мёржим), а не из шумной истории gitBranch (там мелькает дефолтный preprod)
+  const m0 = d.mrs.find(x => x.state === 'opened') || d.mrs[0];
+  const baseEl = document.querySelector('#sessionSide .sc-base');
+  if (baseEl && m0 && m0.target_branch) baseEl.innerHTML = '⎇ ' + esc(m0.target_branch) + (m0.state === 'merged' ? ' ✓' : '');
 }
 async function hydrateMrs(){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама)
   if (mrHydrating) return; mrHydrating = true;
@@ -1095,7 +1111,13 @@ async function runPrompt(payload){
     if (!(opts && opts.silent)) notifyDone(doneFile, doneTitle, 'Claude закончил');   // done/error → уведомление
     const f = doneFile;
     stopTail();
-    if (isNewRun && currentFile){
+    const wasCompact = payload && typeof payload.text === 'string' && payload.text.trim() === '/compact';
+    if (wasCompact){
+      // /compact завершился — перечитываем сжатый транскрипт и обновляем карточку/окно (иначе висел старый вид до ручного перезахода)
+      appendHTML(cons, '<div class="cx-note">Контекст сжат ✓ — обновляю сессию…</div>');
+      delete SESSION_CACHE[f];
+      setTimeout(() => { if (currentFile === f) openSession(f); }, 500);
+    } else if (isNewRun && currentFile){
       // новая сессия завершилась — .jsonl уже на диске: полноценно открываем её (рейл/сборки/tail)
       setTimeout(() => { if (currentFile === f) openSession(f); }, 700);
     } else {
@@ -1166,6 +1188,7 @@ async function openSession(file){
   document.getElementById('thread').innerHTML = `<div class="empty">Загрузка транскрипта…</div>`;
   document.getElementById('composer').innerHTML = '';
   document.getElementById('sessionSide').innerHTML = '';
+  if (streamingFile === file || SESSIONS.some(s => s.file === file && isWorking(s))) delete SESSION_CACHE[file];   // активная сессия — свежий стейт (active/blocks), чтобы показать «работает» и live-tail при перезаходе
   let t = SESSION_CACHE[file];
   if (!t){
     try {
@@ -1183,6 +1206,7 @@ async function openSession(file){
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
+  document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));   // cu-тег в рейле → Unity (фокус/запуск)
   wireTags();          // секция «Теги»: add/edit/delete
   wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов

@@ -327,6 +327,38 @@ ipcMain.handle('deck:appVersion', () => app.getVersion());
 ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), packaged: app.isPackaged }));
 ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
 // Нативный выбор папки/файла для полей путей в Настройках (opts.file=true → файл, иначе папка).
+// Все ЗАПУЩЕННЫЕ Unity-редакторы из списка процессов (надёжнее pidfile'ов MCP-for-Unity: их пишет не каждый проект).
+ipcMain.handle('deck:unity-running', () => {
+  if (process.platform !== 'win32') return { instances: [] };   // пока только Windows; иначе — фолбэк на /api/unity/instances
+  return new Promise((resolve) => {
+    const ps = [
+      '$ErrorActionPreference="SilentlyContinue"',
+      '$procs=Get-CimInstance Win32_Process -Filter "Name=\'Unity.exe\'"',
+      '$seen=@{};$out=@()',
+      'foreach($p in $procs){',
+      '  $cl="$($p.CommandLine)"; if([string]::IsNullOrEmpty($cl)){continue}',
+      '  $proj=""',
+      '  $m=[regex]::Match($cl,\'-projectPath\\s+"([^"]+)"\'); if(-not $m.Success){$m=[regex]::Match($cl,\'-projectPath\\s+(\\S+)\')}',
+      '  if($m.Success){$proj=$m.Groups[1].Value}',
+      '  if($proj -eq ""){$cm=[regex]::Match($cl,\'([A-Za-z]:[\\\\/][^"]*?client-unity-\\d+)\'); if($cm.Success){$proj=$cm.Groups[1].Value}}',
+      '  if($proj -eq ""){continue}',
+      '  $key=$proj.ToLower().Replace("/","\\")',
+      '  $win=(Get-Process -Id $p.ProcessId).MainWindowHandle; $hasWin=($win -ne $null -and $win -ne 0)',
+      '  if($seen.ContainsKey($key)){ if($hasWin){$seen[$key].hasWindow=$true}; continue }',
+      '  $cu=""; $cm=[regex]::Match($proj,\'client-unity-(\\d+)\'); if($cm.Success){$cu="cu"+$cm.Groups[1].Value}',
+      '  $o=[pscustomobject]@{cu=$cu;projectPath=$proj;hasWindow=$hasWin}; $seen[$key]=$o; $out+=$o',
+      '}',
+      '@($out)|ConvertTo-Json -Compress',
+    ].join('\n');
+    const ps1 = path.join(app.getPath('userData'), 'deck-unity-running.ps1');
+    try { fs.writeFileSync(ps1, ps, 'utf8'); } catch { return resolve({ instances: [] }); }
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { windowsHide: true, timeout: 9000 }, (_err, stdout) => {
+      let arr = [];
+      try { const j = JSON.parse(String(stdout || '').trim() || '[]'); arr = Array.isArray(j) ? j : [j]; } catch {}
+      resolve({ instances: arr.filter((x) => x && x.projectPath) });
+    });
+  });
+});
 ipcMain.handle('deck:pickPath', async (_e, opts) => {
   opts = opts || {};
   try {

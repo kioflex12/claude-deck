@@ -1204,13 +1204,16 @@ async function apiChat(req, res, u) {
   let closed = false;
   const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   activeStreams.set(streamId, ac);                                  // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
-  req.on('close', () => { closed = true; try { ac.abort(); } catch {} activeStreams.delete(streamId); });
+  // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
+  // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
+  req.on('close', () => { closed = true; });
 
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
     if (mode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };            // байпас — ничего не спрашиваем
     if (mode === 'acceptEdits' && EDIT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };  // «Авто-правки»: правки файлов без спроса (в т.ч. вне cwd); Bash/прочее — по-прежнему спрашиваем
+    if (closed) return { behavior: 'deny', message: 'Клиент отключён — правка не применена (переоткройте сессию и повторите)' };  // фоновая доработка без UI: не зависаем на approval
     const set = sessionKey && sessionAllow.get(sessionKey);
     if (set && set.has(toolName)) return { behavior: 'allow', updatedInput: input };
     const id = 'ap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1276,7 +1279,7 @@ async function apiChat(req, res, u) {
       : { type: 'preset', preset: 'claude_code' };
     const q = query({ prompt: sdkPrompt, options });
     for await (const m of q) {
-      if (closed) break;
+      if (closed) continue;   // клиент ушёл — продолжаем вычитывать поток (CLI дорабатывает и пишет .jsonl), но в закрытый res не шлём
       if (m.type === 'system' && m.subtype === 'init') {
         send({ type: 'system', model: m.model, apiKeySource: m.apiKeySource });
         if ((isNew || isFork) && m.session_id) {         // новая/форкнутая сессия → сообщаем клиенту НОВЫЙ файл (переключиться/тейлить)
