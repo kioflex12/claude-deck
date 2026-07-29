@@ -1,6 +1,6 @@
 {
   "name": "claude-deck",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
@@ -55,7 +55,7 @@
     ],
     "extraMetadata": { "main": "electron/main.cjs" },
     "publish": [
-      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck-releases", "private": false, "releaseType": "release" }
+      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck", "private": false, "releaseType": "release" }
     ],
     "win": {
       "target": ["nsis", "portable"],

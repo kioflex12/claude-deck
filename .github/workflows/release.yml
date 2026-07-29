@@ -1,15 +1,17 @@
 name: release
 
-# Собирает десктоп-сборки Deck и публикует их в ПУБЛИЧНЫЙ repo релизов (kioflex12/claude-deck-releases),
-# чтобы любой обновлялся без токена. Исходники остаются здесь, в приватном claude-deck.
-# Публикация в ДРУГОЙ repo → нужен PAT с правом записи в claude-deck-releases в секрете RELEASES_TOKEN
-# (обычный GITHUB_TOKEN имеет права только на текущий repo). Триггер — пуш тега vX.Y.Z (или ручной запуск).
+# Собирает десктоп-сборки Deck и публикует их в GitHub Release ЭТОГО же (публичного) repo,
+# чтобы любой обновлялся без токена. Публикация в текущий repo → хватает штатного GITHUB_TOKEN.
+# Триггер — пуш тега vX.Y.Z (или ручной запуск).
 # Подпись не настроена (unsigned): Windows → SmartScreen, macOS → Gatekeeper (right-click → Open).
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write   # GITHUB_TOKEN создаёт релиз и загружает ассеты в текущий repo
 
 jobs:
   windows:
@@ -24,7 +26,7 @@ jobs:
       - name: Build & publish Windows (nsis + portable)
         run: npx electron-builder --win --publish always
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}   # PAT с contents:write в claude-deck-releases
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # штатный токен: публикуем в текущий repo
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # без сертификата — не пытаться подписывать
 
   macos:
@@ -39,5 +41,5 @@ jobs:
       - name: Build & publish macOS (dmg + zip)
         run: npx electron-builder --mac --publish always
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}   # PAT с contents:write в claude-deck-releases
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # штатный токен: публикуем в текущий repo
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

@@ -9,10 +9,10 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
-// Автообновление читает релизы из ПУБЛИЧНОГО repo claude-deck-releases (только бинарники, без исходников).
-// Публичный → токен не нужен, любой обновляется в один клик. Исходники остаются в приватном claude-deck.
+// Автообновление читает релизы из ПУБЛИЧНОГО repo claude-deck (и исходники, и релизы в одном месте).
+// Публичный → токен не нужен, любой обновляется в один клик.
 const GH_OWNER = 'kioflex12';
-const GH_RELEASES_REPO = 'claude-deck-releases';
+const GH_REPO = 'claude-deck';
 
 // AppUserModelID нужен Windows, иначе нативные уведомления идут без имени/иконки приложения.
 app.setAppUserModelId('com.kioflex.deck');
@@ -250,7 +250,7 @@ function wireUpdater() {
 async function checkForUpdates() {
   if (!app.isPackaged) { sendUpdateStatus('dev'); return { ok: false, reason: 'dev' }; }
   wireUpdater();
-  autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_RELEASES_REPO });   // публичный repo → без токена
+  autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_REPO });   // публичный repo → без токена
   try { await autoUpdater.checkForUpdates(); return { ok: true }; }
   catch (e) { const reason = String((e && e.message) || e); sendUpdateStatus('error', { message: reason }); return { ok: false, reason }; }
 }
