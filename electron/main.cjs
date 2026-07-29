@@ -306,6 +306,8 @@ function wireUpdater() {
   if (updaterWired) return; updaterWired = true;
   autoUpdater.autoDownload = false;            // НЕ качаем сами: загрузка только по кнопке «Обновить» (deck:downloadUpdate)
   autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
+  autoUpdater.disableDifferentialDownload = true;   // качаем ВЕСЬ инсталлятор, не блочный diff: у неподписанной сборки
+                                                    // block-diff давал побитый asar (часть файлов новая, часть старая)
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
   autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
   autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));

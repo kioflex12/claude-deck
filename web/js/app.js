@@ -2,6 +2,7 @@ import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTo
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
+const UI_BUILD = '0.1.21';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
 const jiraUrl = (wo) => JIRA_HOST_CFG ? ("https://" + JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
@@ -1998,7 +1999,8 @@ async function openUpdatesModal(){
   const back = modalBack('updatesBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Обновления</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
-      <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b></div>
+      <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b> · UI build: <b>${esc(UI_BUILD)}</b></div>
+      ${String(info.version||'')!==UI_BUILD?'<div class="um-note" style="color:var(--warn)">⚠ Версия приложения и UI не совпали — обновление встало не полностью. Скачайте и запустите установщик заново (полная переустановка).</div>':''}
       <div class="um-note">Нажмите «Проверить» — если появилась новая версия, покажется кнопка «Обновить» (скачает и установит с перезапуском). Пока не нажмёте «Обновить», ничего не качается.</div>
       <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить</button></div>
       <button class="ns-start" id="updDownload" type="button" style="display:none;width:100%;margin-top:10px">↓ Обновить</button>
