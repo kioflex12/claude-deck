@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync,
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -991,12 +991,29 @@ function claudeExePath() {
   try { if (existsSync(p)) return p; } catch {}
   return null;
 }
+function isPackaged() { const e = getElectron(); return !!(e && e.app && e.app.isPackaged); }
+// Путь к УСТАНОВЛЕННОМУ у пользователя claude (нативный .exe на PATH — тот же, что успешно работает в авторизации).
+// В упакованном app бандл-бинарь SDK лежит в asar.unpacked и порой не спавнится → «ProcessTransport is not ready for
+// writing» (падают chat/usage/mcp). Спавним рабочий CLI пользователя. Из ИСХОДНИКОВ не трогаем (бандл там ок).
+let _claudeCli = undefined;
+function resolveClaudeCli() {
+  if (_claudeCli !== undefined) return _claudeCli;
+  _claudeCli = null;
+  try {
+    const cmd = process.platform === 'win32' ? 'where claude' : 'command -v claude 2>/dev/null || which claude';
+    const out = String(execSync(cmd, { encoding: 'utf8', windowsHide: true, timeout: 6000, shell: process.platform === 'win32' ? undefined : '/bin/sh' }) || '').trim();
+    const lines = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const pick = lines.find((l) => /\.exe$/i.test(l)) || lines.find((l) => !/\.(cmd|bat|ps1)$/i.test(l)) || lines[0];
+    if (pick && existsSync(pick)) _claudeCli = pick;
+  } catch {}
+  return _claudeCli;
+}
 let _sdkQuery = null;
 async function getSdkQuery() {
   if (_sdkQuery) return _sdkQuery;
   const mod = await import('@anthropic-ai/claude-agent-sdk');
-  const exe = claudeExePath();
-  // Внедряем корректный путь к бинарю во ВСЕ запросы (chat/usage/mcp) — иначе в сборке транспорт не поднимается.
+  // В сборке предпочитаем установленный claude пользователя, иначе — распакованный бандл-бинарь. Из исходников — дефолт SDK.
+  const exe = isPackaged() ? (resolveClaudeCli() || claudeExePath()) : null;
   _sdkQuery = exe
     ? (args) => mod.query({ ...args, options: { ...((args && args.options) || {}), pathToClaudeCodeExecutable: exe } })
     : mod.query;
