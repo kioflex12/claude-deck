@@ -1120,6 +1120,11 @@ const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermission
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);               // уровни reasoning-effort SDK
 const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoWrite']);
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);   // правки файлов — авто-принимаются в acceptEdits
+// Мутирующие инструменты, которые managed-тир форсирует в ask. settingSources('project') нужен, чтобы CLI нашёл скиллы
+// проекта (/dev-workflow и пр.) и CLAUDE.md — без него слэш-команды = «Unknown command». Но project несёт и
+// permissions.allow (Bash(*)/Write(*)/mcp__*…), которые пропускали бы мутирующее мимо canUseTool. Managed-ask имеет
+// высший приоритет (deny>ask>allow) и возвращает их под страж; read-only-часть mcp__* отсеет isReadOnlyTool в canUseTool.
+const MANAGED_ASK = ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__*'];
 function isReadOnlyTool(name) {
   if (READ_ONLY_TOOLS.has(name)) return true;
   const bare = String(name || '').replace(/^mcp__.+?__/, '').toLowerCase();   // mcp__server__tool -> tool
@@ -1134,37 +1139,6 @@ function addSessionAllow(sessionId, tool) {
   let set = sessionAllow.get(sessionId);
   if (!set) { set = new Set(); sessionAllow.set(sessionId, set); }
   set.add(tool);
-}
-
-// Project-инструкции для system prompt. settingSources:[] (страж) отключает автозагрузку CLAUDE.md —
-// подгружаем вручную: CLAUDE.md + один уровень @-импортов (конституция-индекс дальше через [[wikilinks]],
-// их не разворачиваем), затем CLAUDE.local.md; впереди — глобальный ~/.claude/CLAUDE.md. Кэш по cwd.
-const _instrCache = new Map();
-function expandImports(text, baseDir) {
-  return String(text).replace(/^﻿/, '').split(/\r?\n/).map((line) => {
-    const m = line.replace(/^﻿/, '').match(/^@(\S+)\s*$/);   // снять BOM — строка-импорт может начинаться с него
-    if (!m) return line;
-    try { return readFileSync(path.resolve(baseDir, m[1]), 'utf8'); } catch { return ''; }   // нет файла — молча
-  }).join('\n');
-}
-function buildProjectInstructions(cwd) {
-  if (!cwd) return '';
-  if (_instrCache.has(cwd)) return _instrCache.get(cwd);
-  const parts = [];
-  const addFile = (file, label) => {
-    let raw;
-    try { raw = readFileSync(file, 'utf8'); } catch { return; }
-    const expanded = expandImports(raw, path.dirname(file));
-    if (expanded.trim()) parts.push('# ' + label + '\n\n' + expanded);
-  };
-  addFile(path.join(os.homedir(), '.claude', 'CLAUDE.md'), 'Глобальные инструкции (~/.claude/CLAUDE.md)');
-  addFile(path.join(cwd, 'CLAUDE.md'), 'Инструкции проекта (CLAUDE.md)');
-  addFile(path.join(cwd, 'CLAUDE.local.md'), 'Локальные инструкции проекта (CLAUDE.local.md)');
-  const out = parts.join('\n\n---\n\n');
-  _instrCache.set(cwd, out);
-  console.log('[projectInstructions] cwd=%s len=%d rootMarker=%s constitutionMarker=%s',
-    cwd, out.length, out.includes('Конституция: сослаться ≠ свериться'), out.includes('Конституция проекта'));
-  return out;
 }
 
 // -------- P4: стадирование вложений. base64-картинки не влезают в query-string EventSource — принимаем
@@ -1336,9 +1310,6 @@ async function apiChat(req, res, u) {
     });
   };
 
-  // settingSources:[] выключает автозагрузку CLAUDE.md — возвращаем project-инструкции руками в system prompt.
-  const projectInstructions = buildProjectInstructions(cwd);
-
   // P4: собираем промт для query(). Текстовые файлы вклеиваем в текст блоком ```имя```; картинки — vision-блоки;
   // при наличии картинок промт — async-iterable из одного user-сообщения с массивом content-блоков.
   const images = attachments.filter((a) => a && a.kind === 'image' && a.dataB64);
@@ -1367,8 +1338,9 @@ async function apiChat(req, res, u) {
       cwd,
       permissionMode: mode,           // P3: default | acceptEdits | plan | bypassPermissions (из &mode=)
       canUseTool,                     // read-only → авто-allow; мутирующее → SSE approval + ожидание решения
-      settingSources: [],             // изоляция: НЕ грузим .claude/settings.json — иначе его allow-правила
-                                      // пропустили бы мутирующие инструменты мимо canUseTool (страж должен быть единственным)
+      settingSources: ['user', 'project', 'local'],   // как настоящая CC-сессия: скиллы (/dev-workflow…), CLAUDE.md, агенты
+      skills: 'all',                                   // явно включаем все найденные скиллы
+      managedSettings: { permissions: { ask: MANAGED_ASK } },   // страж поверх project-allow (см. MANAGED_ASK)
       includePartialMessages: true,   // дельты текста ассистента
       abortController: ac,
       maxTurns: 24,
@@ -1377,10 +1349,7 @@ async function apiChat(req, res, u) {
     if (effort) options.effort = effort;       // выбор reasoning-effort из футера
     if (!isNew) options.resume = sessionId;   // существующая сессия / форк — resume; новая — без resume
     if (isFork) options.forkSession = true;   // форк: resume создаёт НОВЫЙ session_id (контекст исходной), оригинал не трогаем
-    // claude_code-preset + append: дефолтный системный промпт Claude Code ПЛЮС правила проекта (вместо CLAUDE.md-автозагрузки)
-    options.systemPrompt = projectInstructions
-      ? { type: 'preset', preset: 'claude_code', append: projectInstructions }
-      : { type: 'preset', preset: 'claude_code' };
+    options.systemPrompt = { type: 'preset', preset: 'claude_code' };   // CLAUDE.md грузится нативно через settingSources('project')
     const q = query({ prompt: sdkPrompt, options });
     for await (const m of q) {
       if (closed) continue;   // клиент ушёл — продолжаем вычитывать поток (CLI дорабатывает и пишет .jsonl), но в закрытый res не шлём
