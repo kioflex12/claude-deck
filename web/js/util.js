@@ -33,7 +33,7 @@ function mdToHtml(src){
   let s = String(src==null ? '' : src);
   const blocks = [];
   s = s.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (m,lang,code)=>{
-    blocks.push('<pre class="cx-code"><code>'+esc(code.replace(/\n+$/,''))+'</code></pre>');
+    blocks.push('<pre class="cx-code"><button class="code-copy" type="button" title="Копировать">⧉</button><code>'+esc(code.replace(/\n+$/,''))+'</code></pre>');
     return ' B'+(blocks.length-1)+' ';
   });
   s = esc(s);

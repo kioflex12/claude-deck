@@ -1806,6 +1806,17 @@ document.addEventListener('click', (e) => {
   if (external) openExternal(abs);
   else openLocalResource(raw);
 }, true);
+// Копирование блока кода/преформатированного текста по кнопке справа сверху
+document.addEventListener('click', (e) => {
+  const b = e.target && e.target.closest ? e.target.closest('.code-copy') : null;
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const pre = b.closest('pre'); const code = pre && pre.querySelector('code');
+  const text = code ? code.textContent : (pre ? pre.textContent : '');
+  const done = () => { b.classList.add('ok'); const o = b.textContent; b.textContent = '✓'; setTimeout(() => { b.classList.remove('ok'); b.textContent = o; }, 1200); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => toast('Не удалось скопировать'));
+  else { try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done(); } catch { toast('Не удалось скопировать'); } }
+}, true);
 async function loadAuth(){
   try { AUTH = await (await fetch('/api/auth', { cache:'no-store' })).json(); } catch { AUTH = { loggedIn:false, reason:'сеть' }; }
   renderAuth();

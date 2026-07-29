@@ -34,8 +34,13 @@
     .cx-md em{ font-style:italic; }
     .cx-md code.cx-ic{ font-family:var(--mono); font-size:12px; background:var(--surface-2); border:1px solid var(--border); padding:1px 5px; border-radius:5px; }
     .cx-user .cx-md code.cx-ic{ background:var(--surface); }
-    .cx-md pre.cx-code{ margin:9px 0; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:11px 13px; overflow:auto; }
+    .cx-md pre.cx-code{ position:relative; margin:9px 0; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:11px 13px; overflow:auto; }
     .cx-md pre.cx-code code{ font-family:var(--mono); font-size:12px; line-height:1.5; white-space:pre; }
+    /* кнопка копирования блока кода — справа сверху, проявляется при наведении */
+    .cx-md pre.cx-code .code-copy{ position:absolute; top:6px; right:6px; width:26px; height:24px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--border); border-radius:6px; background:var(--bg-elev); color:var(--text-muted); font-size:13px; cursor:pointer; opacity:0; transition:opacity .12s, color .12s, border-color .12s; z-index:2; }
+    .cx-md pre.cx-code:hover .code-copy, .cx-md pre.cx-code .code-copy:focus{ opacity:.9; }
+    .cx-md pre.cx-code .code-copy:hover{ color:var(--accent); border-color:var(--accent); opacity:1; }
+    .cx-md pre.cx-code .code-copy.ok{ color:var(--good); border-color:var(--good); opacity:1; }
 
     .cx-more{ display:inline-block; margin-top:6px; font-family:var(--ui); font-size:12px; color:var(--info); background:none; border:0; padding:0; cursor:pointer; }
     .cx-more:hover{ text-decoration:underline; }
