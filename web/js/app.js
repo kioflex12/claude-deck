@@ -452,13 +452,12 @@ function sideHTML(t){
       <div class="row-item" style="margin-top:10px"><span class="ri-k">стадия</span><span class="ri-v">${stageMeta}</span></div>
     </div>
     <div class="sec"><div class="sec-label">Ветка</div>
-      <div class="row-item"><span class="ri-k">${esc(t.project||'проект')}</span><span id="branchVal">${branchCell}</span>${t.wo?`<span class="ri-badge chip">${esc(t.wo)}</span>`:''}</div>
+      <div class="row-item"><span class="ri-k">${esc(t.project||'проект')}</span><span id="branchVal">${branchCell}</span></div>
       <div class="rail-hint"><code>${esc(t.cwd||'—')}</code></div>
     </div>
     ${t.wo?`<div class="sec"><div class="sec-label">Статус Jira</div><div id="jiraBox"><div class="rail-hint">проверяю Jira…</div></div></div>`:''}
     <div class="sec"><div class="sec-label">Скоуп</div>
       <div class="chips">
-        ${t.wo?`<span class="chip">${esc(t.wo)}</span>`:''}
         ${t.clientCu?`<span class="chip sc-cu sc-cu-run" data-cu="${esc(t.clientCu)}" data-cwd="${esc(t.cwd||'')}" title="Открыть/запустить Unity (${esc(t.clientCu)})">${esc(t.clientCu)}</span>`:''}
         ${t.backend?`<span class="chip sc-be">backend</span>`:''}
         ${t.statics?`<span class="chip sc-st">статика</span>`:''}
@@ -1277,7 +1276,12 @@ async function openSession(file){
     }
   }
   if (currentFile !== file) return;
-  const woChip = t.wo ? `<span class="sb-jira">${jiraUrl(t.wo) ? aReal(jiraUrl(t.wo), 'Jira · '+t.wo, 'plain') : esc('Jira · '+t.wo)}</span>` : '';
+  // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira
+  const woChip = t.wo
+    ? (jiraUrl(t.wo)
+        ? `<a class="sb-wo-tag" href="${jiraUrl(t.wo)}" target="_blank" rel="noopener" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></a>`
+        : `<span class="sb-wo-tag" title="${esc(t.wo)}">${esc(t.wo)}</span>`)
+    : '';
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
