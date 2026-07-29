@@ -1,7 +1,7 @@
 // Deck — Electron main process (Node). Поднимает встроенный localhost-сервер Deck на свободном порту
 // и грузит его в BrowserWindow. Весь UI/логика — переиспользованный server.mjs + index.html.
 'use strict';
-const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notification, screen, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notification, screen, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -9,9 +9,10 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
-// Приватный GitHub-репозиторий с релизами (автообновление). Токен НЕ вшит — вводится пользователем, хранится через safeStorage.
+// Автообновление читает релизы из ПУБЛИЧНОГО repo claude-deck-releases (только бинарники, без исходников).
+// Публичный → токен не нужен, любой обновляется в один клик. Исходники остаются в приватном claude-deck.
 const GH_OWNER = 'kioflex12';
-const GH_REPO = 'claude-deck';
+const GH_RELEASES_REPO = 'claude-deck-releases';
 
 // AppUserModelID нужен Windows, иначе нативные уведомления идут без имени/иконки приложения.
 app.setAppUserModelId('com.kioflex.deck');
@@ -228,20 +229,7 @@ async function openUnity({ cu, cwd } = {}) {
 }
 ipcMain.handle('deck:open-unity', (_e, opts) => openUnity(opts || {}));
 
-// --- автообновление из приватного GitHub Releases по личному токену пользователя (D3) ---
-// Токен шифруется safeStorage (OS keychain/DPAPI) и лежит в userData; в бандл НЕ вшивается.
-const tokenFile = () => path.join(app.getPath('userData'), 'update-token.bin');
-function encryptionOk() { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } }
-function readToken() {
-  try { if (!encryptionOk()) return null; return safeStorage.decryptString(fs.readFileSync(tokenFile())) || null; } catch { return null; }
-}
-function writeToken(pat) {
-  if (!encryptionOk()) throw new Error('OS-хранилище недоступно');
-  fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
-  fs.writeFileSync(tokenFile(), safeStorage.encryptString(String(pat)));
-}
-function clearToken() { try { fs.unlinkSync(tokenFile()); } catch {} }
-function hasToken() { try { return fs.existsSync(tokenFile()); } catch { return false; } }
+// --- автообновление из ПУБЛИЧНОГО GitHub Releases (claude-deck-releases). Токен не нужен: релизы читаются анонимно. ---
 
 function sendUpdateStatus(state, extra) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', { state, ...(extra || {}) });
@@ -258,13 +246,11 @@ function wireUpdater() {
   autoUpdater.on('update-downloaded', (i) => { sendUpdateStatus('downloaded', { version: i && i.version }); promptInstall(i); });
   autoUpdater.on('error', (e) => sendUpdateStatus('error', { message: String((e && e.message) || e) }));
 }
-// Возвращает {ok, reason?}: 'dev' — не упакован; 'no-token' — токен не задан.
+// Возвращает {ok, reason?}: 'dev' — не упакован (обновления только в установленном приложении).
 async function checkForUpdates() {
   if (!app.isPackaged) { sendUpdateStatus('dev'); return { ok: false, reason: 'dev' }; }
-  const pat = readToken();
-  if (!pat) { sendUpdateStatus('no-token'); return { ok: false, reason: 'no-token' }; }
   wireUpdater();
-  autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_REPO, private: true, token: pat });
+  autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_RELEASES_REPO });   // публичный repo → без токена
   try { await autoUpdater.checkForUpdates(); return { ok: true }; }
   catch (e) { const reason = String((e && e.message) || e); sendUpdateStatus('error', { message: reason }); return { ok: false, reason }; }
 }
@@ -294,14 +280,7 @@ function openUpdatesUI() { showWindow(); if (mainWindow) mainWindow.webContents.
 function openPaletteUI() { showWindow(); if (mainWindow) mainWindow.webContents.send('open-palette'); }
 
 ipcMain.handle('deck:appVersion', () => app.getVersion());
-ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), hasToken: hasToken(), encryptionAvailable: encryptionOk(), packaged: app.isPackaged }));
-ipcMain.handle('deck:setUpdateToken', (_e, pat) => {
-  try {
-    const v = pat != null ? String(pat).trim() : '';
-    if (v) { writeToken(v); return { ok: true }; }
-    clearToken(); return { ok: true, cleared: true };
-  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
-});
+ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), packaged: app.isPackaged }));
 ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
 // Установить загруженное обновление и перезапуститься — кнопка «Перезапустить и установить» из окна обновлений.
 ipcMain.handle('deck:quitAndInstall', () => {

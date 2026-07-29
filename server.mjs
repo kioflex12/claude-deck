@@ -90,9 +90,11 @@ function applyConfig() {
   JIRA_EMAIL = c.jiraEmail || process.env.JIRA_EMAIL || '';
   JIRA_TOKEN = readTokenSecure('jira') || process.env.JIRA_TOKEN || '';
   JIRA_ENABLED = !!(JIRA_TOKEN && JIRA_EMAIL && JIRA_HOST);
-  TC_HOST = String(c.teamcityHost || process.env.TEAMCITY_HOST || 'https://teamcity.example.com').replace(/\/$/, '');
+  // Хосты без зашитых дефолтов: задаются в ⚙/«Подтянуть»/env. Пусто → фича молча выключена (плашка сервисов подскажет).
+  // Так публично раздаваемый бинарник не содержит внутренних адресов инфраструктуры.
+  TC_HOST = String(c.teamcityHost || process.env.TEAMCITY_HOST || '').replace(/\/$/, '');
   TC_TOKEN = readTokenSecure('teamcity') || process.env.TEAMCITY_TOKEN || '';
-  GL_HOST = String(c.gitlabHost || process.env.GITLAB_HOST || 'https://gitlab.example.com').replace(/\/$/, '');
+  GL_HOST = String(c.gitlabHost || process.env.GITLAB_HOST || '').replace(/\/$/, '');
   GL_TOKEN = readTokenSecure('gitlab') || process.env.GITLAB_TOKEN || '';
 }
 applyConfig();
@@ -1336,7 +1338,7 @@ const _buildActiveCache = new Map();
 const BUILD_TTL_ACTIVE = 15 * 1000;
 const BUILD_TTL_IDLE = 60 * 1000;
 async function buildActiveFor(branch, wo) {
-  if (!TC_TOKEN) return false;
+  if (!TC_TOKEN || !TC_HOST) return false;
   const key = (branch || '') + '|' + (wo || '');
   const c = _buildActiveCache.get(key);
   if (c && Date.now() - c.ts < (c.v ? BUILD_TTL_ACTIVE : BUILD_TTL_IDLE)) return c.v;
@@ -1354,7 +1356,7 @@ async function buildActiveFor(branch, wo) {
 async function apiBuild(res, u) {
   const branch = u.searchParams.get('branch') || '';
   const wo = u.searchParams.get('wo') || '';
-  if (!TC_TOKEN) { sendJSON(res, { available: false, reason: 'no TEAMCITY_TOKEN in server env', host: TC_HOST }); return; }
+  if (!TC_TOKEN || !TC_HOST) { sendJSON(res, { available: false, reason: 'TeamCity не настроен (host/token)', host: TC_HOST }); return; }
   if (!branch) { sendJSON(res, { available: true, host: TC_HOST, branch, builds: [] }); return; }
   // Базовая ветка без WO не идентифицирует сборки контекста — не дёргаем TeamCity впустую.
   if (isBaseBranch(branch) && !wo) { sendJSON(res, { available: true, host: TC_HOST, branch, builds: [], reason: 'base-branch' }); return; }
@@ -1396,7 +1398,7 @@ function mapMr(m) {
 async function apiMrs(res, u) {
   const branch = u.searchParams.get('branch') || '';
   const wo = u.searchParams.get('wo') || '';
-  if (!GL_TOKEN) { sendJSON(res, { available: false, reason: 'no GITLAB_TOKEN in server env', host: GL_HOST }); return; }
+  if (!GL_TOKEN || !GL_HOST) { sendJSON(res, { available: false, reason: 'GitLab не настроен (host/token)', host: GL_HOST }); return; }
   if (!branch && !wo) { sendJSON(res, { available: true, host: GL_HOST, mrs: [] }); return; }
   const key = branch + '|' + wo;
   const cached = _mrCache.get(key);

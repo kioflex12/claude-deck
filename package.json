@@ -55,7 +55,7 @@
     ],
     "extraMetadata": { "main": "electron/main.cjs" },
     "publish": [
-      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck", "private": true, "releaseType": "release" }
+      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck-releases", "private": false, "releaseType": "release" }
     ],
     "win": {
       "target": ["nsis", "portable"],

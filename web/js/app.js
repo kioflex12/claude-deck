@@ -2,7 +2,8 @@ import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTo
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-const JIRA = "https://example.atlassian.net/browse/";
+let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
+const jiraUrl = (wo) => JIRA_HOST_CFG ? ("https://" + JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
 const CONN = "https://claude.ai/settings/connectors";
@@ -410,7 +411,7 @@ function sideHTML(t){
     ? `<div class="sec"><div class="sec-label">Заметки для возврата</div><ul class="notes">${notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>`
     : '';
 
-  const jiraBtn = t.wo ? `<a class="btn-ghost" href="${JIRA}${t.wo}" target="_blank" rel="noopener"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg> Открыть ${esc(t.wo)} в Jira</a>` : '';
+  const jiraBtn = (t.wo && jiraUrl(t.wo)) ? `<a class="btn-ghost" href="${jiraUrl(t.wo)}" target="_blank" rel="noopener"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg> Открыть ${esc(t.wo)} в Jira</a>` : '';
   const forkBtn = `<button class="btn-ghost" id="forkBtn" type="button" title="Продолжить в новой сессии с контекстом этой"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M6 8v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8M12 14v4"/></svg> Форкнуть сессию</button>`;
   const delBtn = `<button class="btn-ghost btn-danger" id="delSessionBtn" type="button" title="Убрать сессию из Deck (в корзину, восстановимо)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/></svg> Удалить сессию</button>`;
 
@@ -1170,7 +1171,7 @@ async function openSession(file){
     }
   }
   if (currentFile !== file) return;
-  const woChip = t.wo ? `<span class="sb-jira">${aReal(JIRA+t.wo, 'Jira · '+t.wo, 'plain')}</span>` : '';
+  const woChip = t.wo ? `<span class="sb-jira">${jiraUrl(t.wo) ? aReal(jiraUrl(t.wo), 'Jira · '+t.wo, 'plain') : esc('Jira · '+t.wo)}</span>` : '';
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
@@ -1645,13 +1646,14 @@ async function loadServicesGate(){
 }
 function renderServicesGate(cfg){
   if (cfg) SVC_CFG = cfg;
+  if (SVC_CFG && SVC_CFG.jira) JIRA_HOST_CFG = SVC_CFG.jira.host || '';   // хост Jira для ссылок берём из конфига
   const gate = document.getElementById('svcGate'), msg = document.getElementById('svcGateMsg');
   if (!gate || !msg) return;
   const c = SVC_CFG || {};
   const missing = [];
   if (!(c.jira && c.jira.enabled)) missing.push('Jira');
-  if (!(c.teamcity && c.teamcity.tokenSet)) missing.push('TeamCity');
-  if (!(c.gitlab && c.gitlab.tokenSet)) missing.push('GitLab');
+  if (!(c.teamcity && c.teamcity.tokenSet && c.teamcity.host)) missing.push('TeamCity');
+  if (!(c.gitlab && c.gitlab.tokenSet && c.gitlab.host)) missing.push('GitLab');
   if (!missing.length) { gate.hidden = true; return; }
   msg.textContent = 'Не авторизованы сервисы: ' + missing.join(', ') + ' — доска не получит статусы задач, сборки и MR. Подтяните токены или заполните настройки.';
   gate.hidden = false;
@@ -1736,7 +1738,7 @@ function renderUpdateStatus(s){
     available:'Доступна версия '+(s.version||'')+' — загружаю…',
     downloading:'Загрузка… '+(s.percent||0)+'%',
     downloaded:'Обновление '+(s.version||'')+' загружено — нажмите «Перезапустить и установить».',
-    error:'Ошибка обновления: '+(s.message||''), 'no-token':'Добавьте токен для автообновления.', dev:'Обновления доступны только в установленном приложении.',
+    error:'Ошибка обновления: '+(s.message||''), dev:'Обновления доступны только в установленном приложении.',
   };
   UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
 }
@@ -1747,39 +1749,26 @@ async function openUpdatesModal(){
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Обновления</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b></div>
-      <div class="um-note">Автообновление из приватного GitHub-репозитория. Нужен персональный токен GitHub (PAT) со scope <b>repo</b> (чтение релизов). Токен хранится локально в зашифрованном виде (хранилище ОС) и не покидает машину.</div>
-      <label class="ns-lbl">GitHub Personal Access Token</label>
-      <input id="updTok" class="ns-inp" type="password" placeholder="${info.hasToken?'токен сохранён — вставьте новый, чтобы заменить':'ghp_… / github_pat_…'}" autocomplete="off">
-      <div class="ns-actions" style="justify-content:space-between">
-        <div>${info.hasToken?'<button class="btn-ghost" id="updClear" type="button">Удалить токен</button>':''}</div>
-        <div><button class="btn-ghost" id="updSave" type="button">Сохранить</button><button class="ns-start" id="updCheck" type="button">Проверить обновления</button></div>
-      </div>
+      <div class="um-note">Обновление одним кликом из публичного репозитория релизов — без токенов и настройки. Нажмите «Проверить обновления»: новая версия скачается сама, затем появится кнопка перезапуска.</div>
+      <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить обновления</button></div>
       <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
-      ${info.encryptionAvailable?'':'<div class="um-note" style="color:#e79">Безопасное хранилище ОС недоступно — токен сохранить нельзя.</div>'}
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
   back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; UPDATE_INSTALL_EL=null; });
   back.classList.add('open');
-  const tok = back.querySelector('#updTok'); UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall');
-  back.querySelector('#updSave').addEventListener('click', async ()=>{
-    const r = await window.deckNative.setUpdateToken(tok.value.trim());
-    UPDATE_STATUS_EL.textContent = r.ok ? (r.cleared?'Токен удалён.':'Токен сохранён.') : ('Ошибка: '+(r.error||'')); tok.value='';
-    if (r.ok && !r.cleared && info.packaged) doUpdCheck();   // токен появился → сразу проверим
-  });
-  const clr = back.querySelector('#updClear');
-  if (clr) clr.addEventListener('click', async ()=>{ await window.deckNative.setUpdateToken(''); UPDATE_STATUS_EL.textContent='Токен удалён.'; });
+  UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall');
   async function doUpdCheck(){
     UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();
-    if (!r.ok) renderUpdateStatus({ state: r.reason==='no-token'?'no-token' : r.reason==='dev'?'dev' : 'error', message: r.reason });
+    if (!r.ok) renderUpdateStatus({ state: r.reason==='dev'?'dev':'error', message: r.reason });
   }
   back.querySelector('#updCheck').addEventListener('click', doUpdCheck);
   UPDATE_INSTALL_EL.addEventListener('click', async ()=>{
     UPDATE_STATUS_EL.textContent='Перезапуск и установка…';
     try { await window.deckNative.quitAndInstall(); } catch { UPDATE_STATUS_EL.textContent='Не удалось установить — попробуйте ещё раз.'; }
   });
-  if (info.packaged && info.hasToken) doUpdCheck();   // открыли окно с токеном → автопроверка (autoDownload сам скачает → появится кнопка установки)
+  if (info.packaged) doUpdCheck();   // открыли окно → автопроверка (autoDownload сам скачает → появится кнопка установки)
 }
 
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
