@@ -282,6 +282,19 @@ function openPaletteUI() { showWindow(); if (mainWindow) mainWindow.webContents.
 ipcMain.handle('deck:appVersion', () => app.getVersion());
 ipcMain.handle('deck:updateInfo', () => ({ version: app.getVersion(), packaged: app.isPackaged }));
 ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
+// Нативный выбор папки/файла для полей путей в Настройках (opts.file=true → файл, иначе папка).
+ipcMain.handle('deck:pickPath', async (_e, opts) => {
+  opts = opts || {};
+  try {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      properties: [opts.file ? 'openFile' : 'openDirectory'],
+      title: opts.title || (opts.file ? 'Выберите файл' : 'Выберите папку'),
+      defaultPath: opts.current || undefined,
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false };
+    return { ok: true, path: r.filePaths[0] };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
 // Установить загруженное обновление и перезапуститься — кнопка «Перезапустить и установить» из окна обновлений.
 ipcMain.handle('deck:quitAndInstall', () => {
   try { app.isQuitting = true; setImmediate(() => autoUpdater.quitAndInstall()); return { ok: true }; }

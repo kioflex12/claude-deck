@@ -1772,24 +1772,28 @@ async function openUpdatesModal(){
 }
 
 /* ---------- TECH-6: экран настроек (папки + Jira). Токен наружу не отдаётся, только флаг «задан». ---------- */
-// Настройки: строка поля с живым бейджем ✓/✗ (и кнопкой «удалить» у заданных токенов).
-function nsBadge(id, kind, state){
-  const cls = state==='ok'?'fb-ok':state==='new'?'fb-new':'fb-no';
-  const txt = kind==='token' ? (state==='new'?'• новый':state==='ok'?'✓ задан':'✗ не задан')
-                             : (state==='ok'?'✓ заполнено':'✗ пусто');
-  return `<span class="fld-badge ${cls}" id="b_${id}">${txt}</span>`;
-}
-function nsRow(id, label, opt){
-  opt = opt || {};
-  const kind = opt.kind || 'text';               // 'text' | 'token'
-  const set = !!opt.set;                          // токен уже сохранён
-  const state = kind==='token' ? (set?'ok':'no') : ((opt.value && String(opt.value).trim())?'ok':'no');
-  const del = (kind==='token' && set) ? `<button class="fld-del" id="del_${id}" data-svc="${esc(opt.svc||'')}" data-inp="${id}" type="button">удалить</button>` : '';
-  const inpType = kind==='token' ? 'password' : 'text';
-  const val = kind==='token' ? '' : esc(opt.value||'');
-  return `<div class="ns-row">
-    <div class="ns-row-hd"><label class="ns-lbl" for="${id}">${esc(label)}</label>${nsBadge(id,kind,state)}${del}</div>
-    <input id="${id}" class="ns-inp" type="${inpType}" placeholder="${esc(opt.ph||'')}" value="${val}" autocomplete="off" data-kind="${kind}" data-set="${set?'1':'0'}" data-badge="b_${id}">
+// Настройки: рендер строки поля. Типы: text (✓ прямо в инпуте), path (инпут + «Обзор…» + ✓/очистка),
+// token (задан → «✓ задан» + «удалить» ВМЕСТО инпута; не задан → инпут для вставки). state={value}|{set}.
+function nsFieldHtml(f, state, hasNative){
+  state = state || {};
+  if (f.type==='token' && state.set){
+    return `<div class="ns-row" data-fid="${f.id}">
+      <label class="ns-lbl">${esc(f.label)}</label>
+      <div class="ns-tokset"><span class="tok-ok">✓ задан</span><button class="fld-del" type="button" data-fid="${f.id}">удалить</button></div>
+    </div>`;
+  }
+  const filled = f.type!=='token' && !!String(state.value||'').trim();
+  const browse = (f.type==='path' && hasNative) ? `<button class="ns-browse" type="button" data-fid="${f.id}">Обзор…</button>` : '';
+  const clr = (f.type==='path' && filled) ? `<button class="ns-clr" type="button" data-fid="${f.id}" title="Очистить">✕</button>` : '';
+  const inpType = f.type==='token' ? 'password' : 'text';
+  const val = f.type==='token' ? '' : esc(state.value||'');
+  const ro = (f.type==='path' && hasNative) ? ' readonly' : '';   // путь выбираем нативно — руками не редактируем
+  return `<div class="ns-row" data-fid="${f.id}">
+    <label class="ns-lbl" for="${f.id}">${esc(f.label)}</label>
+    <div class="ns-fieldrow">
+      <div class="ns-inpwrap${filled?' filled':''}"><input id="${f.id}" class="ns-inp" type="${inpType}" placeholder="${esc(f.ph||'')}" value="${val}"${ro} autocomplete="off"><span class="inp-ok">✓</span></div>
+      ${browse}${clr}
+    </div>
   </div>`;
 }
 async function openSettingsModal(){
@@ -1798,28 +1802,44 @@ async function openSettingsModal(){
   const tokHint = cfg.electron ? '<div class="um-note">Токены хранятся локально в зашифрованном виде (хранилище ОС). Вставьте значение и нажмите «Сохранить» — заданный токен можно удалить кнопкой рядом.</div>'
     : '<div class="um-note" style="color:#e79">Standalone: токены безопасно сохранить нельзя — задайте их в .env (JIRA_TOKEN / TEAMCITY_TOKEN / GITLAB_TOKEN) рядом с server.mjs. Хосты и Jira email сохранятся.</div>';
   const back = modalBack('settingsBack');
+  const HAS_NATIVE = !!(window.deckNative && window.deckNative.pickPath);   // нативный выбор папки/файла есть только в Electron
+  const st = {   // состояние полей: text/path → {value}; token → {set}
+    setEnv:{value:cfg.secretsEnvPath||''}, setWo:{value:cfg.woStatesDir||''}, setProj:{value:cfg.claudeProjectsDir||''},
+    setJh:{value:jira.host||''}, setJe:{value:jira.email||''}, setJt:{set:!!jira.tokenSet},
+    setTh:{value:tc.host||''}, setTt:{set:!!tc.tokenSet},
+    setGh:{value:gl.host||''}, setGt:{set:!!gl.tokenSet},
+    setCup:{value:unity.clientUnityParent||''}, setUed:{value:unity.editorsDir||''}, setUhub:{value:unity.hubPath||''},
+  };
+  const FIELDS = {
+    setEnv:{id:'setEnv',type:'path',pick:'file',label:'Путь к .env с токенами (для «Подтянуть» в установленном приложении)',ph:'напр. D:/claude-deck/.env'},
+    setWo:{id:'setWo',type:'path',pick:'dir',label:'Папка состояний dev-workflow (WO_STATES_DIR)',ph:'пусто → колонка «Статусы» деградирует'},
+    setProj:{id:'setProj',type:'path',pick:'dir',label:'Папка сессий Claude (CLAUDE_PROJECTS_DIR)',ph:dfl.claudeProjectsDir||'~/.claude/projects'},
+    setJh:{id:'setJh',type:'text',label:'Jira host',ph:'your-org.atlassian.net'},
+    setJe:{id:'setJe',type:'text',label:'Jira email',ph:'you@example.com'},
+    setJt:{id:'setJt',type:'token',svc:'jira',label:'Jira API token',ph:'вставьте API-токен'},
+    setTh:{id:'setTh',type:'text',label:'TeamCity host',ph:dfl.teamcityHost||'https://…'},
+    setTt:{id:'setTt',type:'token',svc:'teamcity',label:'TeamCity token',ph:'вставьте bearer-токен'},
+    setGh:{id:'setGh',type:'text',label:'GitLab host',ph:dfl.gitlabHost||'https://…'},
+    setGt:{id:'setGt',type:'token',svc:'gitlab',label:'GitLab token',ph:'вставьте private-токен'},
+    setCup:{id:'setCup',type:'path',pick:'dir',label:'Папка client-unity копий (родительская)',ph:'напр. D:/wo'},
+    setUed:{id:'setUed',type:'path',pick:'dir',label:'Путь к редакторам Unity / Hub Editor dir (опц.)',ph:'дефолт C:/Program Files/Unity/Hub/Editor'},
+    setUhub:{id:'setUhub',type:'path',pick:'file',label:'Путь к Unity Hub (опц., фолбэк)',ph:'дефолт …/Unity Hub.exe'},
+  };
+  const row = (id)=> nsFieldHtml(FIELDS[id], st[id], HAS_NATIVE);
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="ns-summary" id="setSummary"></div>
-      <div class="ns-actions" style="justify-content:flex-start;margin:2px 0 4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env по указанному пути / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
+      <div class="ns-actions" style="justify-content:flex-start;margin:2px 0 4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
       <div class="um-note" id="setImportRes" style="margin:0 0 8px"></div>
-      ${nsRow('setEnv','Путь к .env с токенами (для «Подтянуть» в установленном приложении)',{value:cfg.secretsEnvPath,ph:'напр. D:/claude-deck/.env — установленное приложение не видит shell/.env само'})}
-      ${nsRow('setWo','Папка состояний dev-workflow (WO_STATES_DIR)',{value:cfg.woStatesDir,ph:'пусто → колонка «Статусы» мягко деградирует'})}
-      ${nsRow('setProj','Папка сессий Claude (CLAUDE_PROJECTS_DIR)',{value:cfg.claudeProjectsDir,ph:dfl.claudeProjectsDir||'~/.claude/projects'})}
+      ${row('setEnv')}${row('setWo')}${row('setProj')}
       <div class="ns-grouphd">Jira — колонка «Статусы» и живые статусы задач</div>
-      ${nsRow('setJh','Jira host',{value:jira.host,ph:'your-org.atlassian.net'})}
-      ${nsRow('setJe','Jira email',{value:jira.email,ph:'you@example.com'})}
-      ${nsRow('setJt','Jira API token',{kind:'token',set:jira.tokenSet,svc:'jira',ph:'вставьте API-токен'})}
+      ${row('setJh')}${row('setJe')}${row('setJt')}
       <div class="ns-grouphd">TeamCity — рейл «Сборки» (статус Android/iOS-билдов)</div>
-      ${nsRow('setTh','TeamCity host',{value:tc.host,ph:dfl.teamcityHost||'https://…'})}
-      ${nsRow('setTt','TeamCity token',{kind:'token',set:tc.tokenSet,svc:'teamcity',ph:'вставьте bearer-токен'})}
+      ${row('setTh')}${row('setTt')}
       <div class="ns-grouphd">GitLab — секция «Merge Requests» (живые MR по ветке)</div>
-      ${nsRow('setGh','GitLab host',{value:gl.host,ph:dfl.gitlabHost||'https://…'})}
-      ${nsRow('setGt','GitLab token',{kind:'token',set:gl.tokenSet,svc:'gitlab',ph:'вставьте private-токен'})}
+      ${row('setGh')}${row('setGt')}
       <div class="ns-grouphd">Unity — запуск инстанса по клику на cu-тег карточки (только в приложении)</div>
-      ${nsRow('setCup','Папка client-unity копий (родительская)',{value:unity.clientUnityParent,ph:'напр. D:/wo — тогда cu2 → D:/wo/client-unity-2 (если не выводится из cwd)'})}
-      ${nsRow('setUed','Путь к редакторам Unity / Unity Hub Editor dir (опц.)',{value:unity.editorsDir,ph:'дефолт C:\\\\Program Files\\\\Unity\\\\Hub\\\\Editor'})}
-      ${nsRow('setUhub','Путь к Unity Hub (опц., фолбэк)',{value:unity.hubPath,ph:'дефолт C:\\\\Program Files\\\\Unity Hub\\\\Unity Hub.exe'})}
+      ${row('setCup')}${row('setUed')}${row('setUhub')}
       ${tokHint}
       ${cfg.electron ? '<div class="um-note" style="margin-top:12px">Приложение — обновление одним кликом (проверить → скачать → перезапустить), без переустановки.</div><div class="ns-actions" style="justify-content:flex-start"><button class="btn-ghost" id="setUpdates" type="button">↻ Обновления и версия</button></div>' : ''}
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="setSave" type="button">Сохранить</button></div>
@@ -1831,32 +1851,42 @@ async function openSettingsModal(){
   back.classList.add('open');
   const upd = back.querySelector('#setUpdates'); if (upd) upd.addEventListener('click', ()=>{ close(); openUpdatesModal(); });
   const status = back.querySelector('#setStatus');
-  // живой бейдж поля: text — заполнено/пусто; token — задан / • новый (введён, сохранится при «Сохранить») / не задан
-  const updBadge = (inp)=>{
-    const b = back.querySelector('#'+inp.dataset.badge); if (!b) return;
-    const kind = inp.dataset.kind, hasVal = !!inp.value.trim(), stored = inp.dataset.set==='1';
-    const state = kind==='token' ? (hasVal?'new':(stored?'ok':'no')) : (hasVal?'ok':'no');
-    b.className = 'fld-badge '+(state==='ok'?'fb-ok':state==='new'?'fb-new':'fb-no');
-    b.textContent = kind==='token' ? (state==='new'?'• новый — сохранится':state==='ok'?'✓ задан':'✗ не задан') : (state==='ok'?'✓ заполнено':'✗ пусто');
-  };
-  const fieldSet = (id)=>{ const i = back.querySelector('#'+id); if (!i) return false; return i.dataset.kind==='token' ? (!!i.value.trim() || i.dataset.set==='1') : !!i.value.trim(); };
+  const rowEl = (id)=> back.querySelector('.ns-row[data-fid="'+id+'"]');
+  const tokVal = (id)=>{ const i = back.querySelector('#'+id); return i ? i.value : ''; };
+  const tokenPresent = (id)=> st[id].set || !!tokVal(id).trim();   // задан ИЛИ введён новый (ещё не сохранён)
   const updSummary = ()=>{
-    const j = fieldSet('setJh')&&fieldSet('setJe')&&fieldSet('setJt');
-    const t = fieldSet('setTh')&&fieldSet('setTt');
-    const g = fieldSet('setGh')&&fieldSet('setGt');
+    const j = !!st.setJh.value.trim() && !!st.setJe.value.trim() && tokenPresent('setJt');
+    const t = !!st.setTh.value.trim() && tokenPresent('setTt');
+    const g = !!st.setGh.value.trim() && tokenPresent('setGt');
     const chip = (ok,l)=>`<span class="sum-chip ${ok?'ok':'no'}">${ok?'✓':'✗'} ${l}</span>`;
     const el = back.querySelector('#setSummary'); if (el) el.innerHTML = chip(j,'Jira')+chip(t,'TeamCity')+chip(g,'GitLab');
   };
-  back.querySelectorAll('.ns-inp').forEach(inp => inp.addEventListener('input', ()=>{ updBadge(inp); updSummary(); }));
-  const wireDel = (b)=> b.addEventListener('click', async ()=>{
-    const svc = b.dataset.svc, inp = back.querySelector('#'+b.dataset.inp);
-    const body = {}; body[svc+'Token'] = '';
-    let r; try { r = await (await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })).json(); } catch { toast('Ошибка удаления'); return; }
-    inp.dataset.set = '0'; inp.value = ''; updBadge(inp); b.remove();
-    if (r && r.config) renderServicesGate(r.config);
-    updSummary(); toast('Токен удалён: '+svc);
-  });
-  back.querySelectorAll('.fld-del').forEach(wireDel);
+  const repaint = (id)=>{ const el = rowEl(id); if (!el) return; el.outerHTML = nsFieldHtml(FIELDS[id], st[id], HAS_NATIVE); wireRow(id); updSummary(); };
+  function wireRow(id){
+    const f = FIELDS[id], el = rowEl(id); if (!el) return;
+    const inp = el.querySelector('.ns-inp');
+    if (inp) inp.addEventListener('input', ()=>{
+      if (f.type!=='token') st[id].value = inp.value;
+      const wrap = inp.closest('.ns-inpwrap'); if (wrap) wrap.classList.toggle('filled', !!inp.value.trim());
+      updSummary();
+    });
+    const br = el.querySelector('.ns-browse');
+    if (br) br.addEventListener('click', async ()=>{
+      let r; try { r = await window.deckNative.pickPath({ file: f.pick==='file', current: st[id].value }); } catch { return; }
+      if (r && r.ok){ st[id].value = r.path; repaint(id); }
+    });
+    const clr = el.querySelector('.ns-clr');
+    if (clr) clr.addEventListener('click', ()=>{ st[id].value = ''; repaint(id); });
+    const del = el.querySelector('.fld-del');
+    if (del) del.addEventListener('click', async ()=>{
+      const body = {}; body[f.svc+'Token'] = '';
+      let r; try { r = await (await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })).json(); } catch { toast('Ошибка удаления'); return; }
+      st[id].set = false; repaint(id);
+      if (r && r.config) renderServicesGate(r.config);
+      toast('Токен удалён: '+f.svc);
+    });
+  }
+  Object.keys(FIELDS).forEach(wireRow);
   updSummary();
   // «Подтянуть токены» — автоимпорт из существующих секретов (.env / ~/.claude.json / MCP-конфиги).
   back.querySelector('#setImport').addEventListener('click', async ()=>{
@@ -1872,11 +1902,11 @@ async function openSettingsModal(){
     box.innerHTML = (any ? 'Импортировано → ' : 'Ничего нового не импортировано → ') + esc(lines.join(' · '));
     if (!any && groups.every(([,k])=> res[k]==='notfound')) box.textContent = 'Источников с токенами не найдено — укажи путь к .env выше и жми снова, либо введи вручную.';
     toast(any ? 'Токены подтянуты' : 'Импорт: нового не найдено');
-    // синхронизируем поля/бейджи со свежим конфигом: токены → «задан» (+ кнопка «удалить»), хосты/пути → значения
+    // синхронизируем поля со свежим конфигом: токены → «✓ задан», хосты/пути → значения (перерисовкой строки)
     const c = r.config || {};
-    const applyTok = (id, svc, on)=>{ const el = back.querySelector('#'+id); if (el && on){ el.dataset.set='1'; el.value=''; updBadge(el); const hd = el.closest('.ns-row').querySelector('.ns-row-hd'); if (hd && !hd.querySelector('.fld-del')){ const b=document.createElement('button'); b.className='fld-del'; b.type='button'; b.textContent='удалить'; b.dataset.svc=svc; b.dataset.inp=id; hd.appendChild(b); wireDel(b);} } };
-    applyTok('setJt','jira', c.jira && c.jira.tokenSet); applyTok('setTt','teamcity', c.teamcity && c.teamcity.tokenSet); applyTok('setGt','gitlab', c.gitlab && c.gitlab.tokenSet);
-    const applyVal = (id, v)=>{ if (v==null) return; const el = back.querySelector('#'+id); if (el){ el.value=v; updBadge(el);} };
+    const applyTok = (id, on)=>{ if (on && !st[id].set){ st[id].set = true; repaint(id); } };
+    applyTok('setJt', c.jira && c.jira.tokenSet); applyTok('setTt', c.teamcity && c.teamcity.tokenSet); applyTok('setGt', c.gitlab && c.gitlab.tokenSet);
+    const applyVal = (id, v)=>{ if (v==null) return; st[id].value = v; repaint(id); };
     applyVal('setWo', c.woStatesDir);
     if (c.jira){ applyVal('setJh', c.jira.host); applyVal('setJe', c.jira.email); }
     if (c.teamcity) applyVal('setTh', c.teamcity.host);
@@ -1889,24 +1919,23 @@ async function openSettingsModal(){
   back.querySelector('#setSave').addEventListener('click', async ()=>{
     status.textContent = 'Сохраняю…';
     const payload = {
-      secretsEnvPath: back.querySelector('#setEnv').value.trim(),
-      woStatesDir: back.querySelector('#setWo').value.trim(),
-      claudeProjectsDir: back.querySelector('#setProj').value.trim(),
-      jiraHost: back.querySelector('#setJh').value.trim(),
-      jiraEmail: back.querySelector('#setJe').value.trim(),
-      teamcityHost: back.querySelector('#setTh').value.trim(),
-      gitlabHost: back.querySelector('#setGh').value.trim(),
-      clientUnityParent: back.querySelector('#setCup').value.trim(),
-      unityEditorsDir: back.querySelector('#setUed').value.trim(),
-      unityHubPath: back.querySelector('#setUhub').value.trim(),
+      secretsEnvPath: st.setEnv.value.trim(),
+      woStatesDir: st.setWo.value.trim(),
+      claudeProjectsDir: st.setProj.value.trim(),
+      jiraHost: st.setJh.value.trim(),
+      jiraEmail: st.setJe.value.trim(),
+      teamcityHost: st.setTh.value.trim(),
+      gitlabHost: st.setGh.value.trim(),
+      clientUnityParent: st.setCup.value.trim(),
+      unityEditorsDir: st.setUed.value.trim(),
+      unityHubPath: st.setUhub.value.trim(),
     };
-    const jt = back.querySelector('#setJt').value; if (jt) payload.jiraToken = jt;
-    const tt = back.querySelector('#setTt').value; if (tt) payload.teamcityToken = tt;
-    const gt = back.querySelector('#setGt').value; if (gt) payload.gitlabToken = gt;
+    const jt = tokVal('setJt'), tt = tokVal('setTt'), gt = tokVal('setGt');
+    if (jt) payload.jiraToken = jt; if (tt) payload.teamcityToken = tt; if (gt) payload.gitlabToken = gt;
     let r; try { r = await (await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json(); } catch { status.textContent = 'Ошибка сохранения.'; return; }
     const standalone = r.tokenResult && Object.values(r.tokenResult).some(x => x && x.ok === false && x.standalone);
-    // сохранённые токены → бейдж «задан», очистить поля ввода
-    [['setJt',jt],['setTt',tt],['setGt',gt]].forEach(([id,v])=>{ if (v && !standalone){ const el = back.querySelector('#'+id); if (el){ el.dataset.set='1'; el.value=''; updBadge(el);} } });
+    // сохранённые токены → «✓ задан» (строка перерисуется в компактный вид с кнопкой «удалить»)
+    [['setJt',jt],['setTt',tt],['setGt',gt]].forEach(([id,v])=>{ if (v && !standalone){ st[id].set = true; repaint(id); } });
     updSummary();
     let msg = 'Сохранено.' + (standalone ? ' Токены не сохранены (standalone) — используйте .env.' : '');
     status.textContent = msg + ' Обновляю доску…';

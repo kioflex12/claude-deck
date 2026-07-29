@@ -811,24 +811,28 @@ function apiMcp(res) {
 async function fetchMcpStatusRaw() {
   const query = await getSdkQuery();
   const ac = new AbortController();
-  async function* openInput() { await new Promise((r) => setTimeout(r, 45000)); }   // держим ввод открытым, turn НЕ шлём
+  async function* openInput() { await new Promise((r) => setTimeout(r, 60000)); }   // держим ввод открытым, turn НЕ шлём
   // БЕЗ settingSources:[] — иначе SDK не загрузит MCP-конфиг и статус будет пустой.
   const q = query({ prompt: openInput(), options: { permissionMode: 'plan', abortController: ac } });
-  (async () => { try { for await (const _ of q) { /* keep-alive drain */ } } catch {} })();
+  // Транспорт считается готовым к control-запросу с ПЕРВОГО сообщения стрима (init). В упакованном app холодный
+  // старт бинаря медленнее — без ожидания mcpServerStatus() падает «ProcessTransport is not ready for writing».
+  let ready = false, streamErr = null;
+  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
   try {
-    // Серверы коннектятся ПОСТЕПЕННО — делаем несколько снимков и мёржим по имени: pending→connected апгрейдим,
-    // наличие tools предпочитаем. Так за ~6с собирается полная картина (иначе первый снимок ловит только быстрые).
+    const t0 = Date.now();
+    while (!ready && !streamErr && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 200));
+    // Серверы коннектятся ПОСТЕПЕННО — несколько снимков, мёрж по имени (pending→connected апгрейдим, tools предпочитаем).
     const merged = new Map();
     let got = false, lastErr;
-    for (const delay of [1800, 1500, 1500, 1500]) {
-      await new Promise((r) => setTimeout(r, delay));
+    for (let i = 0; i < 8; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1200));
       try {
         const s = await q.mcpServerStatus();
         if (Array.isArray(s)) { got = true; for (const srv of s) { const prev = merged.get(srv.name); if (!prev || (prev.status === 'pending' && srv.status !== 'pending') || (srv.tools && !prev.tools)) merged.set(srv.name, srv); } }
       } catch (e) { lastErr = e; }
     }
     if (got) return [...merged.values()];
-    throw lastErr || new Error('mcp status unavailable');
+    throw lastErr || streamErr || new Error('mcp status unavailable');
   } finally { try { ac.abort(); } catch {} }
 }
 function mapMcpServer(s) {
@@ -964,17 +968,21 @@ const USAGE_TTL = 45000;
 async function fetchUsageRaw() {
   const query = await getSdkQuery();
   const ac = new AbortController();
-  async function* openInput() { await new Promise((r) => setTimeout(r, 30000)); }   // держим ввод открытым, НЕ шлём turn
+  async function* openInput() { await new Promise((r) => setTimeout(r, 40000)); }   // держим ввод открытым, НЕ шлём turn
   const q = query({ prompt: openInput(), options: { permissionMode: 'plan', settingSources: [], abortController: ac } });
-  (async () => { try { for await (const _ of q) { /* keep-alive drain */ } } catch {} })();
+  // как и в MCP-пробе: ждём готовности транспорта (первое сообщение стрима), иначе в упакованном app control-request падает
+  let ready = false, streamErr = null;
+  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
   try {
+    const t0 = Date.now();
+    while (!ready && !streamErr && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 200));
     let lastErr;
-    for (const delay of [1800, 2500, 4000]) {   // CLI холодный старт — даём подняться, ретраим control-request
-      await new Promise((r) => setTimeout(r, delay));
+    for (let i = 0; i < 5; i++) {   // CLI холодный старт — ретраим control-request
+      if (i) await new Promise((r) => setTimeout(r, 1500));
       try { return await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(); }
       catch (e) { lastErr = e; }
     }
-    throw lastErr || new Error('usage unavailable');
+    throw lastErr || streamErr || new Error('usage unavailable');
   } finally { try { ac.abort(); } catch {} }
 }
 function mapUsage(u) {

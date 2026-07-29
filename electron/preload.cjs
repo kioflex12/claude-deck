@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('deckNative', {
   isElectron: true,
   openExternal: (url) => ipcRenderer.invoke('deck:openExternal', url),
   openUnity: (opts) => ipcRenderer.invoke('deck:open-unity', opts),   // запуск Unity инстанса по cu-тегу
+  pickPath: (opts) => ipcRenderer.invoke('deck:pickPath', opts),      // нативный выбор папки/файла для полей путей
   notify: (opts) => ipcRenderer.invoke('deck:notify', opts),
   // main шлёт 'open-session' по клику на уведомление → renderer открывает нужную сессию.
   onOpenSession: (cb) => ipcRenderer.on('open-session', (_e, file) => { try { cb(file); } catch {} }),
