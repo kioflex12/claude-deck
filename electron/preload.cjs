@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('deckNative', {
   isElectron: true,
   openExternal: (url) => ipcRenderer.invoke('deck:openExternal', url),
+  openPath: (opts) => ipcRenderer.invoke('deck:openPath', opts),   // открыть локальный файл (ссылки на .md и т.п.)
   openUnity: (opts) => ipcRenderer.invoke('deck:open-unity', opts),   // запуск Unity инстанса по cu-тегу
   pickPath: (opts) => ipcRenderer.invoke('deck:pickPath', opts),      // нативный выбор папки/файла для полей путей
   unityRunning: () => ipcRenderer.invoke('deck:unity-running'),        // все запущенные Unity-редакторы (по процессам)

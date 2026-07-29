@@ -96,8 +96,18 @@ async function start() {
   // Тихая проверка обновлений на старте (в dev / без токена — молча выходит).
   mainWindow.webContents.once('did-finish-load', () => { checkForUpdates(); });
 
-  // Внешние ссылки (Jira/GitLab/OAuth) — в системный браузер, не в новое окно приложения.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  const deckOrigin = (() => { try { return new URL(serverHandle.url).origin; } catch { return ''; } })();
+  const isExternalHttp = (url) => { try { const u = new URL(url); return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin !== deckOrigin; } catch { return false; } };
+  // Внешние ссылки (Jira/GitLab/OAuth) — в системный браузер. ЛОКАЛЬНЫЕ/относительные ссылки резолвятся в deckOrigin/<путь>:
+  // их НЕ открываем как веб (иначе в браузере откроется страница Deck) — рендерер сам обработает их как файлы.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => { if (isExternalHttp(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // Окно Deck не должно уходить с приложения: любой переход на не-корневой URL (клик по ссылке на файл) — отменяем;
+  // внешний http — в браузер. Так тап по ссылке на .md и т.п. больше не подменяет окно страницей Deck.
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (url === serverHandle.url || url === deckOrigin + '/') return;   // сам app / reload — разрешаем
+    e.preventDefault();
+    if (isExternalHttp(url)) shell.openExternal(url);
+  });
 
   mainWindow.on('resize', () => { captureBounds(); saveStateDebounced(); });
   mainWindow.on('move', () => { captureBounds(); saveStateDebounced(); });
@@ -171,6 +181,19 @@ ipcMain.handle('deck:notify', (_e, opts) => {
 
 // Мост для UI: открыть URL в системном браузере (для OAuth-логина Claude).
 ipcMain.handle('deck:openExternal', (_e, url) => { if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url); return true; });
+// Открыть ЛОКАЛЬНЫЙ ресурс (клик по ссылке на .md и т.п. в выводе). Относительный путь резолвим от cwd сессии,
+// снимаем :line-суффикс. Открывается в дефолтном приложении ОС (shell.openPath), а не в окне Deck.
+ipcMain.handle('deck:openPath', async (_e, opts) => {
+  opts = opts || {};
+  let p = String(opts.path || '').trim(); const cwd = String(opts.cwd || '');
+  if (!p) return { ok: false, error: 'empty' };
+  p = p.replace(/:\d+(?::\d+)?$/, '');                                   // file.md:42[:col] → file.md
+  const isAbs = /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(p);
+  let full = isAbs ? p : (cwd ? path.join(cwd, p) : p);
+  try { if (!fs.existsSync(full)) return { ok: false, error: 'not found: ' + full }; } catch {}
+  try { const err = await shell.openPath(full); return { ok: !err, error: err || '' }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
 
 // --- Запуск Unity инстанса по клику на cu-тег карточки. Пути машинно-зависимые → из cwd/настроек, не хардкод. ---
 function readDeckConfig() { try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'deck-config.json'), 'utf8')) || {}; } catch { return {}; } }

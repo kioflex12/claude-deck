@@ -798,9 +798,8 @@ function renderComposer(t){
           <span class="cx-queue" id="queueInd" hidden></span>
         </div>
         <div class="cx-foot-r">
-          <select class="cx-sel" id="modelSel" title="Модель"></select>
-          <select class="cx-sel" id="effortSel" title="Reasoning effort"></select>
-          <button class="cx-mode" id="modeBtn" type="button" title="Режим разрешений (Shift+Tab)">${ICON.bolt}<span id="modeLabel">Обычный</span></button>
+          <div class="cx-modepop" id="modePop" hidden></div>
+          <button class="cx-mode" id="modeBtn" type="button" title="Режим / модель / effort">${ICON.bolt}<span id="modeLabel">Обычный</span></button>
           <button class="send-btn" id="sendBtn" type="button" disabled>${ICON.send}</button>
         </div>
       </div>
@@ -829,7 +828,7 @@ function renderComposer(t){
     if (streaming){ enqueuePrompt(payload); toast('/compact добавлен в очередь'); return; }
     toast('Сжимаю контекст сессии…'); runPrompt(payload);
   });
-  document.getElementById('modeBtn').addEventListener('click', cycleMode);
+  document.getElementById('modeBtn').addEventListener('click', toggleModePop);   // поповер: режим + модель + effort-ползунок
   // P4: вложения — пикер, drag-drop, вставка скриншота
   const fileInput = document.getElementById('attachInput');
   document.getElementById('attachBtn').addEventListener('click', () => fileInput.click());
@@ -844,8 +843,7 @@ function renderComposer(t){
     if (files.length){ e.preventDefault(); addAttachments(files); }   // скриншот из буфера — главный сценарий
   });
   sessionMode = 'default'; paintMode();   // per-session: на открытии — обычный режим
-  if (MODELS.length) wireModelEffort();   // селекты модели/эффорта — из /api/models (подтягиваются)
-  else loadModelsCatalog().then(()=>{ if (document.getElementById('modelSel')) wireModelEffort(); });
+  if (!MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
   attachDraft.length = 0; renderAttachDraft();
   setTimeout(()=>ta.focus(), 60);
 }
@@ -939,33 +937,53 @@ function paintMode(){
   const btn = document.getElementById('modeBtn'); if (!btn) return;
   const lbl = btn.querySelector('#modeLabel'); if (lbl) lbl.textContent = MODE_LABEL[sessionMode] || 'Обычный';
   btn.classList.toggle('cx-mode-bypass', sessionMode === 'bypassPermissions');   // байпас — предупреждающе (красный)
-  btn.title = 'Режим разрешений: ' + (MODE_LABEL[sessionMode] || 'Обычный') + ' (Shift+Tab)';
+  const extra = [];
+  const mm = MODELS.find(m=>m.value===sessionModel); if (sessionModel && mm) extra.push(mm.label);
+  const ee = EFFORTS.find(e=>e.value===sessionEffort); if (sessionEffort && ee) extra.push(ee.label.replace(/^Effort:\s*/,''));
+  btn.title = 'Режим: ' + (MODE_LABEL[sessionMode] || 'Обычный') + (extra.length?' · '+extra.join(' · '):'') + ' — клик для настройки (⇧+Tab — режим)';
 }
-// селекты модели/эффорта в футере — значения ПОДТЯГИВАЮТСЯ из /api/models (supportedModels), не хардкод
-function fillSel(sel, items, cur){
-  if (!sel) return;
-  sel.innerHTML = (items||[]).map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}>${esc(o.label)}</option>`).join('');
-  if (![...sel.options].some(o=>o.value===cur)) sel.selectedIndex = 0;   // текущего нет в списке → «по умолчанию»
-}
+// доступные effort-уровни для модели (из /api/models, не хардкод); всегда с «по умолчанию» первым
 function effortsForModel(mv){
   const m = MODELS.find(x=>x.value===mv);
   const allowed = m && Array.isArray(m.efforts) ? m.efforts : null;
-  if (!allowed || !allowed.length) return EFFORTS.filter(e=>!e.value);   // модель без эффортов → только «по умолчанию»
+  if (!allowed || !allowed.length) return EFFORTS.filter(e=>!e.value);
   return EFFORTS.filter(e=>!e.value || allowed.includes(e.value));
 }
-function wireModelEffort(){
-  const ms = document.getElementById('modelSel'), es = document.getElementById('effortSel');
-  fillSel(ms, MODELS, sessionModel);
-  if (ms && ms.value !== sessionModel){ sessionModel = ms.value; localStorage.setItem('deckModel', sessionModel); }
-  fillSel(es, effortsForModel(sessionModel), sessionEffort);
-  if (es && es.value !== sessionEffort){ sessionEffort = es.value; localStorage.setItem('deckEffort', sessionEffort); }
-  if (ms) ms.onchange = ()=>{ sessionModel = ms.value; localStorage.setItem('deckModel', sessionModel); fillSel(es, effortsForModel(sessionModel), sessionEffort); if (es && es.value!==sessionEffort){ sessionEffort=es.value; localStorage.setItem('deckEffort', sessionEffort); } };
-  if (es) es.onchange = ()=>{ sessionEffort = es.value; localStorage.setItem('deckEffort', sessionEffort); };
+// Поповер «Режимы» (как в расширении): список режимов + выбор модели + ползунок effort. Значения подтягиваются.
+const MODE_META = {
+  default:           { i:'✋',  d:'Спрашивает подтверждение перед каждой правкой' },
+  acceptEdits:       { i:'</>', d:'Правит файлы без спроса; Bash и прочее — спрашивает' },
+  plan:              { i:'▤',  d:'Сначала исследует и предлагает план, без правок' },
+  bypassPermissions: { i:'⚡',  d:'Разрешает все действия без спроса' },
+};
+function openModePop(){
+  const pop = document.getElementById('modePop'); if (!pop) return;
+  const modeRows = MODE_ORDER.map(m=>{ const me=MODE_META[m]||{}; const sel=m===sessionMode; return `<div class="mp-mode${sel?' sel':''}" data-m="${m}"><span class="mp-ic">${me.i||''}</span><span class="mp-txt"><b>${esc(MODE_LABEL[m]||m)}</b><span>${esc(me.d||'')}</span></span>${sel?'<span class="mp-check">✓</span>':''}</div>`; }).join('');
+  const models = MODELS.length?MODELS:[{value:'',label:'по умолчанию'}];
+  const modelOpts = models.map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
+  const effs = effortsForModel(sessionModel);
+  let ei = effs.findIndex(e=>e.value===sessionEffort); if (ei<0){ ei=0; sessionEffort=effs[0].value; }
+  pop.innerHTML = `<div class="mp-hd">Режимы<span class="mp-hint">⇧+Tab</span></div>
+    <div class="mp-row"><span class="mp-k">Модель</span><select class="cx-sel" id="mpModel">${modelOpts}</select></div>
+    <div class="mp-modes">${modeRows}</div>
+    <div class="mp-eff"><div class="mp-eff-top"><span>Effort</span><b id="mpEffLbl">${esc(effs[ei].label.replace(/^Effort:\s*/,''))}</b></div>
+      <input type="range" class="mp-slider" id="mpEff" min="0" max="${Math.max(0,effs.length-1)}" step="1" value="${ei}"${effs.length<=1?' disabled':''}></div>`;
+  pop.hidden = false;
+  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ sessionMode=r.dataset.m; paintMode(); openModePop(); }));
+  const ms = pop.querySelector('#mpModel');
+  if (ms) ms.onchange = ()=>{ sessionModel=ms.value; localStorage.setItem('deckModel',sessionModel); openModePop(); paintMode(); };
+  const es = pop.querySelector('#mpEff'), el = pop.querySelector('#mpEffLbl');
+  if (es) es.oninput = ()=>{ const arr=effortsForModel(sessionModel); const v=arr[+es.value]||arr[0]; sessionEffort=v.value; localStorage.setItem('deckEffort',sessionEffort); if (el) el.textContent=v.label.replace(/^Effort:\s*/,''); paintMode(); };
+  // клик вне поповера — закрыть
+  const off = (e)=>{ const p=document.getElementById('modePop'); if (!p||p.hidden){ document.removeEventListener('mousedown',off,true); return; } if (!p.contains(e.target) && !(e.target.closest && e.target.closest('#modeBtn'))){ p.hidden=true; document.removeEventListener('mousedown',off,true); } };
+  document.addEventListener('mousedown', off, true);
 }
+function toggleModePop(){ const pop=document.getElementById('modePop'); if (!pop) return; if (pop.hidden) openModePop(); else pop.hidden=true; }
 function cycleMode(){
   const i = MODE_ORDER.indexOf(sessionMode);
   sessionMode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
   paintMode();
+  const pop = document.getElementById('modePop'); if (pop && !pop.hidden) openModePop();   // поповер открыт → отразить смену
 }
 /* ---------- P4: вложения к промту ---------- */
 const TEXT_EXT = /\.(txt|md|json|ya?ml|csv|log|cs|js|mjs|ts|tsx|jsx|html|css|py|sh|xml|sql|toml|ini|conf|cfg|gradle|kt|java|go|rs|rb|php|c|h|cpp|hpp)$/i;
@@ -1766,6 +1784,28 @@ function openExternal(url){   // системный браузер: в Electron 
   if (window.deckNative && window.deckNative.openExternal) window.deckNative.openExternal(url);
   else window.open(url, '_blank', 'noopener');
 }
+// Локальный ресурс из вывода (ссылка на .md и т.п.): открыть файл в дефолтном приложении ОС, НЕ навигировать окно Deck.
+function openLocalResource(rawHref){
+  const cwd = (currentFile && SESSION_CACHE[currentFile] && SESSION_CACHE[currentFile].cwd) || '';
+  let p = rawHref;
+  try { const u = new URL(rawHref, location.origin); if (u.origin === location.origin) p = decodeURIComponent(u.pathname).replace(/^\//, ''); } catch {}
+  if (window.deckNative && window.deckNative.openPath) window.deckNative.openPath({ path: p, cwd }).then(r => { if (!r || !r.ok) toast('Не удалось открыть: ' + p + (r && r.error ? ' ('+r.error+')' : '')); });
+  else toast('Локальный ресурс: ' + p + (cwd ? ' (в ' + cwd + ')' : ''));
+}
+// Единый перехват кликов по ссылкам (вывод, рейл, везде): внешние http(s) → системный браузер; локальные/относительные
+// (резолвятся в origin Deck) → открыть как файл, а не как страницу Deck. Capture — до дефолтной навигации/target=_blank.
+document.addEventListener('click', (e) => {
+  const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+  if (!a) return;
+  const raw = a.getAttribute('href') || '';
+  if (!raw || raw === '#' || raw[0] === '#') return;               // якорь/заглушка — свои обработчики
+  if (/^(mailto:|tel:)/i.test(raw)) return;                        // почта/тел — системе
+  const abs = a.href || '';
+  const external = /^https?:\/\//i.test(raw) && !abs.startsWith(location.origin + '/') && abs !== location.origin;
+  e.preventDefault();
+  if (external) openExternal(abs);
+  else openLocalResource(raw);
+}, true);
 async function loadAuth(){
   try { AUTH = await (await fetch('/api/auth', { cache:'no-store' })).json(); } catch { AUTH = { loggedIn:false, reason:'сеть' }; }
   renderAuth();
