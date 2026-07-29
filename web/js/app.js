@@ -1336,15 +1336,15 @@ async function tailTick(file){
   if (streaming && streamingFile === file) return;   // Deck-стрим сам рендерит — не мешаем
   let d; try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(file) + '&after=' + tailCount, { cache:'no-store' }); d = await r.json(); } catch { return; }
   if (currentFile !== file || d.error) return;
+  const stick = isNearBottom();            // фиксируем позицию ДО добавления блоков/индикатора
   if (Array.isArray(d.blocks) && d.blocks.length){
     const cons = ensureConsole();
-    const stick = isNearBottom();
     const ind = document.getElementById('tailInd');
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
     if (typeof d.count === 'number') tailCount = d.count;
-    if (stick) scrollBottom();
   } else if (typeof d.count === 'number') { tailCount = d.count; }
-  updateTailIndicator(!!d.working);        // «работает» пока файл пишется (< 20с)
+  updateTailIndicator(!!d.working);        // «работает» пока файл пишется (< 20с) — индикатор в самом низу
+  if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора (иначе он прячется под фолдом)
   if (!d.active) stopTail();                // сессия остыла — прекращаем tail
 }
 
