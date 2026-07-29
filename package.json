@@ -1,6 +1,6 @@
 {
   "name": "claude-deck",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
@@ -29,7 +29,9 @@
     "appId": "com.kioflex.deck",
     "productName": "Deck",
     "copyright": "Copyright © 2026 kioflex",
-    "directories": { "output": "dist" },
+    "directories": {
+      "output": "dist"
+    },
     "files": [
       "electron/**",
       "server.mjs",
@@ -53,12 +55,23 @@
       "node_modules/ms/**",
       "node_modules/sax/**"
     ],
-    "extraMetadata": { "main": "electron/main.cjs" },
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
     "publish": [
-      { "provider": "github", "owner": "kioflex12", "repo": "claude-deck", "private": false, "releaseType": "release" }
+      {
+        "provider": "github",
+        "owner": "kioflex12",
+        "repo": "claude-deck",
+        "private": false,
+        "releaseType": "release"
+      }
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "electron/icon.png"
     },
     "nsis": {
@@ -71,7 +84,10 @@
       "uninstallDisplayName": "Deck ${version}"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.developer-tools"
     }
   }
