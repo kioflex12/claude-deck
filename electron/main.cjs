@@ -6,7 +6,7 @@ const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 // Автообновление читает релизы из ПУБЛИЧНОГО repo claude-deck (и исходники, и релизы в одном месте).
@@ -198,11 +198,55 @@ function unityEditorCandidates(version, cfg) {
   return dirs.filter(Boolean).map((d) => path.join(d, version || '', ...tail));
 }
 function launchDetached(cmd, args) { spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref(); }
+// Фокус уже открытого редактора. Сопоставляем по ИМЕНИ проекта (заголовок окна Unity = "<Имя проекта> - <Сцена> - …"),
+// без хардкода схемы client-unity-N: name = имя папки резолвнутого проекта. cuNum — запасной матч для WO, если папка не резолвится.
+function focusUnity(name, cuNum) {
+  if (process.platform === 'win32') return focusUnityWin(name, cuNum);
+  if (process.platform === 'darwin') return focusUnityMac(name, cuNum);
+  return Promise.resolve('NOTRUNNING');
+}
+function focusUnityWin(name, cuNum) {
+  return new Promise((resolve) => {
+    const ps = [
+      'param([string]$name="",[string]$cuNum="")',
+      '$ErrorActionPreference="SilentlyContinue"',
+      'Add-Type @"',
+      'using System;using System.Runtime.InteropServices;',
+      'public class DeckWin{[DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);[DllImport("user32.dll")]public static extern bool ShowWindowAsync(IntPtr h,int n);}',
+      '"@',
+      '$cand=Get-Process -Name Unity -ErrorAction SilentlyContinue|Where-Object{$_.MainWindowHandle -ne 0}',
+      '$match=$null',
+      'if($name -ne ""){foreach($p in $cand){$t="$($p.MainWindowTitle)".ToLower();if($t.StartsWith($name.ToLower()+" ") -or $t -eq $name.ToLower()){$match=$p;break}}}',
+      'if($match -eq $null -and $cuNum -ne ""){foreach($p in $cand){if("$($p.MainWindowTitle)" -match "^client-unity-$cuNum(?!\\d)"){$match=$p;break}}}',
+      'if($match -ne $null){[DeckWin]::ShowWindowAsync($match.MainWindowHandle,9)|Out-Null;[DeckWin]::SetForegroundWindow($match.MainWindowHandle)|Out-Null;Write-Output "FOCUSED"}else{Write-Output "NOTRUNNING"}',
+    ].join('\n');
+    const ps1 = path.join(app.getPath('userData'), 'deck-focus-unity.ps1');
+    try { fs.writeFileSync(ps1, ps, 'utf8'); } catch { return resolve('ERR'); }
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-name', name || '', '-cuNum', cuNum || ''],
+      { windowsHide: true, timeout: 9000 },
+      (err, stdout) => resolve(/FOCUSED/.test(String(stdout || '')) ? 'FOCUSED' : (err ? 'ERR' : 'NOTRUNNING')));
+  });
+}
+function focusUnityMac(name) {
+  return new Promise((resolve) => {
+    if (!name) return resolve('NOTRUNNING');
+    execFile('/bin/sh', ['-c', 'ps -ax -o command | grep -i "Unity" | grep -iF "' + name.replace(/"/g, '') + '" | grep -v grep | head -1'],
+      { timeout: 6000 }, (_e, out) => {
+        if (!String(out || '').trim()) return resolve('NOTRUNNING');
+        execFile('osascript', ['-e', 'tell application "Unity" to activate'], { timeout: 5000 }, () => resolve('FOCUSED'));
+      });
+  });
+}
 async function openUnity({ cu, cwd } = {}) {
   try {
     const cfg = readDeckConfig();
     const dir = resolveUnityProject(cu, cwd, cfg);
-    if (!dir) return { ok: false, error: 'Не удалось определить папку проекта — укажи «Папка client-unity копий» в ⚙ Настройки' };
+    const cuNum = (String(cu || '').match(/\d+/) || [''])[0];
+    const projName = dir ? path.basename(dir) : '';
+    // 1) редактор уже открыт → просто вывести окно на передний план (по имени проекта; cuNum — запасной матч для WO)
+    try { if ((await focusUnity(projName, cuNum)) === 'FOCUSED') return { ok: true, focused: true }; } catch {}
+    // 2) не открыт → запустить (для запуска нужна папка проекта)
+    if (!dir) return { ok: false, error: 'Редактор не запущен, и папка проекта не определена — укажи «Папка client-unity копий» в ⚙ Настройки' };
     const verFile = path.join(dir, 'ProjectSettings', 'ProjectVersion.txt');
     if (!fs.existsSync(verFile)) return { ok: false, error: 'Не Unity-проект: ' + dir + ' — проверь путь в ⚙ Настройки' };
     let version = '';

@@ -46,6 +46,7 @@ let buildTimer = null;                      // live-опрос сборок Team
 let streamingFile = null;                   // файл сессии, которую Deck стримит сейчас (оверрайд working=true)
 let notifyEnabled = false;                  // браузерные уведомления о завершении включены
 let prevWorkingFiles = new Set();           // «работающие» сессии на прошлый опрос (детект working→idle)
+let pendingDone = new Set();                 // простаивают 1 опрос — уведомим только если подтвердится на следующем (гасим ложное «готово» на долгом tool-call)
 const notifiedDone = new Set();             // файлы, за чей текущий рабочий эпизод уже уведомили (дедуп)
 let pollTimer = null, polling = false;      // живой поллинг доски ~7с
 let tailTimer = null, tailCount = 0;        // live-tail открытой активной сессии (курсор = число блоков)
@@ -171,10 +172,10 @@ function renderBoard(animate){
 }
 async function launchUnity(cu, cwd){
   if (!(window.deckNative && window.deckNative.openUnity)){ toast('Запуск Unity доступен только в приложении'); return; }
-  toast('Запускаю Unity ' + cu + '…');
+  toast('Unity ' + cu + '…');
   try {
     const r = await window.deckNative.openUnity({ cu, cwd });
-    if (r && r.ok) toast('Unity ' + cu + ' запускается' + (r.launched ? ' · ' + r.launched : ''));
+    if (r && r.ok) toast(r.focused ? ('Unity ' + cu + ' — окно на передний план') : ('Unity ' + cu + ' запускается' + (r.launched ? ' · ' + r.launched : '')));
     else toast('Unity не запущен: ' + ((r && r.error) || 'неизвестная ошибка'));
   } catch (e) { toast('Ошибка запуска Unity: ' + ((e && e.message) || e)); }
 }
@@ -1380,8 +1381,15 @@ async function pollSessions(){
       if (Array.isArray(data.sessions)) SESSIONS = data.sessions;   // обновляем данные НА МЕСТЕ, приложение не пересоздаём
       seedJiraFromSessions();
       const nowSet = workingSet();
-      for (const file of nowSet){ if (!prevWorkingFiles.has(file)) notifiedDone.delete(file); }   // снова «работает» → перевзвести дедуп
-      for (const file of prevWorkingFiles){ if (!nowSet.has(file) && SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file)); }   // working→idle = завершила
+      // Уведомляем только при ПОДТВЕРЖДЁННОМ завершении: сессия должна простаивать два опроса подряд (иначе долгий
+      // tool-call, который не пишет .jsonl >20с, ложно выглядит «готово»). isWorking учитывает и фоновых сабагентов,
+      // так что «ничего не работает» = ни генерации, ни bgRunning. Форграунд-финиш (finish()) шлёт сразу — там конец точный.
+      for (const file of nowSet){ notifiedDone.delete(file); pendingDone.delete(file); }   // снова «работает» → сброс дедупа и кандидата
+      for (const file of [...pendingDone]){                                                 // простаивал прошлый опрос и всё ещё простаивает → подтверждено
+        if (SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file));
+        pendingDone.delete(file);
+      }
+      for (const file of prevWorkingFiles){ if (!nowSet.has(file)) pendingDone.add(file); }  // только что ушёл в простой → кандидат, проверим на следующем опросе
       prevWorkingFiles = nowSet;
     }
   } catch { polling = false; return; }
