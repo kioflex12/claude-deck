@@ -2,7 +2,7 @@ import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTo
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-const UI_BUILD = '0.1.24';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+const UI_BUILD = '0.1.25';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 let PROJECTS = [], ACTIVE_PROJECT = '';        // проекты (папки) + активный id; доску скоупит сервер по активному
 const activeProjectPath = () => { const p = PROJECTS.find(x => x.id === ACTIVE_PROJECT); return p ? p.path : ''; };
 let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
@@ -449,7 +449,7 @@ function sideHTML(t){
         <div class="stat"><div class="k">модель</div><div class="v">${esc(t.model)}</div></div>
         <div class="stat"><div class="k">сообщений</div><div class="v">${t.count}</div></div>
         <div class="stat"><div class="k">активность</div><div class="v">${timeAgo(t.mtime)}</div></div>
-        <div class="stat"><div class="k">окно</div><div class="v">${kTok(t.winTokens)} / 1M</div></div>
+        <div class="stat"><div class="k">окно</div><div class="v stat-win">${kTok(t.winTokens)} / 1M</div></div>
       </div>
       <div class="ctx-row"><span class="k-line">контекст</span><span class="ctxbar"><i style="width:${p}%;background:${ctxColor(t.ctxPct)}"></i></span><span class="ctx-pct" style="color:${ctxColor(t.ctxPct)}">${p}%</span></div>
       <div class="row-item" style="margin-top:10px"><span class="ri-k">стадия</span><span class="ri-v">${stageMeta}</span></div>
@@ -1164,6 +1164,7 @@ async function runPrompt(payload){
     try { es.close(); } catch {} currentES = null; liveFinish = null; currentStreamId = null;
     clearLive(); finalizeThink();
     runEl.remove();                      // снять индикатор «работает» из чата
+    if (opts && typeof opts.ctxPct === 'number') updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
     const doneFile = streamingFile || currentFile;
     const doneTitle = (SESSION_CACHE[currentFile] && SESSION_CACHE[currentFile].title) || titleOf(currentFile) || '';
@@ -1243,7 +1244,7 @@ async function runPrompt(payload){
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
-      finish(d.isError ? 'Завершено с ошибкой' : null, { done:true });
+      finish(d.isError ? 'Завершено с ошибкой' : null, { done:true, ctxPct:d.ctxPct, winTokens:d.winTokens });
     }
     // 'system' — в UI не показываем
   };
@@ -1310,7 +1311,8 @@ function renderThread(t){
   stopTail();
   if (t.active) startTail(t.file);         // сессия свежая → тянем новые блоки вживую
 }
-function stopTail(){ if (tailTimer){ clearInterval(tailTimer); tailTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
+let tailCountTimer = null;   // локальный тикающий счётчик секунд в индикаторе тейла
+function stopTail(){ if (tailTimer){ clearInterval(tailTimer); tailTimer = null; } if (tailCountTimer){ clearInterval(tailCountTimer); tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
 function startTail(file){ stopTail(); tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
 // Живой рефреш рейла: по мере работы над контекстом ветка/MR/сборки/Jira меняются — периодически перечитываем
 // состояние сессии и обновляем секции (MR/сборки/Jira/ветка) на месте, не трогая теги/скролл/композер.
@@ -1328,13 +1330,35 @@ function startRailRefresh(file){
     if (!t2.active && !streaming){ stopRailRefresh(); }   // сессия затихла и Deck не стримит → рефреш больше не нужен
   }, 25000);
 }
-function updateTailIndicator(on){
+// Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
+// РЕАЛЬНУЮ длительность хода, а не с момента перезахода; нет — фолбэк на локальное время появления индикатора.
+function updateTailIndicator(on, turnStartTs){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');
   if (on){
-    if (!ind) appendHTML(cons, '<div class="cx-run-chat" id="tailInd"><span class="cx-spin"></span><span>✻ Claude работает…</span></div>');
+    if (!ind) ind = appendHTML(cons, '<div class="cx-run-chat" id="tailInd"><span class="cx-spin"></span><span class="cx-run-txt">✻ Claude работает…</span></div>');
     else cons.appendChild(ind);            // держим индикатор внизу
-  } else if (ind){ ind.remove(); }
+    const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
+    ind._start = start;
+    const txt = ind.querySelector('.cx-run-txt');
+    const paint = () => { if (txt) txt.textContent = '✻ Claude работает… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
+    paint();
+    if (tailCountTimer) clearInterval(tailCountTimer);
+    tailCountTimer = setInterval(paint, 1000);
+  } else {
+    if (tailCountTimer){ clearInterval(tailCountTimer); tailCountTimer = null; }
+    if (ind) ind.remove();
+  }
+}
+// Обновить индикатор контекста в рейле сессии СРАЗУ (после done или из tail) — без ожидания поллинга.
+function updateRailContext(ctxPct, winTokens){
+  const side = document.getElementById('sessionSide'); if (!side) return;
+  if (typeof ctxPct === 'number'){
+    const p = Math.round(ctxPct * 100), col = ctxColor(ctxPct);
+    const bar = side.querySelector('.ctxbar i'); if (bar){ bar.style.width = p + '%'; bar.style.background = col; }
+    const pct = side.querySelector('.ctx-pct'); if (pct){ pct.textContent = p + '%'; pct.style.color = col; }
+  }
+  if (typeof winTokens === 'number'){ const w = side.querySelector('.stat-win'); if (w) w.textContent = kTok(winTokens) + ' / 1M'; }
 }
 async function tailTick(file){
   if (currentFile !== file){ stopTail(); return; }
@@ -1348,7 +1372,8 @@ async function tailTick(file){
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
     if (typeof d.count === 'number') tailCount = d.count;
   } else if (typeof d.count === 'number') { tailCount = d.count; }
-  updateTailIndicator(!!d.working);        // «работает» пока файл пишется (< 20с) — индикатор в самом низу
+  updateTailIndicator(!!d.working, d.turnStartTs);   // «работает… Nс» пока файл пишется (< 20с) — индикатор в самом низу
+  updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора (иначе он прячется под фолдом)
   if (!d.active) stopTail();                // сессия остыла — прекращаем tail
 }

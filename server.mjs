@@ -577,8 +577,9 @@ function classifyUserBlock(rawText) {
 function buildSessionBlocks(text) {
   const blocks = [];
   const toolById = {};
-  let model = '', cwd = '', winTokens = 0, msgCount = 0;
+  let model = '', cwd = '', winTokens = 0, msgCount = 0, lastUserTs = 0;
   const branches = [];
+  const tsMs = (s) => { const n = Date.parse(s || ''); return isNaN(n) ? 0 : n; };
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     let ev;
@@ -610,6 +611,7 @@ function buildSessionBlocks(text) {
         // image — скрываем
       }
     }
+    if (role === 'user' && blocks.length > start) lastUserTs = tsMs(ev.timestamp);   // старт текущего хода = время последнего человеческого промпта
     if (role === 'assistant' && msg.usage) {
       const u = msg.usage;
       const tin = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -620,7 +622,7 @@ function buildSessionBlocks(text) {
       }
     }
   }
-  return { blocks, model, cwd, branches, winTokens, msgCount };
+  return { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs };
 }
 
 function resolveSessionPath(relFile) {
@@ -696,7 +698,7 @@ function apiSessionTail(relFile, after) {
   if (rp.error) return rp;
   let text = '';
   try { text = readFileSync(rp.resolved, 'utf8'); } catch { return { error: 'not found', code: 404 }; }
-  const { blocks, winTokens } = buildSessionBlocks(text);
+  const { blocks, winTokens, lastUserTs } = buildSessionBlocks(text);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   const a = Math.max(0, after | 0);
   return {
@@ -705,6 +707,7 @@ function apiSessionTail(relFile, after) {
     winTokens,
     ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
     mtime,
+    turnStartTs: lastUserTs,   // старт текущего хода — для таймера «работает… Nс» при перезаходе
     active: (Date.now() - mtime) < ACTIVE_MS,
     working: (Date.now() - mtime) < WORKING_MS,
   };
@@ -850,13 +853,10 @@ async function fetchMcpStatusRaw() {
   async function* openInput() { await new Promise((r) => setTimeout(r, 60000)); }   // держим ввод открытым, turn НЕ шлём
   // БЕЗ settingSources:[] — иначе SDK не загрузит MCP-конфиг и статус будет пустой.
   const q = query({ prompt: openInput(), options: { permissionMode: 'plan', abortController: ac } });
-  // Транспорт считается готовым к control-запросу с ПЕРВОГО сообщения стрима (init). В упакованном app холодный
-  // старт бинаря медленнее — без ожидания mcpServerStatus() падает «ProcessTransport is not ready for writing».
-  let ready = false, streamErr = null;
-  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
+  let streamErr = null;
+  (async () => { try { for await (const _ of q) { /* дренаж стрима, чтобы транспорт не блокировался бэкпрешером */ } } catch (e) { streamErr = e; } })();
   try {
-    const t0 = Date.now();
-    while (!ready && !streamErr && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 200));
+    await awaitControlReady(q, 20000);
     // Серверы коннектятся ПОСТЕПЕННО — несколько снимков, мёрж по имени (pending→connected апгрейдим, tools предпочитаем).
     const merged = new Map();
     let got = false, lastErr;
@@ -1033,6 +1033,12 @@ async function getSdkQuery() {
     : mod.query;
   return _sdkQuery;
 }
+// Готовность control-транспорта: ждём SDK-инициализацию (initializationResult), а НЕ «первое сообщение стрима».
+// Это надёжный сигнал, что stdin-канал к CLI открыт — и он лечит «ProcessTransport is not ready for writing» в
+// упакованном app (control-запрос usage/models/mcp уходил раньше готовности транспорта). Таймаут → best-effort дальше.
+async function awaitControlReady(q, timeoutMs = 15000) {
+  try { await Promise.race([q.initializationResult(), new Promise((_, rej) => setTimeout(() => rej(new Error('init timeout')), timeoutMs))]); } catch {}
+}
 
 // -------- Аккаунт-лимиты Claude (5ч / 7д) через control-request usage() SDK — тот же OAuth-логин, без инференса. --------
 let _usage = { ts: 0, data: null };
@@ -1042,12 +1048,10 @@ async function fetchUsageRaw() {
   const ac = new AbortController();
   async function* openInput() { await new Promise((r) => setTimeout(r, 40000)); }   // держим ввод открытым, НЕ шлём turn
   const q = query({ prompt: openInput(), options: { permissionMode: 'plan', settingSources: [], abortController: ac } });
-  // как и в MCP-пробе: ждём готовности транспорта (первое сообщение стрима), иначе в упакованном app control-request падает
-  let ready = false, streamErr = null;
-  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
+  let streamErr = null;
+  (async () => { try { for await (const _ of q) { /* дренаж стрима */ } } catch (e) { streamErr = e; } })();
   try {
-    const t0 = Date.now();
-    while (!ready && !streamErr && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 200));
+    await awaitControlReady(q);
     let lastErr;
     for (let i = 0; i < 5; i++) {   // CLI холодный старт — ретраим control-request
       if (i) await new Promise((r) => setTimeout(r, 1500));
@@ -1064,11 +1068,10 @@ async function fetchModelsRaw() {
   const ac = new AbortController();
   async function* openInput() { await new Promise((r) => setTimeout(r, 30000)); }
   const q = query({ prompt: openInput(), options: { permissionMode: 'plan', settingSources: [], abortController: ac } });
-  let ready = false, streamErr = null;
-  (async () => { try { for await (const _ of q) { ready = true; } } catch (e) { streamErr = e; } })();
+  let streamErr = null;
+  (async () => { try { for await (const _ of q) { /* дренаж стрима */ } } catch (e) { streamErr = e; } })();
   try {
-    const t0 = Date.now();
-    while (!ready && !streamErr && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 200));
+    await awaitControlReady(q);
     let lastErr;
     for (let i = 0; i < 5; i++) {
       if (i) await new Promise((r) => setTimeout(r, 1200));
@@ -1435,7 +1438,9 @@ async function apiChat(req, res, u) {
       } else if (m.type === 'assistant' && m.error) {
         send({ type: 'error', message: String(m.error) });
       } else if (m.type === 'result') {
-        send({ type: 'done', subtype: m.subtype, isError: !!m.is_error });
+        const u = m.usage || {};
+        const win = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);   // контекст текущего хода — чтобы UI обновил % СРАЗУ, не ждя поллинга
+        send({ type: 'done', subtype: m.subtype, isError: !!m.is_error, winTokens: win || undefined, ctxPct: win ? Math.min(win / CTX_LIMIT, 1) : undefined });
       }
     }
   } catch (e) {
