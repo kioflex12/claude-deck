@@ -62,6 +62,17 @@ function saveConfig(patch) {
   for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'secretsEnvPath']) if (k in patch) c[k] = String(patch[k] || '');
   try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
 }
+// Проекты (workspaces): список открытых папок + активная. Доска скоупится на активный проект (сессии по cwd-префиксу),
+// новая сессия стартует в его папке. Так Deck не привязан к одной машине — любой открывает свою папку («как в VS Code»).
+function slugForPath(p) { return String(p || '').replace(/[^a-zA-Z0-9]/g, '-'); }   // как Claude Code именует ~/.claude/projects/<slug> из cwd
+function loadProjects() { const c = loadConfig(); return { projects: Array.isArray(c.projects) ? c.projects : [], activeId: c.activeProjectId || '' }; }
+function saveProjects(list, activeId) {
+  const c = loadConfig();
+  c.projects = Array.isArray(list) ? list : (c.projects || []);
+  if (activeId !== undefined) c.activeProjectId = activeId || '';
+  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
+}
+function activeProject() { const { projects, activeId } = loadProjects(); return projects.find((p) => p.id === activeId) || null; }
 // Секретные токены (Jira/TeamCity/GitLab): в Electron шифруем safeStorage'ом (как update-token в D3) в userData/<svc>-token.bin;
 // в standalone безопасно сохранить нельзя — фолбэк на .env (<SVC>_TOKEN).
 function tokenFile(service) { return path.join(userDataDir(), service + '-token.bin'); }
@@ -480,7 +491,9 @@ function buildSessionSummary(f, wfStates) {
 }
 
 async function apiSessions() {
-  const all = listSessionFiles().sort((a, b) => b.mtime - a.mtime);
+  let all = listSessionFiles().sort((a, b) => b.mtime - a.mtime);
+  const ap = activeProject();
+  if (ap) { const id = ap.id.toLowerCase(); all = all.filter((f) => { const d = f.projDir.toLowerCase(); return d === id || d.startsWith(id + '-'); }); }   // скоуп на активный проект (регистронезависимо — на Windows буква диска бывает и D, и d)
   const top = all.slice(0, LIST_CAP);
   const wfStates = loadWfStates();   // читается один раз на запрос
   const sessions = top.map((f) => buildSessionSummary(f, wfStates));
@@ -508,7 +521,7 @@ async function apiSessions() {
     for (const s of sessions) s.jira = null;
   }
 
-  return { dir: PROJECTS_DIR, statesDir: WO_STATES_DIR, total: all.length, shown: sessions.length, sessions };
+  return { dir: PROJECTS_DIR, statesDir: WO_STATES_DIR, total: all.length, shown: sessions.length, sessions, activeProject: ap ? { id: ap.id, name: ap.name, path: ap.path } : null };
 }
 
 // -------- транскрипт одной сессии: массив блоков --------
@@ -1227,6 +1240,30 @@ function apiFile(res, u) {
   if (text.length > VIEWER_MAX) { text = text.slice(0, VIEWER_MAX); truncated = true; }
   sendJSON(res, { ok: true, name, ext, text, truncated });
 }
+// Проекты: GET — список + активный; POST {action:add|remove|select, path?|id?} — правит список/активный.
+async function apiProjects(req, res) {
+  if (req.method === 'POST') {
+    let body; try { body = await readJsonBody(req, 64 * 1024); } catch { sendJSON(res, { error: 'bad body' }, 400); return; }
+    const action = String(body.action || '');
+    let { projects, activeId } = loadProjects();
+    if (action === 'add') {
+      const p = String(body.path || '').trim(); if (!p) { sendJSON(res, { error: 'no path' }, 400); return; }
+      const id = slugForPath(p);
+      if (!projects.some((x) => x.id === id)) projects = [...projects, { id, name: path.basename(p) || p, path: p }];
+      activeId = id;
+    } else if (action === 'remove') {
+      const id = String(body.id || ''); projects = projects.filter((x) => x.id !== id);
+      if (activeId === id) activeId = projects.length ? projects[0].id : '';
+    } else if (action === 'select') {
+      activeId = String(body.id || '');   // '' = все проекты (без скоупа)
+    } else { sendJSON(res, { error: 'bad action' }, 400); return; }
+    saveProjects(projects, activeId);
+    sendJSON(res, { projects, activeId });
+    return;
+  }
+  const { projects, activeId } = loadProjects();
+  sendJSON(res, { projects, activeId });
+}
 async function apiChatPrepare(req, res) {
   let body;
   try { body = await readJsonBody(req, STAGE_MAX_BYTES); }
@@ -1584,7 +1621,9 @@ async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.g
 
 // -------- TECH-6: конфиг Deck (GET текущие значения / POST сохранить). Токен наружу НЕ отдаём, только флаг. --------
 function configView() {
+  const { projects, activeId } = loadProjects();
   return {
+    projects, activeProjectId: activeId,   // открытые папки-проекты + активная (для переключателя в топбаре)
     woStatesDir: WO_STATES_DIR,
     claudeProjectsDir: PROJECTS_DIR,
     jira: { host: JIRA_HOST, email: JIRA_EMAIL, tokenSet: !!JIRA_TOKEN, enabled: JIRA_ENABLED },
@@ -1854,6 +1893,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/mcp') { apiMcp(res); return; }
   if (u.pathname === '/api/tags') { apiTags(req, res); return; }
   if (u.pathname === '/api/session-name') { apiSessionName(req, res); return; }
+  if (u.pathname === '/api/projects') { apiProjects(req, res); return; }
   if (u.pathname === '/api/file') { apiFile(res, u); return; }
   if (u.pathname === '/api/delete-session') { apiDeleteSession(req, res); return; }
   if (u.pathname === '/api/agents') {

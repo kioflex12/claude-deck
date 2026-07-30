@@ -2,7 +2,9 @@ import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTo
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-const UI_BUILD = '0.1.21';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+const UI_BUILD = '0.1.22';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+let PROJECTS = [], ACTIVE_PROJECT = '';        // проекты (папки) + активный id; доску скоупит сервер по активному
+const activeProjectPath = () => { const p = PROJECTS.find(x => x.id === ACTIVE_PROJECT); return p ? p.path : ''; };
 let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
 const jiraUrl = (wo) => JIRA_HOST_CFG ? ("https://" + JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
@@ -1409,6 +1411,7 @@ document.getElementById('qClear').addEventListener('click', () => {
 });
 document.getElementById('q').addEventListener('keydown', e => { if (e.key==='Escape'){ closeSearchDrop(); e.target.blur(); } });
 document.addEventListener('mousedown', e => { if (!e.target.closest('.search')) closeSearchDrop(); });   // клик-вне закрывает
+document.addEventListener('mousedown', e => { if (!e.target.closest('#projSwitch')){ const m = document.getElementById('projMenu'); if (m) m.hidden = true; } });   // меню проектов — клик-вне закрывает
 document.getElementById('filters').addEventListener('click', e => {
   const b = e.target.closest('.fchip'); if (!b) return;
   filter = b.dataset.f;
@@ -1629,8 +1632,9 @@ async function openNewSessionDialog(){
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   if (!MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
-  const cwds = [...new Set(SESSIONS.map(s=>s.cwd).filter(Boolean))].sort();
-  const preferred = cwds.find(c=>/vibecode/i.test(c)) || cwds[0] || '';   // приоритетная папка — vibecode
+  const ap = activeProjectPath();                                         // папка активного проекта — приоритетный дефолт
+  const cwds = [...new Set([ap, ...SESSIONS.map(s=>s.cwd)].filter(Boolean))].sort();
+  const preferred = ap || cwds[0] || '';
   const opts = cwds.map(c=>`<option value="${esc(c)}"${c===preferred?' selected':''}>${esc(c)}</option>`).join('');
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
   const modelOpts = (MODELS.length?MODELS:[{value:'',label:'по умолчанию'}]).map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
@@ -1808,6 +1812,48 @@ function wireTopbar(){
   const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);
   const s = document.getElementById('settingsBtn'); if (s) s.addEventListener('click', openSettingsModal);
   const sg = document.getElementById('svcGateBtn'); if (sg) sg.addEventListener('click', openSettingsModal);
+  const pb = document.getElementById('projBtn'); if (pb) pb.addEventListener('click', (e) => { e.stopPropagation(); toggleProjMenu(); });
+}
+
+/* ---------- Переключатель проектов (workspaces): «Открыть папку» как в VS Code, доску скоупит сервер ---------- */
+function renderProjSwitch(){
+  const nameEl = document.getElementById('projName'); if (!nameEl) return;
+  const active = PROJECTS.find((p) => p.id === ACTIVE_PROJECT);
+  nameEl.textContent = active ? active.name : 'Все проекты';
+}
+function toggleProjMenu(){
+  const menu = document.getElementById('projMenu'); if (!menu) return;
+  if (!menu.hidden){ menu.hidden = true; return; }
+  const rows = [`<div class="pm-item${ACTIVE_PROJECT ? '' : ' active'}" data-id=""><span class="pm-main"><span class="pm-name">Все проекты</span></span></div>`];
+  for (const p of PROJECTS) rows.push(`<div class="pm-item${p.id === ACTIVE_PROJECT ? ' active' : ''}" data-id="${esc(p.id)}"><span class="pm-main"><span class="pm-name">${esc(p.name)}</span><span class="pm-path">${esc(p.path)}</span></span><button class="pm-x" data-rm="${esc(p.id)}" title="Убрать из списка">✕</button></div>`);
+  rows.push('<div class="pm-sep"></div><div class="pm-item pm-add" data-add="1"><span class="pm-main"><span class="pm-name">＋ Открыть папку…</span></span></div>');
+  menu.innerHTML = rows.join('');
+  menu.hidden = false;
+  menu.querySelectorAll('.pm-item').forEach((el) => el.addEventListener('click', (e) => {
+    if (e.target.closest('.pm-x')) return;
+    menu.hidden = true;
+    if (el.dataset.add) addProject(); else switchProject(el.dataset.id || '');
+  }));
+  menu.querySelectorAll('.pm-x').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); removeProject(b.dataset.rm); }));
+}
+async function switchProject(id){
+  if (id === ACTIVE_PROJECT) return;
+  try { await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'select', id }) }); } catch {}
+  ACTIVE_PROJECT = id; MR_TTL_RESET(); renderProjSwitch();
+  await load();   // сервер отдаст сессии уже скоупнутые на активный проект
+}
+async function addProject(){
+  if (!(window.deckNative && window.deckNative.pickPath)){ toast('Открытие папки доступно только в приложении'); return; }
+  let r; try { r = await window.deckNative.pickPath({ title:'Открыть папку проекта' }); } catch { return; }
+  if (!r || !r.ok || !r.path) return;
+  let d; try { d = await (await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'add', path: r.path }) })).json(); } catch { toast('Не удалось добавить папку'); return; }
+  PROJECTS = d.projects || []; ACTIVE_PROJECT = d.activeId || ''; MR_TTL_RESET(); renderProjSwitch(); await load();
+}
+async function removeProject(id){
+  let d; try { d = await (await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'remove', id }) })).json(); } catch { return; }
+  PROJECTS = d.projects || []; ACTIVE_PROJECT = d.activeId || ''; renderProjSwitch();
+  const menu = document.getElementById('projMenu'); if (menu){ menu.hidden = true; toggleProjMenu(); }   // перерисовать открытое меню
+  await load();
 }
 
 /* ---------- D1: авторизация Claude из приложения ---------- */
@@ -1894,6 +1940,7 @@ async function loadServicesGate(){
 function renderServicesGate(cfg){
   if (cfg) SVC_CFG = cfg;
   if (SVC_CFG && SVC_CFG.jira) JIRA_HOST_CFG = SVC_CFG.jira.host || '';   // хост Jira для ссылок берём из конфига
+  if (SVC_CFG){ PROJECTS = Array.isArray(SVC_CFG.projects) ? SVC_CFG.projects : []; ACTIVE_PROJECT = SVC_CFG.activeProjectId || ''; renderProjSwitch(); }   // проекты в переключатель
   const gate = document.getElementById('svcGate'), msg = document.getElementById('svcGateMsg');
   if (!gate || !msg) return;
   const c = SVC_CFG || {};

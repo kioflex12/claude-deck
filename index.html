@@ -73,6 +73,24 @@
   .search input::placeholder { color: var(--text-faint); }
   .q-clear { border: 0; background: none; color: var(--text-faint); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; flex: none; }
   .q-clear:hover { color: var(--text); }
+  .proj-switch { position: relative; }
+  .proj-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 6px 10px; font-family: var(--ui); font-size: 12.5px; cursor: pointer; transition: .14s; }
+  .proj-btn:hover { border-color: var(--border-strong); }
+  .proj-btn #projName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proj-btn .chev { color: var(--text-faint); flex: none; }
+  .proj-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 70; min-width: 260px; max-width: 400px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow-lift); padding: 6px; }
+  .proj-menu[hidden] { display: none; }
+  .pm-item { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: 7px; cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+  .pm-item:hover { background: var(--surface-2); color: var(--text); }
+  .pm-item.active { color: var(--accent); }
+  .pm-item .pm-main { flex: 1; min-width: 0; }
+  .pm-item .pm-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pm-item .pm-path { display: block; font-family: var(--mono); font-size: 10px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pm-x { border: 0; background: none; color: var(--text-faint); cursor: pointer; font-size: 12px; flex: none; opacity: 0; }
+  .pm-item:hover .pm-x { opacity: 1; }
+  .pm-x:hover { color: var(--bad); }
+  .pm-sep { height: 1px; background: var(--border); margin: 5px 2px; }
+  .pm-add { color: var(--accent-ink); }
   .kbd { font-family: var(--mono); font-size: 10px; color: var(--text-faint); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; cursor: pointer; flex: none; }
   .kbd:hover { color: var(--text); }
   .filters { display: flex; gap: 6px; }
@@ -301,6 +319,14 @@
 <div class="app">
   <header class="topbar">
     <div class="brand"><div class="brand-mark">D</div><div class="brand-name">Deck</div></div>
+    <div class="proj-switch" id="projSwitch">
+      <button class="proj-btn" id="projBtn" type="button" title="Проект (папка)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span id="projName">Все проекты</span>
+        <svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="proj-menu" id="projMenu" hidden></div>
+    </div>
     <div class="tabs" id="tabs">
       <button class="tab" data-v="board" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10" y="3" width="6" height="12" rx="1.5"/><rect x="17" y="3" width="4" height="8" rx="1.5"/></svg>Доска</button>
       <button class="tab" data-v="skills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 8h6l-3 12"/></svg>Скиллы</button>
