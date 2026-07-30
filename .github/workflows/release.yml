@@ -3,7 +3,9 @@ name: release
 # Собирает десктоп-сборки Deck и публикует их в GitHub Release ЭТОГО же (публичного) repo,
 # чтобы любой обновлялся без токена. Публикация в текущий repo → хватает штатного GITHUB_TOKEN.
 # Триггер — пуш тега vX.Y.Z (или ручной запуск).
-# Подпись не настроена (unsigned): Windows → SmartScreen, macOS → Gatekeeper (right-click → Open).
+# Windows-сборка подписывается self-signed сертификатом (секреты WIN_CSC_LINK_B64 = PFX в base64, WIN_CSC_PASSWORD).
+# Публичный ключ — scripts/deck-codesign.cer; команда разово доверяет его (scripts/trust-deck-cert.ps1) → нет «неизвестного
+# издателя»/блока SmartScreen. macOS пока без подписи (Gatekeeper: right-click → Open) — добавим Apple Developer ID отдельно.
 on:
   push:
     tags:
@@ -27,7 +29,8 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # штатный токен: публикуем в текущий repo
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # без сертификата — не пытаться подписывать
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK_B64 }}       # self-signed PFX (base64) — Authenticode-подпись nsis+portable
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_PASSWORD }}
 
   macos:
     needs: windows   # Windows идёт первым и создаёт релиз с latest.yml; иначе mac создаёт релиз раньше — и Windows-апдейтер ловит 404 на latest.yml
