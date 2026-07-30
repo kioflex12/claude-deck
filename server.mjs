@@ -56,6 +56,8 @@ function getElectron() {
 }
 function userDataDir() { const e = getElectron(); if (e && e.app) { try { return e.app.getPath('userData'); } catch {} } return HERE; }
 function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
+// Диагностический лог (почему рвётся SSE-канал чата). Пишем в userData/deck-debug.log — читается снаружи, чинится удалением.
+function dbgLog(line) { try { writeFileSync(path.join(userDataDir(), 'deck-debug.log'), new Date().toISOString() + ' ' + line + '\n', { flag: 'a' }); } catch {} }
 function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 function saveConfig(patch) {
   const c = loadConfig();
@@ -1351,14 +1353,16 @@ async function apiChat(req, res, u) {
   activeStreams.set(streamId, ac);                                  // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
   // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
   // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
-  req.on('close', () => { closed = true; clearInterval(heartbeat); });
+  const _t0 = Date.now();
+  dbgLog('chat START stream=' + streamId + ' isNew=' + isNew + ' mode=' + mode + ' file=' + (relFile || '(new)'));
+  req.on('close', () => { closed = true; clearInterval(heartbeat); dbgLog('chat REQ-CLOSE stream=' + streamId + ' через ' + (Date.now() - _t0) + 'мс после старта'); });
 
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
     if (mode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };            // байпас — ничего не спрашиваем
     if (mode === 'acceptEdits' && EDIT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };  // «Авто-правки»: правки файлов без спроса (в т.ч. вне cwd); Bash/прочее — по-прежнему спрашиваем
-    if (closed) return { behavior: 'deny', message: 'Клиент отключён — правка не применена (переоткройте сессию и повторите)' };  // фоновая доработка без UI: не зависаем на approval
+    if (closed) { dbgLog('tool ' + toolName + ' @closed → auto-allow (обрыв SSE не должен рвать ход; фоновая доработка завершается)'); return { behavior: 'allow', updatedInput: input }; }  // канал закрыт → НЕ отклоняем (иначе «Клиент отключён» ломает создание файлов); ход доводится до конца
     const set = sessionKey && sessionAllow.get(sessionKey);
     if (set && set.has(toolName)) return { behavior: 'allow', updatedInput: input };
     const id = 'ap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
