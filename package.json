@@ -1,6 +1,6 @@
 {
   "name": "claude-deck",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
@@ -75,6 +75,7 @@
       "icon": "electron/icon.png"
     },
     "nsis": {
+      "include": "scripts/installer.nsh",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
