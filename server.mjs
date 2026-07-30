@@ -1299,6 +1299,9 @@ async function apiChat(req, res, u) {
   });
   const send = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch { /* поток закрыт */ } };
   const fail = (msg) => { send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };
+  // Keepalive: SSE не должен простаивать и закрываться на долгих ходах/паузах — иначе req 'close' выставит closed=true
+  // и мутирующие инструменты начнут авто-реджектиться («Клиент отключён»), хотя пользователь в сессии.
+  const heartbeat = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 15000);
 
   // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
   let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '';
@@ -1348,7 +1351,7 @@ async function apiChat(req, res, u) {
   activeStreams.set(streamId, ac);                                  // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
   // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
   // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
-  req.on('close', () => { closed = true; });
+  req.on('close', () => { closed = true; clearInterval(heartbeat); });
 
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
@@ -1446,6 +1449,7 @@ async function apiChat(req, res, u) {
   } catch (e) {
     if (!closed) send({ type: 'error', message: (e && e.message) ? e.message : String(e) });
   } finally {
+    clearInterval(heartbeat);
     activeStreams.delete(streamId);
     if (!closed) { try { res.end(); } catch {} }
   }
@@ -1938,6 +1942,9 @@ const server = http.createServer((req, res) => {
 // preferredPort: явный порт (напр. standalone 4317); иначе env PORT; иначе 0 → ОС выдаёт свободный.
 export function startServer(preferredPort) {
   const listenPort = preferredPort != null ? preferredPort : (Number(process.env.PORT) || 0);
+  server.requestTimeout = 0;      // не убивать долгий SSE-ход дефолтным 5-мин лимитом запроса (иначе closed=true → авто-реджект инструментов)
+  server.keepAliveTimeout = 0;    // не закрывать keep-alive соединение по простою
+  server.headersTimeout = 0;
   return new Promise((resolve) => {
     server.listen(listenPort, () => {
       const port = server.address().port;
