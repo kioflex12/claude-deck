@@ -1,12 +1,13 @@
 import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTok } from './util.js';
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
+import { S, SESSION_CACHE, MR_CACHE, JIRA_CACHE, notifiedDone, promptQueue, attachDraft, SKILLS_CACHE, COLUMNS, MODE_ORDER, MODE_LABEL, LIVE_TTL, ATTACH_MAX_BYTES } from './store.js';
+S.sessionModel = localStorage.getItem('deckModel') || '';
+S.sessionEffort = localStorage.getItem('deckEffort') || '';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
 const UI_BUILD = '0.1.28';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
-let PROJECTS = [], ACTIVE_PROJECT = '';        // проекты (папки) + активный id; доску скоупит сервер по активному
-const activeProjectPath = () => { const p = PROJECTS.find(x => x.id === ACTIVE_PROJECT); return p ? p.path : ''; };
-let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
-const jiraUrl = (wo) => JIRA_HOST_CFG ? ("https://" + JIRA_HOST_CFG + "/browse/" + wo) : "";
+const activeProjectPath = () => { const p = S.PROJECTS.find(x => x.id === S.ACTIVE_PROJECT); return p ? p.path : ''; };
+const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
 const CONN = "https://claude.ai/settings/connectors";
@@ -14,81 +15,38 @@ const EI = '<svg class="ei" viewBox="0 0 24 24" fill="none" stroke="currentColor
 const aReal = (href, text, cls='') => `<a class="lnk ${cls}" href="${href}" target="_blank" rel="noopener" title="${href}">${text}${EI}</a>`;
 const aStub = (href, text, cls='') => `<a class="lnk ${cls}" href="#" onclick="return false" title="${href}">${text}${EI}</a>`;
 
-/* доска по свежести */
-const COLUMNS = [
-  { key:'today', title:'Сегодня',           dot:'var(--accent)' },
-  { key:'week',  title:'Последние 7 дней',   dot:'var(--info)' },
-  { key:'older', title:'Раньше',             dot:'var(--text-faint)' },
-];
-/* доска по стадии workflow (основная) */
 
 
-let SESSIONS = [];
-const SESSION_CACHE = {}; // file -> полный транскрипт
-
-/* ---------- helpers ---------- */
-
-
-let activeView='status', filter='all', query='', skillCat='all', currentFile=null, returnView='status';
-let SESSION_SKILLS = [], slashItems = [], slashSel = 0, slashOpen = false;   // «/» в композере
-let streaming = false, currentES = null;   // живой стрим ответа в консоль
-let liveFinish = null, streamTimer = null;  // обрыв стрима кнопкой СТОП + счётчик секунд
-let currentStreamId = null;                 // id живого стрима (для гарантированного /api/stop)
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 function userStop(){
-  if (!streaming && !currentES){ clearQueue(); return; }
-  if (currentStreamId) fetch('/api/stop?id=' + encodeURIComponent(currentStreamId), { cache:'no-store' }).catch(()=>{});
-  if (liveFinish){ liveFinish('Остановлено пользователем', { silent:true, stopped:true }); return; }
+  if (!S.streaming && !S.currentES){ clearQueue(); return; }
+  if (S.currentStreamId) fetch('/api/stop?id=' + encodeURIComponent(S.currentStreamId), { cache:'no-store' }).catch(()=>{});
+  if (S.liveFinish){ S.liveFinish('Остановлено пользователем', { silent:true, stopped:true }); return; }
   // стрим жив, но finish потерялся (перерисовка/edge) — жёстко обрываем сами
-  if (currentES){ try { currentES.close(); } catch {} currentES = null; }
-  if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
+  if (S.currentES){ try { S.currentES.close(); } catch {} S.currentES = null; }
+  if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
-  streamingFile = null; currentStreamId = null; setComposerBusy(false); clearQueue();
+  S.streamingFile = null; S.currentStreamId = null; setComposerBusy(false); clearQueue();
 }
-let buildTimer = null;                      // live-опрос сборок TeamCity
-let streamingFile = null;                   // файл сессии, которую Deck стримит сейчас (оверрайд working=true)
-let notifyEnabled = false;                  // браузерные уведомления о завершении включены
-let prevWorkingFiles = new Set();           // «работающие» сессии на прошлый опрос (детект working→idle)
-let pendingDone = new Set();                 // простаивают 1 опрос — уведомим только если подтвердится на следующем (гасим ложное «готово» на долгом tool-call)
-const notifiedDone = new Set();             // файлы, за чей текущий рабочий эпизод уже уведомили (дедуп)
-let pollTimer = null, polling = false;      // живой поллинг доски ~7с
-let tailTimer = null, tailCount = 0;        // live-tail открытой активной сессии (курсор = число блоков)
-let agentsTimer = null;                      // live-опрос фоновых сабагентов открытой сессии
-const MR_CACHE = {};                        // branch -> { ts, mrs } живые MR из GitLab (кэш клиента ~30с)
-const LIVE_TTL = 30000;                     // TTL клиентских кэшей MR/Jira — влитый MR перелистнётся в пределах ~30с
-let mrHydrating = false;                    // идёт фоновая подгрузка MR для карточек
-const JIRA_CACHE = {};                      // wo -> { ts, available, status, category, summary } живой статус Jira
-let jiraHydrating = false;                  // идёт фоновая подгрузка статусов Jira
-const promptQueue = [];                     // очередь промтов, отправленных во время активного стрима (FIFO)
-let sessionMode = 'default';                 // P3: режим разрешений текущей сессии (shift-tab цикл)
-const MODE_ORDER = ['default','acceptEdits','plan','bypassPermissions'];
-const MODE_LABEL = { default:'Обычный', acceptEdits:'Авто-правки', plan:'План', bypassPermissions:'Байпас' };
-let MODELS = [], EFFORTS = [];               // подтягиваются из /api/models (модели — алиасы + additionalModelOptionsCache)
-let sessionModel = localStorage.getItem('deckModel') || '';    // выбор модели (пусто = дефолт), сохраняется между сессиями
-let sessionEffort = localStorage.getItem('deckEffort') || '';  // выбор reasoning-effort
-let pendingNewSession = null;                // {cwd, name}: новая сессия создаётся ПЕРВЫМ промтом (файла ещё нет)
 async function loadModelsCatalog(){
-  try { const d = await (await fetch('/api/models', { cache:'no-store' })).json(); MODELS = Array.isArray(d.models)?d.models:[]; EFFORTS = Array.isArray(d.efforts)?d.efforts:[]; }
-  catch { MODELS = []; EFFORTS = []; }
+  try { const d = await (await fetch('/api/models', { cache:'no-store' })).json(); S.MODELS = Array.isArray(d.models)?d.models:[]; S.EFFORTS = Array.isArray(d.efforts)?d.efforts:[]; }
+  catch { S.MODELS = []; S.EFFORTS = []; }
 }
-const attachDraft = [];                      // P4: черновик вложений текущего сообщения [{name, mediaType, kind, dataB64|text, preview}]
-const ATTACH_MAX_BYTES = 18 * 1024 * 1024;   // суммарный лимит вложений ~18МБ
-const SKILLS_CACHE = {};
 
 /* ---------- board = сессии ---------- */
 // Единая searchable-строка из ВСЕХ отображаемых на карточке меток — чтобы «backend», «cu2»,
 // «preupdate», «на qa», «merged», «chat-service» реально фильтровали.
 
 function boardMatch(s){
-  if (filter!=='all' && s.project!==filter) return false;
-  if (query && !searchableText(s, JIRA_CACHE, MR_CACHE, isWorking(s)).includes(query)) return false;
+  if (S.projFilter!=='all' && s.project!==S.projFilter) return false;
+  if (S.query && !searchableText(s, JIRA_CACHE, MR_CACHE, isWorking(s)).includes(S.query)) return false;
   return true;
 }
 function ctxMini(s){
   const p = pctOf(s);
   return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
 }
-function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!streamingFile && s.file === streamingFile)); }
+function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!S.streamingFile && s.file === S.streamingFile)); }
 function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
   if (s.clientCu) out.push(`<span class="chip sc-cu sc-cu-run" data-cu="${esc(s.clientCu)}" data-cwd="${esc(s.cwd||'')}" title="Запустить Unity (${esc(s.clientCu)})">${esc(s.clientCu)}</span>`);
@@ -104,7 +62,7 @@ function tagsChipsHTML(s){    // пользовательские теги
 // Единый резолв колонки/стадии (для keyOf и статус-бара): приоритет по уточнению коордиинатора.
 
 function cardHTML(s){
-  const wf = activeView === 'status';
+  const wf = S.activeView === 'status';
   const working = isWorking(s);
   const st = cardStatus(s, JIRA_CACHE);
   const blocked = st.blocked;
@@ -157,14 +115,14 @@ function cardHTML(s){
 }
 function renderBoard(animate){
   const board = document.getElementById('board');
-  const workflow = activeView==='status';
+  const workflow = S.activeView==='status';
   const cols = workflow ? WF_COLUMNS : COLUMNS;
   const keyOf = s => workflow ? effectiveColumn(s, JIRA_CACHE).col : s.column;   // 7-колоночная логика — единый резолв
   // поллинг перерисовывает без анимации и с сохранением прокрутки — чтобы доска не «дёргалась»
   const sx = board.scrollLeft;
   const colScroll = [...board.querySelectorAll('.col-body')].map(el=>el.scrollTop);
   board.innerHTML = cols.map(c=>{
-    const items = SESSIONS.filter(s=>keyOf(s)===c.key && boardMatch(s));
+    const items = S.SESSIONS.filter(s=>keyOf(s)===c.key && boardMatch(s));
     const body = items.length ? items.map((s,i)=>{
       const styled = animate ? `<article style="animation-delay:${i*35}ms" ` : `<article style="animation:none" `;
       return cardHTML(s).replace('<article ', styled);
@@ -215,18 +173,15 @@ function renderNow(){
   const nb = now.querySelector('#nowNewBtn'); if (nb) nb.addEventListener('click', openNewSessionDialog);
 }
 function renderFilters(){
-  const projects = [...new Set(SESSIONS.map(s=>s.project).filter(Boolean))].sort();
+  const projects = [...new Set(S.SESSIONS.map(s=>s.project).filter(Boolean))].sort();
   document.getElementById('filters').innerHTML =
-    `<button class="fchip" data-f="all" aria-pressed="${filter==='all'}">Все</button>` +
-    projects.map(p=>`<button class="fchip" data-f="${esc(p)}" aria-pressed="${filter===p}">${esc(p)}</button>`).join('');
+    `<button class="fchip" data-f="all" aria-pressed="${S.projFilter==='all'}">Все</button>` +
+    projects.map(p=>`<button class="fchip" data-f="${esc(p)}" aria-pressed="${S.projFilter===p}">${esc(p)}</button>`).join('');
 }
 
 /* ---------- skills (статический контент макета вкладки) ---------- */
 /* TECH-2: списки НЕ захардкожены — тянутся с сервера (реальные скиллы/MCP из файлов окружения). */
-let SKILLS = [], MCP_SERVERS = [], skillsLoaded = false, mcpLoaded = false;
-let MCP_STATUS = { available: false, live: false, servers: [] }, mcpLoading = false;
 const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
-let unityInstances = [];         // авто-обнаруженные запущенные Unity-инстансы (из RunState-реестра)
 async function loadUnityInstances(){
   // Источник истины — реальные процессы (Electron): показывает ВСЕ запущенные редакторы, не только те, где есть
   // pidfile MCP-for-Unity. Порт бриджа (если есть) добираем из /api/unity/instances по совпадению пути/cu.
@@ -238,62 +193,62 @@ async function loadUnityInstances(){
   try { const d = await (await fetch('/api/unity/instances', { cache:'no-store' })).json(); apiList = Array.isArray(d.instances) ? d.instances : []; } catch {}
   if (procList){
     const portOf = (u) => { const m = apiList.find(a => (a.projectPath && u.projectPath && a.projectPath.toLowerCase() === u.projectPath.toLowerCase()) || (a.cu && u.cu && a.cu === u.cu)); return m ? m.port : null; };
-    unityInstances = procList.map(u => ({ cu: u.cu || '', projectPath: u.projectPath || '', port: portOf(u), status: 'up' }));
+    S.unityInstances = procList.map(u => ({ cu: u.cu || '', projectPath: u.projectPath || '', port: portOf(u), status: 'up' }));
   } else {
-    unityInstances = apiList;
+    S.unityInstances = apiList;
   }
-  if (activeView === 'mcp' && !mcpDetail) renderMcp();   // появились/исчезли → перерисовать секцию
+  if (S.activeView === 'mcp' && !S.mcpDetail) renderMcp();   // появились/исчезли → перерисовать секцию
 }
 const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
 async function loadSkillsCatalog(){
-  try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); SKILLS = Array.isArray(d.skills) ? d.skills : []; }
-  catch { SKILLS = []; }
-  skillsLoaded = true;
-  if (activeView === 'skills') renderSkills();
+  try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); S.SKILLS = Array.isArray(d.skills) ? d.skills : []; }
+  catch { S.SKILLS = []; }
+  S.skillsLoaded = true;
+  if (S.activeView === 'skills') renderSkills();
 }
 async function loadMcpCatalog(refresh){
   // Живой статус через SDK-пробу (mcpServerStatus); refresh=1 = «реконнект» (свежая проба).
-  mcpLoading = true; if (activeView === 'mcp') renderMcp();
-  try { const r = await fetch('/api/mcp/status' + (refresh ? '?refresh=1' : ''), { cache:'no-store' }); const d = await r.json(); MCP_STATUS = d; MCP_SERVERS = Array.isArray(d.servers) ? d.servers : []; }
-  catch { MCP_STATUS = { available:false, live:false, reason:'сеть', servers:[] }; MCP_SERVERS = []; }
-  mcpLoaded = true; mcpLoading = false;
-  if (activeView === 'mcp') renderMcp();
+  S.mcpLoading = true; if (S.activeView === 'mcp') renderMcp();
+  try { const r = await fetch('/api/mcp/status' + (refresh ? '?refresh=1' : ''), { cache:'no-store' }); const d = await r.json(); S.MCP_STATUS = d; S.MCP_SERVERS = Array.isArray(d.servers) ? d.servers : []; }
+  catch { S.MCP_STATUS = { available:false, live:false, reason:'сеть', servers:[] }; S.MCP_SERVERS = []; }
+  S.mcpLoaded = true; S.mcpLoading = false;
+  if (S.activeView === 'mcp') renderMcp();
 }
 function skillMatch(sk){
-  if (skillCat !== 'all' && sk.cat !== skillCat) return false;
-  if (query && !((sk.cmd||'') + ' ' + (sk.does||'') + ' ' + (sk.trig||'')).toLowerCase().includes(query)) return false;
+  if (S.skillCat !== 'all' && sk.cat !== S.skillCat) return false;
+  if (S.query && !((sk.cmd||'') + ' ' + (sk.does||'') + ' ' + (sk.trig||'')).toLowerCase().includes(S.query)) return false;
   return true;
 }
 function skillCats(){   // категории строятся динамически из того, что реально пришло
   const counts = {};
-  for (const s of SKILLS){ const c = s.cat || 'прочее'; counts[c] = (counts[c]||0) + 1; }
+  for (const s of S.SKILLS){ const c = s.cat || 'прочее'; counts[c] = (counts[c]||0) + 1; }
   const keys = Object.keys(counts).sort((a,b)=>counts[b]-counts[a] || a.localeCompare(b));
   return [{ key:'all', label:'Все скиллы' }].concat(keys.map(k=>({ key:k, label: SCAT_LABEL[k] || k })));
 }
 function renderSkills(){
-  if (!skillsLoaded){ loadSkillsCatalog(); }
+  if (!S.skillsLoaded){ loadSkillsCatalog(); }
   const cats = skillCats();
   const rail = document.getElementById('rail');
   rail.innerHTML = `<div class="rail-label">Категории</div>` + cats.map(c => {
-    const n = c.key==='all' ? SKILLS.length : SKILLS.filter(s=>(s.cat||'прочее')===c.key).length;
-    return `<button class="cat" data-c="${esc(c.key)}" aria-pressed="${c.key===skillCat}">${esc(c.label)}<span class="c-count">${n}</span></button>`;
+    const n = c.key==='all' ? S.SKILLS.length : S.SKILLS.filter(s=>(s.cat||'прочее')===c.key).length;
+    return `<button class="cat" data-c="${esc(c.key)}" aria-pressed="${c.key===S.skillCat}">${esc(c.label)}<span class="c-count">${n}</span></button>`;
   }).join('');
-  rail.querySelectorAll('.cat').forEach(b => b.addEventListener('click', () => { skillCat = b.dataset.c; renderSkills(); }));
+  rail.querySelectorAll('.cat').forEach(b => b.addEventListener('click', () => { S.skillCat = b.dataset.c; renderSkills(); }));
   const grid = document.getElementById('skillsGrid');
-  const items = SKILLS.filter(skillMatch);
+  const items = S.SKILLS.filter(skillMatch);
   const catLabel = k => { const c = cats.find(x=>x.key===k); return c ? c.label : (SCAT_LABEL[k]||k); };
-  if (!skillsLoaded){ grid.innerHTML = `<div class="empty">Загрузка скиллов…</div>`; return; }
+  if (!S.skillsLoaded){ grid.innerHTML = `<div class="empty">Загрузка скиллов…</div>`; return; }
   grid.innerHTML = items.length ? items.map((s,i)=>`
     <div class="skill-card" style="animation-delay:${i*25}ms">
       <div class="skill-head"><span class="skill-cmd-tag">/${esc(s.cmd)}</span><span class="skill-cat-chip">${esc(catLabel(s.cat||'прочее'))}</span></div>
       <div class="skill-does">${esc(s.does||'')}</div>
       ${s.trig?`<div class="skill-trig"><b>когда зовётся</b>${esc(s.trig)}</div>`:''}
       <div class="skill-foot"><button class="skill-run" data-cmd="${esc(s.cmd)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${esc(s.cmd)}</button></div>
-    </div>`).join('') : `<div class="empty">${SKILLS.length?'Ничего не найдено':'Скиллы не найдены'}</div>`;
+    </div>`).join('') : `<div class="empty">${S.SKILLS.length?'Ничего не найдено':'Скиллы не найдены'}</div>`;
   grid.querySelectorAll('.skill-run').forEach(b => b.addEventListener('click', async () => {
     const cmd = '/' + b.dataset.cmd;
-    if (currentFile){
-      await openSession(currentFile);                       // переключаемся в сессию — композер становится видимым
+    if (S.currentFile){
+      await openSession(S.currentFile);                       // переключаемся в сессию — композер становится видимым
       const ta = document.getElementById('composer-ta');
       if (ta){ ta.value = cmd + ' '; ta.dispatchEvent(new Event('input')); ta.focus(); }   // input → включает кнопку отправки/ресайз
       toast('Вставлено в композер: ' + cmd);
@@ -304,16 +259,15 @@ function renderSkills(){
 }
 
 /* ---------- mcp (вид расширения Claude Code: список по scope + детальный вид с действиями) ---------- */
-function mcpMatch(m){ return !query || ((m.name||'')+' '+(m.desc||'')+' '+(m.command||'')+' '+(m.scope||'')+' '+(m.status||'')).toLowerCase().includes(query); }
+function mcpMatch(m){ return !S.query || ((m.name||'')+' '+(m.desc||'')+' '+(m.command||'')+' '+(m.scope||'')+' '+(m.status||'')).toLowerCase().includes(S.query); }
 const MCP_ST = {
   connected:{c:'st-connected',t:'✓ Connected'}, failed:{c:'st-failed',t:'✗ Failed'},
   'needs-auth':{c:'st-needs-auth',t:'⚠ Needs Auth'}, pending:{c:'st-pending',t:'pending'},
   unknown:{c:'st-unknown',t:'—'},
 };
 function mcpBadge(s){ const m = MCP_ST[s] || MCP_ST.unknown; return `<span class="mcp-badge ${m.c}">${esc(m.t)}</span>`; }
-let mcpDetail = null;   // имя выбранного сервера (детальный вид) или null (список)
 const MCP_SCOPES = [['user','User'],['claudeai','claude.ai'],['dynamic','dynamic'],['project','project']];
-function mcpReconnect(){ if (!mcpLoading) loadMcpCatalog(true); }   // «реконнект» = свежая проба (SDK коннектит MCP заново)
+function mcpReconnect(){ if (!S.mcpLoading) loadMcpCatalog(true); }   // «реконнект» = свежая проба (SDK коннектит MCP заново)
 async function mcpAuthenticate(name){
   toast('Открываю авторизацию: ' + name + '…');
   let r; try { r = await (await fetch('/api/mcp/login?name='+encodeURIComponent(name), { method:'POST' })).json(); } catch { toast('Не удалось запустить авторизацию'); return; }
@@ -321,9 +275,9 @@ async function mcpAuthenticate(name){
   if (r.url) openExternal(r.url);   // если CLI напечатал URL — откроем; иначе он сам открыл браузер
   const started = Date.now();       // поллим статус до connected (~2мин)
   const poll = async ()=>{
-    if (activeView !== 'mcp') return;
+    if (S.activeView !== 'mcp') return;
     await loadMcpCatalog(true);
-    const s = MCP_SERVERS.find(x=>x.name===name);
+    const s = S.MCP_SERVERS.find(x=>x.name===name);
     if (s && s.status==='connected'){ toast(name + ': авторизован'); return; }
     if (Date.now()-started > 120000) return;
     setTimeout(poll, 3000);
@@ -333,12 +287,12 @@ async function mcpAuthenticate(name){
 async function mcpRemove(name, scope){
   if (!window.confirm('Удалить MCP-сервер «'+name+'»?\n\nВыполнится: claude mcp remove '+name+(scope?(' -s '+scope):''))) return;
   let r; try { r = await (await fetch('/api/mcp/remove?name='+encodeURIComponent(name)+'&scope='+encodeURIComponent(scope||''), { method:'POST' })).json(); } catch { toast('Ошибка удаления'); return; }
-  if (r.ok){ toast('Удалён: ' + name); mcpDetail = null; loadMcpCatalog(true); }
+  if (r.ok){ toast('Удалён: ' + name); S.mcpDetail = null; loadMcpCatalog(true); }
   else toast('Не удалось удалить: ' + (r.error||''));
 }
 function renderMcpDetail(name){
-  const s = MCP_SERVERS.find(x=>x.name===name);
-  if (!s){ mcpDetail = null; return renderMcp(); }
+  const s = S.MCP_SERVERS.find(x=>x.name===name);
+  if (!s){ S.mcpDetail = null; return renderMcp(); }
   const isAuthable = /claudeai-proxy|http|sse/.test(s.transport||'') || s.scope==='claudeai';
   const canRemove = s.scope==='user' || s.scope==='project';
   const btns = [`<button class="mcp-act" data-act="reconnect">↻ Reconnect</button>`];
@@ -357,7 +311,7 @@ function renderMcpDetail(name){
     ${s.toolCount!=null?`<div class="mcp-kv"><span>tools</span><b>${s.toolCount}</b></div>`:''}
     <div class="mcp-acts">${btns.join('')}</div>
     ${toolList}</div>`;
-  document.getElementById('mcpBack').addEventListener('click', ()=>{ mcpDetail = null; renderMcp(); });
+  document.getElementById('mcpBack').addEventListener('click', ()=>{ S.mcpDetail = null; renderMcp(); });
   document.querySelectorAll('#viewMcp .mcp-act').forEach(b=>b.addEventListener('click', ()=>{
     const a = b.dataset.act;
     if (a==='reconnect') mcpReconnect();
@@ -368,30 +322,30 @@ function renderMcpDetail(name){
 }
 function mcpRowsHtml(list){ return list.map(m=>`<div class="mcp-row" data-mcp="${esc(m.name)}"><span class="mcp-rowname">${esc(m.name)}</span>${mcpBadge(m.status)}</div>`).join(''); }
 function renderMcp(){
-  if (mcpDetail) return renderMcpDetail(mcpDetail);
-  if (!mcpLoaded && !mcpLoading){ loadMcpCatalog(); }
-  const items = MCP_SERVERS.filter(mcpMatch);
-  const note = mcpLoading ? 'опрос…'
-    : (MCP_STATUS.live ? 'живой статус (SDK)'
-      : (MCP_STATUS.available === false ? ('статус недоступен: ' + esc(MCP_STATUS.reason || '') + ' — показаны конфиги') : 'из конфигов'));
+  if (S.mcpDetail) return renderMcpDetail(S.mcpDetail);
+  if (!S.mcpLoaded && !S.mcpLoading){ loadMcpCatalog(); }
+  const items = S.MCP_SERVERS.filter(mcpMatch);
+  const note = S.mcpLoading ? 'опрос…'
+    : (S.MCP_STATUS.live ? 'живой статус (SDK)'
+      : (S.MCP_STATUS.available === false ? ('статус недоступен: ' + esc(S.MCP_STATUS.reason || '') + ' — показаны конфиги') : 'из конфигов'));
   const known = new Set(MCP_SCOPES.map(x=>x[0]));
   const groups = MCP_SCOPES.map(([sc,lbl])=>{ const g = items.filter(m=>(m.scope||'user')===sc); return g.length ? `<div class="mcp-group"><div class="mcp-grouphd">${esc(lbl)} <span class="mcp-gcount">${g.length}</span></div>${mcpRowsHtml(g)}</div>` : ''; }).join('');
   const other = items.filter(m=>!known.has(m.scope||'user'));
   const otherHtml = other.length ? `<div class="mcp-group"><div class="mcp-grouphd">прочее <span class="mcp-gcount">${other.length}</span></div>${mcpRowsHtml(other)}</div>` : '';
   // Авто-обнаруженные Unity-инстансы (появляются/исчезают сами по RunState-реестру) — отдельной секцией сверху.
   const shortP = p => String(p||'').split(/[\\/]/).slice(-2).join('/');
-  const unityHtml = unityInstances.length ? `<div class="mcp-group"><div class="mcp-grouphd">Unity инстансы <span class="mcp-gcount">${unityInstances.length}</span></div>`
-    + unityInstances.map(u=>`<div class="unity-row" data-cu="${esc(u.cu||'')}" data-cwd="${esc(u.projectPath||'')}" title="Запустить/сфокусировать Unity: ${esc(u.projectPath||'')}"><span class="mcp-rowname">${esc(u.cu||'unity')} <span class="unity-path">${esc(shortP(u.projectPath))}</span></span>${u.port?`<span class="unity-port">:${esc(String(u.port))}</span>`:''}<span class="mcp-badge st-connected">up</span></div>`).join('')
+  const unityHtml = S.unityInstances.length ? `<div class="mcp-group"><div class="mcp-grouphd">Unity инстансы <span class="mcp-gcount">${S.unityInstances.length}</span></div>`
+    + S.unityInstances.map(u=>`<div class="unity-row" data-cu="${esc(u.cu||'')}" data-cwd="${esc(u.projectPath||'')}" title="Запустить/сфокусировать Unity: ${esc(u.projectPath||'')}"><span class="mcp-rowname">${esc(u.cu||'unity')} <span class="unity-path">${esc(shortP(u.projectPath))}</span></span>${u.port?`<span class="unity-port">:${esc(String(u.port))}</span>`:''}<span class="mcp-badge st-connected">up</span></div>`).join('')
     + `</div>` : '';
-  const body = (mcpLoading && !MCP_SERVERS.length) ? unityHtml + `<div class="empty">Опрашиваю MCP…</div>`
-    : (items.length ? unityHtml+groups+otherHtml : unityHtml + `<div class="empty">${MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
+  const body = (S.mcpLoading && !S.MCP_SERVERS.length) ? unityHtml + `<div class="empty">Опрашиваю MCP…</div>`
+    : (items.length ? unityHtml+groups+otherHtml : unityHtml + `<div class="empty">${S.MCP_SERVERS.length?'Ничего не найдено':'MCP-серверы не найдены'}</div>`);
   document.getElementById('viewMcp').innerHTML = `<div class="mcp-main">
-    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${MCP_SERVERS.length} серверов · ${note}</span><button class="mcp-refresh" id="mcpRefresh"${mcpLoading?' disabled':''}>${mcpLoading?'опрос…':'↻ Обновить'}</button></div>
+    <div class="mcp-head"><h2>MCP-инструменты</h2><span class="sub">${S.MCP_SERVERS.length} серверов · ${note}</span><button class="mcp-refresh" id="mcpRefresh"${S.mcpLoading?' disabled':''}>${S.mcpLoading?'опрос…':'↻ Обновить'}</button></div>
     ${body}
     <a class="mcp-learn" href="#" id="mcpLearn">Learn more about MCP ↗</a></div>`;
-  const rb = document.getElementById('mcpRefresh'); if (rb) rb.addEventListener('click', ()=>{ if (!mcpLoading) loadMcpCatalog(true); });
+  const rb = document.getElementById('mcpRefresh'); if (rb) rb.addEventListener('click', ()=>{ if (!S.mcpLoading) loadMcpCatalog(true); });
   const ln = document.getElementById('mcpLearn'); if (ln) ln.addEventListener('click', e=>{ e.preventDefault(); openExternal('https://modelcontextprotocol.io'); });
-  document.querySelectorAll('#viewMcp .mcp-row').forEach(r => r.addEventListener('click', ()=>{ mcpDetail = r.dataset.mcp; renderMcp(); }));
+  document.querySelectorAll('#viewMcp .mcp-row').forEach(r => r.addEventListener('click', ()=>{ S.mcpDetail = r.dataset.mcp; renderMcp(); }));
   document.querySelectorAll('#viewMcp .unity-row').forEach(r => r.addEventListener('click', ()=>launchUnity(r.dataset.cu, r.dataset.cwd)));   // тап → запуск/фокус Unity этого проекта
 }
 
@@ -496,7 +450,7 @@ function buildDot(b){
 const BASE_BRANCHES = new Set(['preprod','preupdate','master','main','develop','dev','prod','release','head','']);
 function isBaseBranch(b){ return BASE_BRANCHES.has(String(b||'').trim().toLowerCase()); }
 async function loadBuilds(t){
-  if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
+  if (S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; }
   const box0 = document.getElementById('buildBox'); if (!box0 || !t.gitBranch) return;
   // базовая ветка без WO не идентифицирует сборки контекста — сразу «нет», без мигания «проверяю…» и без фетча
   if (isBaseBranch(t.gitBranch) && !t.wo){ box0.innerHTML = `<div class="rail-empty">— сборок нет —</div>`; return; }
@@ -515,8 +469,8 @@ async function loadBuilds(t){
     return running;
   };
   const running = await render();
-  if (running && !buildTimer){
-    buildTimer = setInterval(async () => { const r = await render(); if (!r && buildTimer){ clearInterval(buildTimer); buildTimer = null; } }, 15000);
+  if (running && !S.buildTimer){
+    S.buildTimer = setInterval(async () => { const r = await render(); if (!r && S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; } }, 15000);
   }
 }
 /* ---------- live-MR (GitLab) в секции «Merge Requests» + на карточках ---------- */
@@ -548,14 +502,14 @@ async function loadMrs(t){
   }
 }
 async function hydrateMrs(fresh){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама). fresh — рефреш дашборда: мимо кэшей
-  if (mrHydrating) return; mrHydrating = true;
+  if (S.mrHydrating) return; S.mrHydrating = true;
   const now = Date.now();
-  const branches = [...new Set(SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
+  const branches = [...new Set(S.SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
   let changed = false;
   for (const br of branches){
     const c = MR_CACHE[br];
     if (!fresh && c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
-    const s = SESSIONS.find(x => x.gitBranch === br);
+    const s = S.SESSIONS.find(x => x.gitBranch === br);
     try {
       const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || '') + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
@@ -563,8 +517,8 @@ async function hydrateMrs(fresh){   // фоновая подгрузка MR дл
       else MR_CACHE[br] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
     } catch {}
   }
-  mrHydrating = false;
-  if (changed && (activeView==='board' || activeView==='status')) renderBoard(false);
+  S.mrHydrating = false;
+  if (changed && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);
 }
 function MR_TTL_RESET(){   // сброс клиентских кэшей MR/Jira (после смены токена в Настройках → сразу перечитать)
   for (const k of Object.keys(MR_CACHE)) delete MR_CACHE[k];
@@ -589,18 +543,18 @@ async function loadJira(t){
 }
 /* ---------- пользовательские теги сессии (add/edit/delete, Deck-side) ---------- */
 function currentTags(){   // источник — кэш ЛИБО запись в списке (finish() удаляет SESSION_CACHE, теги нельзя терять)
-  const t = (currentFile && SESSION_CACHE[currentFile]) || SESSIONS.find(s=>s.file===currentFile);
+  const t = (S.currentFile && SESSION_CACHE[S.currentFile]) || S.SESSIONS.find(s=>s.file===S.currentFile);
   return (t && Array.isArray(t.tags)) ? t.tags.slice() : [];
 }
 async function saveTags(next){
-  if (!currentFile) return;
+  if (!S.currentFile) return;
   const clean = [...new Set(next.map(x=>String(x).trim()).filter(Boolean))].slice(0,30);
   try {
-    const r = await fetch('/api/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: currentFile, tags: clean }) });
+    const r = await fetch('/api/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: S.currentFile, tags: clean }) });
     const d = await r.json();
     const tags = Array.isArray(d.tags) ? d.tags : clean;
-    if (SESSION_CACHE[currentFile]) SESSION_CACHE[currentFile].tags = tags;
-    const se = SESSIONS.find(s=>s.file===currentFile); if (se) se.tags = tags;   // чтобы поиск/фильтр/карточка сразу видели
+    if (SESSION_CACHE[S.currentFile]) SESSION_CACHE[S.currentFile].tags = tags;
+    const se = S.SESSIONS.find(s=>s.file===S.currentFile); if (se) se.tags = tags;   // чтобы поиск/фильтр/карточка сразу видели
     renderTags();
   } catch {}
 }
@@ -629,24 +583,24 @@ function agentBoxHTML(agents){   // ТОЛЬКО активные (running); з�
     return `<div class="ag-item live"><div class="ag-head"><span class="ag-label">${esc(a.label)}</span><span class="ag-status"><span class="ag-dot run"></span>работает${tok}</span></div>${a.activity?`<div class="ag-act">${esc(a.activity)}</div>`:''}</div>`;
   }).join('');
 }
-function stopAgentsPoll(){ if (agentsTimer){ clearInterval(agentsTimer); agentsTimer = null; } }
+function stopAgentsPoll(){ if (S.agentsTimer){ clearInterval(S.agentsTimer); S.agentsTimer = null; } }
 async function pollAgents(file){
-  if (currentFile !== file){ stopAgentsPoll(); return; }
+  if (S.currentFile !== file){ stopAgentsPoll(); return; }
   let d; try { d = await (await fetch('/api/agents?file=' + encodeURIComponent(file), { cache:'no-store' })).json(); } catch { return; }
-  if (currentFile !== file || !d || d.error) return;
+  if (S.currentFile !== file || !d || d.error) return;
   const sec = document.getElementById('agentsSec'), box = document.getElementById('agentsBox');
   const agents = Array.isArray(d.agents) ? d.agents : [];
   const live = runningAgents(agents);
   if (sec && box){ if (live.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
   // отражаем в кэше/списке, чтобы признак «работает» на карточке/лейбле держался, пока агенты живы
   if (SESSION_CACHE[file]){ SESSION_CACHE[file].bgRunning = d.bgRunning; SESSION_CACHE[file].agents = agents; }
-  const se = SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
+  const se = S.SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
 }
-function startAgentsPoll(file){ stopAgentsPoll(); agentsTimer = setInterval(()=>pollAgents(file), 4000); pollAgents(file); }
+function startAgentsPoll(file){ stopAgentsPoll(); S.agentsTimer = setInterval(()=>pollAgents(file), 4000); pollAgents(file); }
 async function hydrateJira(fresh){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с). fresh — рефреш дашборда: мимо кэшей
-  if (jiraHydrating) return; jiraHydrating = true;
+  if (S.jiraHydrating) return; S.jiraHydrating = true;
   const now = Date.now();
-  const wos = [...new Set(SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 30);
+  const wos = [...new Set(S.SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 30);
   let changed = false, gated = false;
   for (const wo of wos){
     const c = JIRA_CACHE[wo];
@@ -659,8 +613,8 @@ async function hydrateJira(fresh){   // фоновая подгрузка ста
       changed = true;
     } catch {}
   }
-  jiraHydrating = false;
-  if (changed && (activeView==='board' || activeView==='status')) renderBoard(false);
+  S.jiraHydrating = false;
+  if (changed && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);
   void gated;
 }
 
@@ -727,20 +681,20 @@ function wireConsole(){
 
 /* ---------- «/» — список скиллов в композере ---------- */
 async function loadSkills(cwd){
-  SESSION_SKILLS = [];
+  S.SESSION_SKILLS = [];
   if (!cwd){ updateSlash(); return; }
-  if (SKILLS_CACHE[cwd]){ SESSION_SKILLS = SKILLS_CACHE[cwd]; updateSlash(); return; }
+  if (SKILLS_CACHE[cwd]){ S.SESSION_SKILLS = SKILLS_CACHE[cwd]; updateSlash(); return; }
   try {
     const r = await fetch('/api/skills?cwd=' + encodeURIComponent(cwd), { cache:'no-store' });
     const d = await r.json();
-    SESSION_SKILLS = Array.isArray(d.skills) ? d.skills : [];
-    SKILLS_CACHE[cwd] = SESSION_SKILLS;
-  } catch (e) { SESSION_SKILLS = []; }
+    S.SESSION_SKILLS = Array.isArray(d.skills) ? d.skills : [];
+    SKILLS_CACHE[cwd] = S.SESSION_SKILLS;
+  } catch (e) { S.SESSION_SKILLS = []; }
   updateSlash();   // если «/» уже введён (гонка загрузки — особенно в новой сессии) — перефильтровать дропдаун
 }
 function slashFilter(q){
   q = q.toLowerCase();
-  return SESSION_SKILLS.filter(s => !q || s.name.toLowerCase().includes(q) || (s.description||'').toLowerCase().includes(q));
+  return S.SESSION_SKILLS.filter(s => !q || s.name.toLowerCase().includes(q) || (s.description||'').toLowerCase().includes(q));
 }
 function updateSlash(){
   const ta = document.getElementById('composer-ta');
@@ -748,34 +702,34 @@ function updateSlash(){
   if (!ta || !box) return;
   const v = ta.value;
   if (v[0] === '/' && !v.slice(1).includes(' ')) {
-    slashItems = slashFilter(v.slice(1)).slice(0, 60);
-    slashOpen = slashItems.length > 0;
-    slashSel = 0;
+    S.slashItems = slashFilter(v.slice(1)).slice(0, 60);
+    S.slashOpen = S.slashItems.length > 0;
+    S.slashSel = 0;
     renderSlash();
   } else {
-    slashOpen = false; box.hidden = true;
+    S.slashOpen = false; box.hidden = true;
   }
 }
 function renderSlash(){
   const box = document.getElementById('slashBox');
   if (!box) return;
-  if (!slashOpen){ box.hidden = true; return; }
+  if (!S.slashOpen){ box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = slashItems.map((s,i)=>`<div class="cx-sl-item ${i===slashSel?'sel':''}" data-i="${i}"><span class="cx-sl-name">/${esc(s.name)}</span><span class="cx-sl-src">${esc(s.source)}</span><span class="cx-sl-desc">${esc((s.description||'').slice(0,110))}</span></div>`).join('');
+  box.innerHTML = S.slashItems.map((s,i)=>`<div class="cx-sl-item ${i===S.slashSel?'sel':''}" data-i="${i}"><span class="cx-sl-name">/${esc(s.name)}</span><span class="cx-sl-src">${esc(s.source)}</span><span class="cx-sl-desc">${esc((s.description||'').slice(0,110))}</span></div>`).join('');
   box.querySelectorAll('.cx-sl-item').forEach(el=>{
     el.addEventListener('mousedown', e => { e.preventDefault(); chooseSlash(+el.dataset.i); });
-    el.addEventListener('mousemove', () => { slashSel = +el.dataset.i; highlightSlash(); });
+    el.addEventListener('mousemove', () => { S.slashSel = +el.dataset.i; highlightSlash(); });
   });
 }
 function highlightSlash(){
-  document.querySelectorAll('.cx-sl-item').forEach((el,j)=>el.classList.toggle('sel', j===slashSel));
+  document.querySelectorAll('.cx-sl-item').forEach((el,j)=>el.classList.toggle('sel', j===S.slashSel));
   const s = document.querySelector('.cx-sl-item.sel'); if (s) s.scrollIntoView({ block:'nearest' });
 }
 function chooseSlash(i){
-  const s = slashItems[i]; if (!s) return;
+  const s = S.slashItems[i]; if (!s) return;
   const ta = document.getElementById('composer-ta'); if (!ta) return;
   ta.value = '/' + s.name + ' ';
-  slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
+  S.slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
   ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight,150) + 'px';
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = !ta.value.trim();
   ta.focus();
@@ -814,24 +768,24 @@ function renderComposer(t){
   const grow = () => { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,150)+'px'; btn.disabled = !(ta.value.trim() || attachDraft.length); };
   ta.addEventListener('input', () => { grow(); updateSlash(); });
   ta.addEventListener('keydown', e => {
-    if (slashOpen) {
-      if (e.key==='ArrowDown'){ e.preventDefault(); slashSel=Math.min(slashSel+1, slashItems.length-1); highlightSlash(); return; }
-      if (e.key==='ArrowUp'){ e.preventDefault(); slashSel=Math.max(slashSel-1, 0); highlightSlash(); return; }
-      if (e.key==='Enter'){ e.preventDefault(); chooseSlash(slashSel); return; }
-      if (e.key==='Escape'){ e.preventDefault(); slashOpen=false; document.getElementById('slashBox').hidden=true; return; }
+    if (S.slashOpen) {
+      if (e.key==='ArrowDown'){ e.preventDefault(); S.slashSel=Math.min(S.slashSel+1, S.slashItems.length-1); highlightSlash(); return; }
+      if (e.key==='ArrowUp'){ e.preventDefault(); S.slashSel=Math.max(S.slashSel-1, 0); highlightSlash(); return; }
+      if (e.key==='Enter'){ e.preventDefault(); chooseSlash(S.slashSel); return; }
+      if (e.key==='Escape'){ e.preventDefault(); S.slashOpen=false; document.getElementById('slashBox').hidden=true; return; }
     }
     if (e.key==='Tab' && e.shiftKey) { e.preventDefault(); cycleMode(); return; }   // как в расширении — циклим режим
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   btn.addEventListener('click', sendMessage);
   const stopBtn = document.getElementById('stopBtn');
-  stopBtn.disabled = !streaming;   // состояние Стоп = чистая функция от факта живого стрима (переживает перерисовку)
+  stopBtn.disabled = !S.streaming;   // состояние Стоп = чистая функция от факта живого стрима (переживает перерисовку)
   stopBtn.addEventListener('click', userStop);
-  document.getElementById('skillBtn').addEventListener('click', () => { if (streaming) return; if (ta.value[0] !== '/') ta.value = '/' + ta.value; ta.focus(); updateSlash(); });
+  document.getElementById('skillBtn').addEventListener('click', () => { if (S.streaming) return; if (ta.value[0] !== '/') ta.value = '/' + ta.value; ta.focus(); updateSlash(); });
   document.getElementById('compactBtn').addEventListener('click', () => {   // /compact — сжать контекст текущей сессии
-    if (!currentFile || !requireAuth()) return;
-    const payload = { text: '/compact', mode: sessionMode, model: sessionModel, effort: sessionEffort, attachments: [] };
-    if (streaming){ enqueuePrompt(payload); toast('/compact добавлен в очередь'); return; }
+    if (!S.currentFile || !requireAuth()) return;
+    const payload = { text: '/compact', mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments: [] };
+    if (S.streaming){ enqueuePrompt(payload); toast('/compact добавлен в очередь'); return; }
     toast('Сжимаю контекст сессии…'); runPrompt(payload);
   });
   document.getElementById('modeBtn').addEventListener('click', toggleModePop);   // поповер: режим + модель + effort-ползунок
@@ -849,27 +803,27 @@ function renderComposer(t){
     if (files.length){ e.preventDefault(); addAttachments(files); }   // скриншот из буфера — главный сценарий
   });
   paintMode();   // режим/модель/effort задаёт вызывающий (openSession сбрасывает на default; new/fork — выбранное в окне)
-  if (!MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
+  if (!S.MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
   attachDraft.length = 0; renderAttachDraft();
   setTimeout(()=>ta.focus(), 60);
 }
 
 /* ---------- отправка запроса в сессию + живой стрим ответа (SSE + Agent SDK) ---------- */
 function stopStream(){
-  if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
-  if (currentES){ try { currentES.close(); } catch {} currentES = null; }
-  if (buildTimer){ clearInterval(buildTimer); buildTimer = null; }
+  if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+  if (S.currentES){ try { S.currentES.close(); } catch {} S.currentES = null; }
+  if (S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; }
   stopTail();
   stopRailRefresh();
   stopAgentsPoll();
-  streaming = false; liveFinish = null; streamingFile = null; currentStreamId = null;
+  S.streaming = false; S.liveFinish = null; S.streamingFile = null; S.currentStreamId = null;
   promptQueue.length = 0; updateQueueIndicator();        // уходя с сессии — очередь сбрасываем
   // жёсткий сброс UI стрима: убрать индикатор «работает» и снять недостроенный live-блок из чата
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
   document.querySelectorAll('.cx-asst.cx-live').forEach(el => el.classList.remove('cx-live'));
 }
 function setComposerBusy(on){
-  streaming = on;
+  S.streaming = on;
   const ta = document.getElementById('composer-ta'), send = document.getElementById('sendBtn'),
         stop = document.getElementById('stopBtn');
   if (ta) ta.disabled = false;                          // ввод НЕ блокируем — можно подкидывать промты в очередь
@@ -941,19 +895,19 @@ function wireApproval(el, d){
 }
 function paintMode(){
   const btn = document.getElementById('modeBtn'); if (!btn) return;
-  const lbl = btn.querySelector('#modeLabel'); if (lbl) lbl.textContent = MODE_LABEL[sessionMode] || 'Обычный';
-  btn.classList.toggle('cx-mode-bypass', sessionMode === 'bypassPermissions');   // байпас — предупреждающе (красный)
+  const lbl = btn.querySelector('#modeLabel'); if (lbl) lbl.textContent = MODE_LABEL[S.sessionMode] || 'Обычный';
+  btn.classList.toggle('cx-mode-bypass', S.sessionMode === 'bypassPermissions');   // байпас — предупреждающе (красный)
   const extra = [];
-  const mm = MODELS.find(m=>m.value===sessionModel); if (sessionModel && mm) extra.push(mm.label);
-  const ee = EFFORTS.find(e=>e.value===sessionEffort); if (sessionEffort && ee) extra.push(ee.label.replace(/^Effort:\s*/,''));
-  btn.title = 'Режим: ' + (MODE_LABEL[sessionMode] || 'Обычный') + (extra.length?' · '+extra.join(' · '):'') + ' — клик для настройки (⇧+Tab — режим)';
+  const mm = S.MODELS.find(m=>m.value===S.sessionModel); if (S.sessionModel && mm) extra.push(mm.label);
+  const ee = S.EFFORTS.find(e=>e.value===S.sessionEffort); if (S.sessionEffort && ee) extra.push(ee.label.replace(/^Effort:\s*/,''));
+  btn.title = 'Режим: ' + (MODE_LABEL[S.sessionMode] || 'Обычный') + (extra.length?' · '+extra.join(' · '):'') + ' — клик для настройки (⇧+Tab — режим)';
 }
 // доступные effort-уровни для модели (из /api/models, не хардкод); всегда с «по умолчанию» первым
 function effortsForModel(mv){
-  const m = MODELS.find(x=>x.value===mv);
+  const m = S.MODELS.find(x=>x.value===mv);
   const allowed = m && Array.isArray(m.efforts) && m.efforts.length ? m.efforts : null;
-  if (!allowed) return EFFORTS;   // модель без явного списка (или синтетический «по умолчанию») → все доступные уровни
-  return EFFORTS.filter(e=>!e.value || allowed.includes(e.value));
+  if (!allowed) return S.EFFORTS;   // модель без явного списка (или синтетический «по умолчанию») → все доступные уровни
+  return S.EFFORTS.filter(e=>!e.value || allowed.includes(e.value));
 }
 // Поповер «Режимы» (как в расширении): список режимов + выбор модели + ползунок effort. Значения подтягиваются.
 const MODE_META = {
@@ -964,31 +918,31 @@ const MODE_META = {
 };
 function openModePop(){
   const pop = document.getElementById('modePop'); if (!pop) return;
-  if (!MODELS.length){ loadModelsCatalog().then(()=>{ const p=document.getElementById('modePop'); if (p && !p.hidden) openModePop(); }); }   // каталог ещё грузится — дорисуем модели/эффорты как придут
-  const modeRows = MODE_ORDER.map(m=>{ const me=MODE_META[m]||{}; const sel=m===sessionMode; return `<div class="mp-mode${sel?' sel':''}" data-m="${m}"><span class="mp-ic">${me.i||''}</span><span class="mp-txt"><b>${esc(MODE_LABEL[m]||m)}</b><span>${esc(me.d||'')}</span></span>${sel?'<span class="mp-check">✓</span>':''}</div>`; }).join('');
-  const models = MODELS.length?MODELS:[{value:'',label:'по умолчанию'}];
-  const modelOpts = models.map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
-  const effs = effortsForModel(sessionModel);
-  let ei = effs.findIndex(e=>e.value===sessionEffort); if (ei<0){ ei=0; sessionEffort=effs[0].value; }
+  if (!S.MODELS.length){ loadModelsCatalog().then(()=>{ const p=document.getElementById('modePop'); if (p && !p.hidden) openModePop(); }); }   // каталог ещё грузится — дорисуем модели/эффорты как придут
+  const modeRows = MODE_ORDER.map(m=>{ const me=MODE_META[m]||{}; const sel=m===S.sessionMode; return `<div class="mp-mode${sel?' sel':''}" data-m="${m}"><span class="mp-ic">${me.i||''}</span><span class="mp-txt"><b>${esc(MODE_LABEL[m]||m)}</b><span>${esc(me.d||'')}</span></span>${sel?'<span class="mp-check">✓</span>':''}</div>`; }).join('');
+  const models = S.MODELS.length?S.MODELS:[{value:'',label:'по умолчанию'}];
+  const modelOpts = models.map(m=>`<option value="${esc(m.value)}"${m.value===S.sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
+  const effs = effortsForModel(S.sessionModel);
+  let ei = effs.findIndex(e=>e.value===S.sessionEffort); if (ei<0){ ei=0; S.sessionEffort=effs[0].value; }
   pop.innerHTML = `<div class="mp-hd">Режимы<span class="mp-hint">⇧+Tab</span></div>
     <div class="mp-row"><span class="mp-k">Модель</span><select class="cx-sel" id="mpModel">${modelOpts}</select></div>
     <div class="mp-modes">${modeRows}</div>
     <div class="mp-eff"><div class="mp-eff-top"><span>Effort</span><b id="mpEffLbl">${esc(effs[ei].label.replace(/^Effort:\s*/,''))}</b></div>
       <input type="range" class="mp-slider" id="mpEff" min="0" max="${Math.max(0,effs.length-1)}" step="1" value="${ei}"${effs.length<=1?' disabled':''}></div>`;
   pop.hidden = false;
-  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ sessionMode=r.dataset.m; paintMode(); openModePop(); }));
+  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ S.sessionMode=r.dataset.m; paintMode(); openModePop(); }));
   const ms = pop.querySelector('#mpModel');
-  if (ms) ms.onchange = ()=>{ sessionModel=ms.value; localStorage.setItem('deckModel',sessionModel); openModePop(); paintMode(); };
+  if (ms) ms.onchange = ()=>{ S.sessionModel=ms.value; localStorage.setItem('deckModel',S.sessionModel); openModePop(); paintMode(); };
   const es = pop.querySelector('#mpEff'), el = pop.querySelector('#mpEffLbl');
-  if (es) es.oninput = ()=>{ const arr=effortsForModel(sessionModel); const v=arr[+es.value]||arr[0]; sessionEffort=v.value; localStorage.setItem('deckEffort',sessionEffort); if (el) el.textContent=v.label.replace(/^Effort:\s*/,''); paintMode(); };
+  if (es) es.oninput = ()=>{ const arr=effortsForModel(S.sessionModel); const v=arr[+es.value]||arr[0]; S.sessionEffort=v.value; localStorage.setItem('deckEffort',S.sessionEffort); if (el) el.textContent=v.label.replace(/^Effort:\s*/,''); paintMode(); };
   // клик вне поповера — закрыть
   const off = (e)=>{ const p=document.getElementById('modePop'); if (!p||p.hidden){ document.removeEventListener('mousedown',off,true); return; } if (!p.contains(e.target) && !(e.target.closest && e.target.closest('#modeBtn'))){ p.hidden=true; document.removeEventListener('mousedown',off,true); } };
   document.addEventListener('mousedown', off, true);
 }
 function toggleModePop(){ const pop=document.getElementById('modePop'); if (!pop) return; if (pop.hidden) openModePop(); else pop.hidden=true; }
 function cycleMode(){
-  const i = MODE_ORDER.indexOf(sessionMode);
-  sessionMode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
+  const i = MODE_ORDER.indexOf(S.sessionMode);
+  S.sessionMode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
   paintMode();
   const pop = document.getElementById('modePop'); if (pop && !pop.hidden) openModePop();   // поповер открыт → отразить смену
 }
@@ -1070,21 +1024,21 @@ function drainQueue(){                                     // по заверш�
   if (!promptQueue.length) return;
   const next = promptQueue.shift();
   updateQueueIndicator();
-  setTimeout(() => { if (currentFile) runPrompt(next); }, 60);
+  setTimeout(() => { if (S.currentFile) runPrompt(next); }, 60);
 }
 function sendMessage(){
   const ta = document.getElementById('composer-ta'); if (!ta) return;
   if (!requireAuth()) return;                             // чат требует логина в Claude
   const text = ta.value.trim();
   const attachments = attachDraft.slice();                // P4: приложенные файлы
-  if ((!text && !attachments.length) || (!currentFile && !pendingNewSession)) return;
-  slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
+  if ((!text && !attachments.length) || (!S.currentFile && !S.pendingNewSession)) return;
+  S.slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
   ta.value = ''; ta.style.height = 'auto';
   attachDraft.length = 0; renderAttachDraft();            // черновик вложений очищаем
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
-  const payload = { text, mode: sessionMode, model: sessionModel, effort: sessionEffort, attachments };
-  if (!currentFile && pendingNewSession){ payload.newSessionCwd = pendingNewSession.cwd; payload.pendingName = pendingNewSession.name; }  // первый промт → создать именованную сессию
-  if (streaming){ enqueuePrompt(payload); return; }       // идёт стрим → в очередь
+  const payload = { text, mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
+  if (!S.currentFile && S.pendingNewSession){ payload.newSessionCwd = S.pendingNewSession.cwd; payload.pendingName = S.pendingNewSession.name; }  // первый промт → создать именованную сессию
+  if (S.streaming){ enqueuePrompt(payload); return; }       // идёт стрим → в очередь
   runPrompt(payload);
 }
 async function runPrompt(payload){
@@ -1102,8 +1056,8 @@ async function runPrompt(payload){
   scrollBottom();
 
   setComposerBusy(true);                                 // активируем СТОП (ввод НЕ блокируем — очередь разрешена)
-  streamingFile = currentFile;                           // мгновенно метим сессию как «работает» (оверрайд для карточки)
-  notifiedDone.delete(currentFile);                      // новый запуск — перевзвести дедуп завершения
+  S.streamingFile = S.currentFile;                           // мгновенно метим сессию как «работает» (оверрайд для карточки)
+  notifiedDone.delete(S.currentFile);                      // новый запуск — перевзвести дедуп завершения
   ensureNotifyPermission();                              // разрешение на уведомления — при первой отправке
 
   // индикатор процесса — В ЧАТЕ: спиннер + «Claude работает… Nс», закреплён внизу консоли,
@@ -1111,7 +1065,7 @@ async function runPrompt(payload){
   const runEl = appendHTML(cons, '<div class="cx-run-chat"><span class="cx-spin"></span><span class="cx-run-txt">Claude работает… 0с</span></div>');
   scrollBottom();
   const t0 = Date.now();
-  streamTimer = setInterval(() => { const el = runEl.querySelector('.cx-run-txt'); if (el) el.textContent = 'Claude работает… ' + Math.round((Date.now()-t0)/1000) + 'с'; }, 1000);
+  S.streamTimer = setInterval(() => { const el = runEl.querySelector('.cx-run-txt'); if (el) el.textContent = 'Claude работает… ' + Math.round((Date.now()-t0)/1000) + 'с'; }, 1000);
 
   let liveMd = null, liveAccum = '';           // текущий текстовый блок ассистента (дельты text)
   let liveThink = null, liveThinkAccum = '';   // текущий блок размышления (дельты thinking)
@@ -1144,7 +1098,7 @@ async function runPrompt(payload){
         ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim }
         : payload.newSessionCwd
         ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
-        : { prompt: text, mode, model, effort, sessionFile: currentFile, attachments: slim };
+        : { prompt: text, mode, model, effort, sessionFile: S.currentFile, attachments: slim };
       const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.token) throw new Error(d && d.error ? d.error : 'stage failed');
@@ -1152,28 +1106,28 @@ async function runPrompt(payload){
     } catch (e){
       appendHTML(cons, '<div class="cx-note">Ошибка запуска: ' + esc(String(e.message||e)) + '</div>');
       setComposerBusy(false); scrollBottom();
-      if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
+      if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
       const ridx = cons.querySelector('.cx-run-chat'); if (ridx) ridx.remove();
-      streamingFile = null; drainQueue(); return;
+      S.streamingFile = null; drainQueue(); return;
     }
   } else {
-    streamUrl = '/api/chat?file=' + encodeURIComponent(currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode) + '&model=' + encodeURIComponent(model) + '&effort=' + encodeURIComponent(effort);
+    streamUrl = '/api/chat?file=' + encodeURIComponent(S.currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode) + '&model=' + encodeURIComponent(model) + '&effort=' + encodeURIComponent(effort);
   }
   const es = new EventSource(streamUrl);
-  currentES = es;
+  S.currentES = es;
   let finished = false;
   const finish = (note, opts) => {
     if (finished) return; finished = true;
-    if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
-    try { es.close(); } catch {} currentES = null; liveFinish = null; currentStreamId = null;
+    if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+    try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.currentStreamId = null;
     clearLive(); finalizeThink();
     runEl.remove();                      // снять индикатор «работает» из чата
     if (opts && typeof opts.ctxPct === 'number') updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
-    const doneFile = streamingFile || currentFile;
-    const doneTitle = (SESSION_CACHE[currentFile] && SESSION_CACHE[currentFile].title) || titleOf(currentFile) || '';
-    streamingFile = null;                // сессия больше не «работает» от Deck
-    delete SESSION_CACHE[currentFile];   // транскрипт на диске обновился — перечитать при следующем заходе
+    const doneFile = S.streamingFile || S.currentFile;
+    const doneTitle = (SESSION_CACHE[S.currentFile] && SESSION_CACHE[S.currentFile].title) || titleOf(S.currentFile) || '';
+    S.streamingFile = null;                // сессия больше не «работает» от Deck
+    delete SESSION_CACHE[S.currentFile];   // транскрипт на диске обновился — перечитать при следующем заходе
     setComposerBusy(false);
     const ta2 = document.getElementById('composer-ta'); if (ta2) ta2.focus();
     scrollBottom();
@@ -1185,15 +1139,15 @@ async function runPrompt(payload){
       // /compact завершился — перечитываем сжатый транскрипт и обновляем карточку/окно (иначе висел старый вид до ручного перезахода)
       appendHTML(cons, '<div class="cx-note">Контекст сжат ✓ — обновляю сессию…</div>');
       delete SESSION_CACHE[f];
-      setTimeout(() => { if (currentFile === f) openSession(f); }, 500);
-    } else if (isNewRun && currentFile){
+      setTimeout(() => { if (S.currentFile === f) openSession(f); }, 500);
+    } else if (isNewRun && S.currentFile){
       // новая сессия завершилась. Если в файле есть блоки — полноценно открываем (рейл/сборки/tail). Если 0 блоков
       // (запуск ничего не выдал — напр. сбой SDK) — НЕ вайпаем консоль, оставляем видимым промт + ошибку, освежаем лишь рейл.
       setTimeout(async () => {
-        if (currentFile !== f) return;
+        if (S.currentFile !== f) return;
         let t = null; try { t = await (await fetch('/api/session?file=' + encodeURIComponent(f), { cache:'no-store' })).json(); } catch {}
-        if (t && !t.error && Array.isArray(t.blocks) && t.blocks.length){ if (currentFile === f) openSession(f); return; }
-        if (t && !t.error && currentFile === f){   // пусто — консоль не трогаем, обновим правый рейл
+        if (t && !t.error && Array.isArray(t.blocks) && t.blocks.length){ if (S.currentFile === f) openSession(f); return; }
+        if (t && !t.error && S.currentFile === f){   // пусто — консоль не трогаем, обновим правый рейл
           SESSION_CACHE[f] = t;
           const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); loadBuilds(t); loadMrs(t); loadJira(t); }
           appendHTML(cons, '<div class="cx-note">Запуск не дал ответа — сообщений в сессии нет. Если это упакованное приложение и ошибка повторяется, пришлите текст ошибки выше.</div>');
@@ -1202,14 +1156,14 @@ async function runPrompt(payload){
     } else {
       // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление)
       setTimeout(async () => {
-        if (currentFile !== f || streaming) return;
-        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') tailCount = dd.count; if (dd.active) startTail(f); } catch {}
+        if (S.currentFile !== f || S.streaming) return;
+        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; if (dd.active) startTail(f); } catch {}
       }, 600);
     }
     if (opts && opts.stopped) clearQueue();          // Стоп → чистим очередь (не сыпем дальше)
     else if (opts && opts.done) drainQueue();        // штатное завершение → следующий из очереди
   };
-  liveFinish = finish;                   // кнопка СТОП обрывает именно этот стрим (закрытие ES → abort на сервере)
+  S.liveFinish = finish;                   // кнопка СТОП обрывает именно этот стрим (закрытие ES → abort на сервере)
   es.onmessage = (e) => {
     let d; try { d = JSON.parse(e.data); } catch { return; }
     const stick = isNearBottom();        // держим низ, только если пользователь уже внизу
@@ -1238,13 +1192,13 @@ async function runPrompt(payload){
       wireApproval(el, d);
       if (stick) scrollBottom();
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
-      currentFile = d.file; streamingFile = d.file; tailCount = 0;
-      const nm = payload.pendingName || (pendingNewSession && pendingNewSession.name) || '';
+      S.currentFile = d.file; S.streamingFile = d.file; S.tailCount = 0;
+      const nm = payload.pendingName || (S.pendingNewSession && S.pendingNewSession.name) || '';
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = nm || 'Новая сессия';
       if (nm){ fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: d.file, name: nm }) }).catch(()=>{}); }  // закрепляем имя как заголовок карточки
-      pendingNewSession = null;   // сессия создана — pending снят
+      S.pendingNewSession = null;   // сессия создана — pending снят
     } else if (d.type === 'start'){
-      if (d.streamId) currentStreamId = d.streamId;   // для гарантированного /api/stop
+      if (d.streamId) S.currentStreamId = d.streamId;   // для гарантированного /api/stop
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
@@ -1256,8 +1210,8 @@ async function runPrompt(payload){
 }
 async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
-  currentFile = file;
-  returnView = (activeView==='status' || activeView==='board') ? activeView : 'status';
+  S.currentFile = file;
+  S.returnView = (S.activeView==='status' || S.activeView==='board') ? S.activeView : 'status';
   document.getElementById('viewBoard').style.display = 'none';
   document.getElementById('viewSkills').style.display = 'none';
   document.getElementById('viewMcp').style.display = 'none';
@@ -1266,11 +1220,11 @@ async function openSession(file){
   const bar = document.getElementById('sessionBar');
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
   bar.innerHTML = backBtn + `<span class="sb-title">Загрузка…</span>`;
-  document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
+  document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   document.getElementById('thread').innerHTML = `<div class="empty">Загрузка транскрипта…</div>`;
   document.getElementById('composer').innerHTML = '';
   document.getElementById('sessionSide').innerHTML = '';
-  if (streamingFile === file || SESSIONS.some(s => s.file === file && isWorking(s))) delete SESSION_CACHE[file];   // активная сессия — свежий стейт (active/blocks), чтобы показать «работает» и live-tail при перезаходе
+  if (S.streamingFile === file || S.SESSIONS.some(s => s.file === file && isWorking(s))) delete SESSION_CACHE[file];   // активная сессия — свежий стейт (active/blocks), чтобы показать «работает» и live-tail при перезаходе
   let t = SESSION_CACHE[file];
   if (!t){
     try {
@@ -1283,12 +1237,12 @@ async function openSession(file){
       return;
     }
   }
-  if (currentFile !== file) return;
+  if (S.currentFile !== file) return;
   // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
   // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
   const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
-  document.getElementById('backBtn').addEventListener('click', () => setView(returnView));
+  document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
   document.getElementById('sessionSide').innerHTML = sideHTML(t);
   document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));   // cu-тег в рейле → Unity (фокус/запуск)
@@ -1296,42 +1250,40 @@ async function openSession(file){
   wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
-  sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
+  S.sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
   loadBuilds(t);       // live-статус сборок TeamCity в рейл
   loadMrs(t);          // live-MR из GitLab в рейл
   loadJira(t);         // live-статус Jira в рейл
-  if (t.active || streamingFile === file) startRailRefresh(file);   // активная сессия → ветка/MR/сборки/Jira обновляются по ходу работы
+  if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → ветка/MR/сборки/Jira обновляются по ходу работы
 }
 /* ---------- лента блоков + live-tail активной сессии ---------- */
 function renderThread(t){
   const blocks = t.blocks || [];
   document.getElementById('thread').innerHTML = blocks.length ? `<div class="cx-console">${blocks.map(blockHTML).join('')}</div>` : `<div class="empty">Сессия без текстовых сообщений.</div>`;
   wireConsole();
-  tailCount = blocks.length;               // курсор live-tail = число уже показанных блоков
+  S.tailCount = blocks.length;               // курсор live-tail = число уже показанных блоков
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();
   if (t.active) startTail(t.file);         // сессия свежая → тянем новые блоки вживую
 }
-let tailCountTimer = null;   // локальный тикающий счётчик секунд в индикаторе тейла
-function stopTail(){ if (tailTimer){ clearInterval(tailTimer); tailTimer = null; } if (tailCountTimer){ clearInterval(tailCountTimer); tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
-function startTail(file){ stopTail(); tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
+function stopTail(){ if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
+function startTail(file){ stopTail(); S.tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
 // Живой рефреш рейла: по мере работы над контекстом ветка/MR/сборки/Jira меняются — периодически перечитываем
 // состояние сессии и обновляем секции (MR/сборки/Jira/ветка) на месте, не трогая теги/скролл/композер.
-let railTimer = null;
-function stopRailRefresh(){ if (railTimer){ clearInterval(railTimer); railTimer = null; } }
+function stopRailRefresh(){ if (S.railTimer){ clearInterval(S.railTimer); S.railTimer = null; } }
 function startRailRefresh(file){
   stopRailRefresh();
-  railTimer = setInterval(async () => {
-    if (currentFile !== file){ stopRailRefresh(); return; }
+  S.railTimer = setInterval(async () => {
+    if (S.currentFile !== file){ stopRailRefresh(); return; }
     let t2 = null;
     try { const r = await fetch('/api/session?file=' + encodeURIComponent(file), { cache:'no-store' }); t2 = await r.json(); } catch {}
-    if (!t2 || t2.error || currentFile !== file) return;
+    if (!t2 || t2.error || S.currentFile !== file) return;
     SESSION_CACHE[file] = t2;
     loadMrs(t2); loadJira(t2); loadBuilds(t2);     // секции сами обновляют свои боксы (+ #branchVal/#sc-base из MR)
-    if (!t2.active && !streaming){ stopRailRefresh(); }   // сессия затихла и Deck не стримит → рефреш больше не нужен
+    if (!t2.active && !S.streaming){ stopRailRefresh(); }   // сессия затихла и Deck не стримит → рефреш больше не нужен
   }, 25000);
 }
 // Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
@@ -1347,10 +1299,10 @@ function updateTailIndicator(on, turnStartTs){
     const txt = ind.querySelector('.cx-run-txt');
     const paint = () => { if (txt) txt.textContent = '✻ Claude работает… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
     paint();
-    if (tailCountTimer) clearInterval(tailCountTimer);
-    tailCountTimer = setInterval(paint, 1000);
+    if (S.tailCountTimer) clearInterval(S.tailCountTimer);
+    S.tailCountTimer = setInterval(paint, 1000);
   } else {
-    if (tailCountTimer){ clearInterval(tailCountTimer); tailCountTimer = null; }
+    if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }
     if (ind) ind.remove();
   }
 }
@@ -1365,17 +1317,17 @@ function updateRailContext(ctxPct, winTokens){
   if (typeof winTokens === 'number'){ const w = side.querySelector('.stat-win'); if (w) w.textContent = kTok(winTokens) + ' / 1M'; }
 }
 async function tailTick(file){
-  if (currentFile !== file){ stopTail(); return; }
-  if (streaming && streamingFile === file) return;   // Deck-стрим сам рендерит — не мешаем
-  let d; try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(file) + '&after=' + tailCount, { cache:'no-store' }); d = await r.json(); } catch { return; }
-  if (currentFile !== file || d.error) return;
+  if (S.currentFile !== file){ stopTail(); return; }
+  if (S.streaming && S.streamingFile === file) return;   // Deck-стрим сам рендерит — не мешаем
+  let d; try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(file) + '&after=' + S.tailCount, { cache:'no-store' }); d = await r.json(); } catch { return; }
+  if (S.currentFile !== file || d.error) return;
   const stick = isNearBottom();            // фиксируем позицию ДО добавления блоков/индикатора
   if (Array.isArray(d.blocks) && d.blocks.length){
     const cons = ensureConsole();
     const ind = document.getElementById('tailInd');
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
-    if (typeof d.count === 'number') tailCount = d.count;
-  } else if (typeof d.count === 'number') { tailCount = d.count; }
+    if (typeof d.count === 'number') S.tailCount = d.count;
+  } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateTailIndicator(!!d.working, d.turnStartTs);   // «работает… Nс» пока файл пишется (< 20с) — индикатор в самом низу
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора (иначе он прячется под фолдом)
@@ -1389,30 +1341,29 @@ function palIndex(){
   idx.push({type:'Вид', label:'Доска сессий', sub:'по свежести', act:()=>setView('board')});
   idx.push({type:'Вид', label:'Скиллы', sub:'каталог', act:()=>setView('skills')});
   idx.push({type:'Вид', label:'MCP-инструменты', sub:'серверы', act:()=>setView('mcp')});
-  SESSIONS.forEach(s=>idx.push({type:'Сессия', label:s.title, sub:s.project+(s.wo?' · '+s.wo:''), key:(s.title+' '+s.project+' '+(s.gitBranch||'')+' '+(s.lastPrompt||'')).toLowerCase(), act:()=>openSession(s.file)}));
-  SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does||'', key:(s.cmd+' '+(s.does||'')+' '+(s.trig||'')).toLowerCase(), act:()=>{ setView('skills'); skillCat='all'; query=''; const q=document.getElementById('q'); if(q) q.value=''; const c=document.getElementById('qClear'); if(c) c.hidden=true; renderSkills(); }}));
-  MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:(m.scope||'')+(m.transport?' · '+m.transport:''), key:(m.name+' '+(m.desc||'')+' '+(m.command||'')).toLowerCase(), act:()=>setView('mcp')}));
+  S.SESSIONS.forEach(s=>idx.push({type:'Сессия', label:s.title, sub:s.project+(s.wo?' · '+s.wo:''), key:(s.title+' '+s.project+' '+(s.gitBranch||'')+' '+(s.lastPrompt||'')).toLowerCase(), act:()=>openSession(s.file)}));
+  S.SKILLS.forEach(s=>idx.push({type:'Скилл', label:`/${s.cmd}`, sub:s.does||'', key:(s.cmd+' '+(s.does||'')+' '+(s.trig||'')).toLowerCase(), act:()=>{ setView('skills'); S.skillCat='all'; S.query=''; const q=document.getElementById('q'); if(q) q.value=''; const c=document.getElementById('qClear'); if(c) c.hidden=true; renderSkills(); }}));
+  S.MCP_SERVERS.forEach(m=>idx.push({type:'MCP', label:m.name, sub:(m.scope||'')+(m.transport?' · '+m.transport:''), key:(m.name+' '+(m.desc||'')+' '+(m.command||'')).toLowerCase(), act:()=>setView('mcp')}));
   return idx;
 }
-let palItems = [], palSel = 0;
-const palShown = () => Math.min(palItems.length, 40);
+const palShown = () => Math.min(S.palItems.length, 40);
 function openPal(){ document.getElementById('palBack').classList.add('open'); const i=document.getElementById('palInput'); i.value=''; renderPal(''); setTimeout(()=>i.focus(),40); }
 function closePal(){ document.getElementById('palBack').classList.remove('open'); }
 function renderPal(q){
   const all = palIndex(); q = q.trim().toLowerCase();
-  palItems = q ? all.filter(x=>(x.key||x.label.toLowerCase()).includes(q)) : all;
-  palSel = 0;
+  S.palItems = q ? all.filter(x=>(x.key||x.label.toLowerCase()).includes(q)) : all;
+  S.palSel = 0;
   const list = document.getElementById('palList');
-  list.innerHTML = palItems.length ? palItems.slice(0,40).map((x,i)=>`<div class="pal-item ${i===0?'sel':''}" data-i="${i}"><span class="pal-type">${x.type}</span><span class="pal-label">${esc(x.label)}</span><span class="pal-sub">${esc(x.sub||'')}</span></div>`).join('') : `<div class="pal-empty">Ничего не найдено</div>`;
+  list.innerHTML = S.palItems.length ? S.palItems.slice(0,40).map((x,i)=>`<div class="pal-item ${i===0?'sel':''}" data-i="${i}"><span class="pal-type">${x.type}</span><span class="pal-label">${esc(x.label)}</span><span class="pal-sub">${esc(x.sub||'')}</span></div>`).join('') : `<div class="pal-empty">Ничего не найдено</div>`;
   list.querySelectorAll('.pal-item').forEach(el=>{ el.addEventListener('click',()=>runPal(+el.dataset.i)); el.addEventListener('mousemove',()=>setSel(+el.dataset.i)); });
 }
-function setSel(i){ palSel=i; document.querySelectorAll('.pal-item').forEach((el,j)=>el.classList.toggle('sel',j===i)); const s=document.querySelector('.pal-item.sel'); if(s) s.scrollIntoView({block:'nearest'}); }
-function runPal(i){ const it=palItems[i]; if(!it) return; closePal(); it.act(); }
+function setSel(i){ S.palSel=i; document.querySelectorAll('.pal-item').forEach((el,j)=>el.classList.toggle('sel',j===i)); const s=document.querySelector('.pal-item.sel'); if(s) s.scrollIntoView({block:'nearest'}); }
+function runPal(i){ const it=S.palItems[i]; if(!it) return; closePal(); it.act(); }
 
 /* ---------- view switch + events ---------- */
 function setView(v){
   stopStream();   // уходя из сессии — закрыть живой стрим
-  activeView = v; currentFile = null;
+  S.activeView = v; S.currentFile = null;
   const boardish = (v==='board' || v==='status');
   document.getElementById('viewBoard').style.display = boardish ? 'flex' : 'none';
   document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
@@ -1422,19 +1373,19 @@ function setView(v){
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
   if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else renderBoard(true);
 }
-setInterval(() => { if (activeView === 'mcp' && !mcpDetail) loadUnityInstances(); }, 15000);   // live-цикл авто-дискавери Unity-инстансов
+setInterval(() => { if (S.activeView === 'mcp' && !S.mcpDetail) loadUnityInstances(); }, 15000);   // live-цикл авто-дискавери Unity-инстансов
 document.getElementById('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setView(b.dataset.v); });
 function applySearchQuery(){                    // единый ре-рендер под текущий query (после ввода/очистки)
   renderSearchDrop();                          // дропдаун сессий — во всех видах, включая открытую сессию
-  if (activeView==='skills') renderSkills(); else if (activeView==='mcp') renderMcp(); else if (activeView==='board'||activeView==='status') renderBoard();
+  if (S.activeView==='skills') renderSkills(); else if (S.activeView==='mcp') renderMcp(); else if (S.activeView==='board'||S.activeView==='status') renderBoard();
 }
 document.getElementById('q').addEventListener('input', e => {
-  query = e.target.value.trim().toLowerCase();
+  S.query = e.target.value.trim().toLowerCase();
   document.getElementById('qClear').hidden = !e.target.value;   // крестик — только когда в поле есть текст
   applySearchQuery();
 });
 document.getElementById('qClear').addEventListener('click', () => {
-  const inp = document.getElementById('q'); inp.value = ''; query = '';
+  const inp = document.getElementById('q'); inp.value = ''; S.query = '';
   document.getElementById('qClear').hidden = true;
   closeSearchDrop(); applySearchQuery(); inp.focus();
 });
@@ -1443,7 +1394,7 @@ document.addEventListener('mousedown', e => { if (!e.target.closest('.search')) 
 document.addEventListener('mousedown', e => { if (!e.target.closest('#projSwitch')){ const m = document.getElementById('projMenu'); if (m) m.hidden = true; } });   // меню проектов — клик-вне закрывает
 document.getElementById('filters').addEventListener('click', e => {
   const b = e.target.closest('.fchip'); if (!b) return;
-  filter = b.dataset.f;
+  S.projFilter = b.dataset.f;
   document.querySelectorAll('.fchip').forEach(x => x.setAttribute('aria-pressed', String(x===b)));
   renderBoard();
 });
@@ -1455,12 +1406,12 @@ document.addEventListener('keydown', e => {
   const palOpen = document.getElementById('palBack').classList.contains('open');
   if (palOpen) {
     if (e.key==='Escape') closePal();
-    else if (e.key==='ArrowDown') { e.preventDefault(); setSel(Math.min(palSel+1, palShown()-1)); }
-    else if (e.key==='ArrowUp') { e.preventDefault(); setSel(Math.max(palSel-1, 0)); }
-    else if (e.key==='Enter') { e.preventDefault(); runPal(palSel); }
+    else if (e.key==='ArrowDown') { e.preventDefault(); setSel(Math.min(S.palSel+1, palShown()-1)); }
+    else if (e.key==='ArrowUp') { e.preventDefault(); setSel(Math.max(S.palSel-1, 0)); }
+    else if (e.key==='Enter') { e.preventDefault(); runPal(S.palSel); }
     return;
   }
-  if (e.key==='Escape' && currentFile) setView(returnView);
+  if (e.key==='Escape' && S.currentFile) setView(S.returnView);
 });
 
 /* ---------- инъекция: вкладка «Статусы» (первой) + CSS консоли/markdown/«/» (новые правила, макет не трогаем) ---------- */
@@ -1477,30 +1428,30 @@ function ensureStatusTab(){
 
 
 /* ---------- «работает сейчас» + уведомления о завершении ---------- */
-function workingSet(){ const set = new Set(); for (const s of SESSIONS) if (isWorking(s)) set.add(s.file); return set; }
-function titleOf(file){ const s = SESSIONS.find(x=>x.file===file); return s ? s.title : ''; }
+function workingSet(){ const set = new Set(); for (const s of S.SESSIONS) if (isWorking(s)) set.add(s.file); return set; }
+function titleOf(file){ const s = S.SESSIONS.find(x=>x.file===file); return s ? s.title : ''; }
 function paintNotifyBtn(){
   const btn = document.getElementById('notifyBtn'); if (!btn) return;
-  btn.textContent = notifyEnabled ? '🔔' : '🔕';
-  btn.title = notifyEnabled ? 'Уведомления о завершении включены' : 'Уведомления о завершении выключены';
-  btn.setAttribute('aria-pressed', String(notifyEnabled));
+  btn.textContent = S.notifyEnabled ? '🔔' : '🔕';
+  btn.title = S.notifyEnabled ? 'Уведомления о завершении включены' : 'Уведомления о завершении выключены';
+  btn.setAttribute('aria-pressed', String(S.notifyEnabled));
 }
 function initNotifyToggle(){
   const btn = document.getElementById('notifyBtn'); if (!btn) return;
   const supported = 'Notification' in window;
   const nativeNotify = !!(window.deckNative && window.deckNative.notify);   // Electron: уведомления через main, разрешение браузера не нужно
-  notifyEnabled = (nativeNotify || (supported && Notification.permission === 'granted')) && localStorage.getItem('deckNotify') !== 'off';
+  S.notifyEnabled = (nativeNotify || (supported && Notification.permission === 'granted')) && localStorage.getItem('deckNotify') !== 'off';
   paintNotifyBtn();
   btn.addEventListener('click', async () => {
     if (!supported){ setStreamStatus('Браузер не поддерживает уведомления', 1800); return; }
-    if (!notifyEnabled){
+    if (!S.notifyEnabled){
       let perm = Notification.permission;
       if (perm !== 'granted') perm = await Notification.requestPermission();
-      notifyEnabled = perm === 'granted';
-      localStorage.setItem('deckNotify', notifyEnabled ? 'on' : 'off');
-      if (!notifyEnabled) setStreamStatus('Разрешение на уведомления не выдано', 1800);
+      S.notifyEnabled = perm === 'granted';
+      localStorage.setItem('deckNotify', S.notifyEnabled ? 'on' : 'off');
+      if (!S.notifyEnabled) setStreamStatus('Разрешение на уведомления не выдано', 1800);
     } else {
-      notifyEnabled = false; localStorage.setItem('deckNotify', 'off');
+      S.notifyEnabled = false; localStorage.setItem('deckNotify', 'off');
     }
     paintNotifyBtn();
   });
@@ -1508,13 +1459,13 @@ function initNotifyToggle(){
 async function ensureNotifyPermission(){        // тихий запрос при первой отправке из композера
   if (!('Notification' in window) || Notification.permission !== 'default') return;
   const perm = await Notification.requestPermission();
-  if (perm === 'granted' && localStorage.getItem('deckNotify') !== 'off') notifyEnabled = true;
+  if (perm === 'granted' && localStorage.getItem('deckNotify') !== 'off') S.notifyEnabled = true;
   paintNotifyBtn();
 }
 function notifyDone(file, title, heading){       // одно уведомление на рабочий эпизод (дедуп по sessionId)
   if (notifiedDone.has(file)) return;            // и Deck-finish, и poll-переход — одно и то же завершение
   notifiedDone.add(file);
-  if (!notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
+  if (!S.notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
   const head = (heading || 'Claude завершил') + (title ? ' · ' + title : '');
   if (window.deckNative && window.deckNative.notify){   // Electron: через main — сработает и из свёрнутого в трей окна, клик сфокусит + откроет сессию
     window.deckNative.notify({ title: head, body: 'Открыть сессию в Deck', file });
@@ -1530,54 +1481,52 @@ function notifyDone(file, title, heading){       // одно уведомлен�
 // Сидим JIRA_CACHE из серверного payload сессий — чтобы effectiveColumn был верен уже на ПЕРВОМ рендере (без прыжков).
 function seedJiraFromSessions(){
   const now = Date.now();
-  for (const s of SESSIONS){ if (s.wo && s.jira && s.jira.available && s.jira.status) JIRA_CACHE[s.wo] = { ts: now, available:true, status:s.jira.status, category:s.jira.category }; }
+  for (const s of S.SESSIONS){ if (s.wo && s.jira && s.jira.available && s.jira.status) JIRA_CACHE[s.wo] = { ts: now, available:true, status:s.jira.status, category:s.jira.category }; }
 }
 /* ---------- живой поллинг доски: лёгкий тик ~7с (рендер) + тяжёлый re-fetch раз в ~30с ---------- */
 // Один таймер. Лёгкий тик перерисовывает доску (пульс «работает», timeAgo) СОХРАНЯЯ скролл/фильтр/поиск.
 // Тяжёлый тик (раз в ~30с) перечитывает /api/sessions + гидрирует MR/Jira, чтобы влитый MR сам стал «влит».
 // Открытая session-view (лента/композер/стрим) НЕ трогается — рендерим только на доске «Статусы»/«Доска».
-let _lastHeavy = 0;
 async function pollSessions(){
-  if (polling) return; polling = true;
-  const onBoard = (activeView === 'board' || activeView === 'status');
-  const heavy = Date.now() - _lastHeavy >= 29000;
+  if (S.polling) return; S.polling = true;
+  const onBoard = (S.activeView === 'board' || S.activeView === 'status');
+  const heavy = Date.now() - S._lastHeavy >= 29000;
   try {
     if (heavy){
-      _lastHeavy = Date.now();
+      S._lastHeavy = Date.now();
       const r = await fetch('/api/sessions', { cache:'no-store' });
       const data = await r.json();
-      if (Array.isArray(data.sessions)) SESSIONS = data.sessions;   // обновляем данные НА МЕСТЕ, приложение не пересоздаём
+      if (Array.isArray(data.sessions)) S.SESSIONS = data.sessions;   // обновляем данные НА МЕСТЕ, приложение не пересоздаём
       seedJiraFromSessions();
       const nowSet = workingSet();
       // Уведомляем только при ПОДТВЕРЖДЁННОМ завершении: сессия должна простаивать два опроса подряд (иначе долгий
       // tool-call, который не пишет .jsonl >20с, ложно выглядит «готово»). isWorking учитывает и фоновых сабагентов,
       // так что «ничего не работает» = ни генерации, ни bgRunning. Форграунд-финиш (finish()) шлёт сразу — там конец точный.
-      for (const file of nowSet){ notifiedDone.delete(file); pendingDone.delete(file); }   // снова «работает» → сброс дедупа и кандидата
+      for (const file of nowSet){ notifiedDone.delete(file); S.pendingDone.delete(file); }   // снова «работает» → сброс дедупа и кандидата
       for (const file of [...pendingDone]){                                                 // простаивал прошлый опрос и всё ещё простаивает → подтверждено
-        if (SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file));
-        pendingDone.delete(file);
+        if (S.SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file));
+        S.pendingDone.delete(file);
       }
-      for (const file of prevWorkingFiles){ if (!nowSet.has(file)) pendingDone.add(file); }  // только что ушёл в простой → кандидат, проверим на следующем опросе
-      prevWorkingFiles = nowSet;
+      for (const file of S.prevWorkingFiles){ if (!nowSet.has(file)) S.pendingDone.add(file); }  // только что ушёл в простой → кандидат, проверим на следующем опросе
+      S.prevWorkingFiles = nowSet;
     }
-  } catch { polling = false; return; }
+  } catch { S.polling = false; return; }
   if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(); hydrateJira(); } }   // renderBoard(false) сохраняет colScroll; session-view не трогаем
   renderUsageBar();
-  polling = false;
+  S.polling = false;
 }
-function startPolling(){ if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(pollSessions, 7000); }
+function startPolling(){ if (S.pollTimer) clearInterval(S.pollTimer); S.pollTimer = setInterval(pollSessions, 7000); }
 
 /* ---------- аккаунт-лимиты Claude: индикатор в баре + окно usage ---------- */
-let USAGE = null, usageTimer = null;
 async function loadUsage(){
-  try { const r = await fetch('/api/usage', { cache:'no-store' }); USAGE = await r.json(); }
-  catch { USAGE = { available:false, reason:'сеть' }; }
+  try { const r = await fetch('/api/usage', { cache:'no-store' }); S.USAGE = await r.json(); }
+  catch { S.USAGE = { available:false, reason:'сеть' }; }
   renderUsageBar();
 }
 function usageBarPct(){
-  if (USAGE && USAGE.available){          // более узкое из 5ч/нед = более израсходованное
-    const a = USAGE.fiveHour && USAGE.fiveHour.utilization!=null ? USAGE.fiveHour.utilization : 0;
-    const b = USAGE.sevenDay && USAGE.sevenDay.utilization!=null ? USAGE.sevenDay.utilization : 0;
+  if (S.USAGE && S.USAGE.available){          // более узкое из 5ч/нед = более израсходованное
+    const a = S.USAGE.fiveHour && S.USAGE.fiveHour.utilization!=null ? S.USAGE.fiveHour.utilization : 0;
+    const b = S.USAGE.sevenDay && S.USAGE.sevenDay.utilization!=null ? S.USAGE.sevenDay.utilization : 0;
     return { pct: Math.max(a,b), src:'limits' };
   }
   const s = contextSession();             // фолбэк: контекст открытой/свежей сессии
@@ -1609,7 +1558,7 @@ function modalBack(id){
 }
 function openUsageModal(){
   const back = modalBack('usageBack');
-  const u = USAGE || {};
+  const u = S.USAGE || {};
   const win = (w, title) => {
     if (!w) return `<div class="um-row"><span class="um-k">${title}</span><span class="um-v">—</span></div>`;
     const p = w.utilization==null?0:w.utilization;
@@ -1631,8 +1580,8 @@ function openUsageModal(){
 
 /* ---------- текущий контекст (для .now-лейбла и usage-фолбэка) ---------- */
 function contextSession(){
-  if (currentFile) return SESSION_CACHE[currentFile] || SESSIONS.find(s=>s.file===currentFile) || null;
-  return SESSIONS.find(isWorking) || SESSIONS.find(s=>s.active) || SESSIONS[0] || null;
+  if (S.currentFile) return SESSION_CACHE[S.currentFile] || S.SESSIONS.find(s=>s.file===S.currentFile) || null;
+  return S.SESSIONS.find(isWorking) || S.SESSIONS.find(s=>s.active) || S.SESSIONS[0] || null;
 }
 
 /* ---------- поиск-дропдаун сессий (работает во всех видах) ---------- */
@@ -1641,7 +1590,7 @@ function renderSearchDrop(){
   const drop = document.getElementById('qDrop'), inp = document.getElementById('q'); if (!drop || !inp) return;
   const q = inp.value.trim().toLowerCase();
   if (!q){ closeSearchDrop(); return; }
-  const items = SESSIONS.filter(s => searchableText(s, JIRA_CACHE, MR_CACHE, isWorking(s)).includes(q)).slice(0, 12);
+  const items = S.SESSIONS.filter(s => searchableText(s, JIRA_CACHE, MR_CACHE, isWorking(s)).includes(q)).slice(0, 12);
   drop.hidden = false;
   if (!items.length){ drop.innerHTML = `<div class="qd-empty">Ничего не найдено</div>`; return; }
   drop.innerHTML = items.map(s => {
@@ -1651,7 +1600,7 @@ function renderSearchDrop(){
   drop.querySelectorAll('.qd-item').forEach(el => el.addEventListener('mousedown', e => {
     e.preventDefault();                          // до blur, чтобы клик сработал
     const f = el.dataset.file; closeSearchDrop();
-    inp.value = ''; query = ''; const c = document.getElementById('qClear'); if (c) c.hidden = true;
+    inp.value = ''; S.query = ''; const c = document.getElementById('qClear'); if (c) c.hidden = true;
     openSession(f);
   }));
 }
@@ -1659,15 +1608,15 @@ function renderSearchDrop(){
 /* ---------- новая сессия ---------- */
 async function openNewSessionDialog(){
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
-  if (!MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
+  if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
   const ap = activeProjectPath();                                         // папка активного проекта — приоритетный дефолт
   const cwds = [...new Set([ap, ...SESSIONS.map(s=>s.cwd)].filter(Boolean))].sort();
   const preferred = ap || cwds[0] || '';
   const opts = cwds.map(c=>`<option value="${esc(c)}"${c===preferred?' selected':''}>${esc(c)}</option>`).join('');
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
-  const modelOpts = (MODELS.length?MODELS:[{value:'',label:'по умолчанию'}]).map(m=>`<option value="${esc(m.value)}"${m.value===sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
-  const effOpts = (EFFORTS.length?EFFORTS:[{value:'',label:'по умолчанию'}]).map(e=>`<option value="${esc(e.value)}"${e.value===sessionEffort?' selected':''}>${esc(e.label)}</option>`).join('');
+  const modelOpts = (S.MODELS.length?S.MODELS:[{value:'',label:'по умолчанию'}]).map(m=>`<option value="${esc(m.value)}"${m.value===S.sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
+  const effOpts = (S.EFFORTS.length?S.EFFORTS:[{value:'',label:'по умолчанию'}]).map(e=>`<option value="${esc(e.value)}"${e.value===S.sessionEffort?' selected':''}>${esc(e.label)}</option>`).join('');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Новая сессия</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <label class="ns-lbl">Рабочая папка (cwd)</label>
@@ -1702,11 +1651,11 @@ async function openNewSessionDialog(){
 // Пустая именованная сессия: файла ещё нет — создастся первым промтом; имя закрепится в session-событии.
 function openPendingNewSession(cwd, name, mode, model, effort){
   stopStream();
-  currentFile = null;
-  pendingNewSession = { cwd, name };
-  sessionMode = mode || 'default'; sessionModel = model || ''; sessionEffort = effort || '';
-  localStorage.setItem('deckModel', sessionModel); localStorage.setItem('deckEffort', sessionEffort);
-  returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
+  S.currentFile = null;
+  S.pendingNewSession = { cwd, name };
+  S.sessionMode = mode || 'default'; S.sessionModel = model || ''; S.sessionEffort = effort || '';
+  localStorage.setItem('deckModel', S.sessionModel); localStorage.setItem('deckEffort', S.sessionEffort);
+  S.returnView = (S.activeView==='status'||S.activeView==='board') ? S.activeView : 'status';
   document.getElementById('viewBoard').style.display='none';
   document.getElementById('viewSkills').style.display='none';
   document.getElementById('viewMcp').style.display='none';
@@ -1715,7 +1664,7 @@ function openPendingNewSession(cwd, name, mode, model, effort){
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
   document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(name)}</span>`;
-  document.getElementById('backBtn').addEventListener('click', ()=>setView(returnView));
+  document.getElementById('backBtn').addEventListener('click', ()=>setView(S.returnView));
   document.getElementById('sessionSide').innerHTML = `<div class="sec"><div class="rail-hint">Новая сессия «${esc(name)}» — напишите первый промпт, и она создастся.</div></div>`;
   document.getElementById('thread').innerHTML = '<div class="cx-console"><div class="empty">Пустая сессия. Напишите первый промпт ниже.</div></div>';
   wireConsole();
@@ -1727,8 +1676,8 @@ function openPendingNewSession(cwd, name, mode, model, effort){
 // Форк остаётся с промтом (продолжение контекста): создаём и сразу отправляем.
 function openNewSession(cwd, prompt, mode, forkFile){
   stopStream();
-  currentFile = null; pendingNewSession = null;
-  returnView = (activeView==='status'||activeView==='board') ? activeView : 'status';
+  S.currentFile = null; S.pendingNewSession = null;
+  S.returnView = (S.activeView==='status'||S.activeView==='board') ? S.activeView : 'status';
   document.getElementById('viewBoard').style.display='none';
   document.getElementById('viewSkills').style.display='none';
   document.getElementById('viewMcp').style.display='none';
@@ -1737,11 +1686,11 @@ function openNewSession(cwd, prompt, mode, forkFile){
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
   document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${forkFile?'Форк сессии…':'Новая сессия…'}</span>`;
-  document.getElementById('backBtn').addEventListener('click', ()=>setView(returnView));
+  document.getElementById('backBtn').addEventListener('click', ()=>setView(S.returnView));
   document.getElementById('sessionSide').innerHTML = '<div class="sec"><div class="rail-hint">Новая сессия создаётся…</div></div>';
   document.getElementById('thread').innerHTML = '<div class="cx-console"></div>';
   wireConsole();
-  sessionMode = mode;
+  S.sessionMode = mode;
   renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:'Новая сессия', project: proj });
   paintMode();
   loadSkills(cwd);
@@ -1776,8 +1725,8 @@ function openDeleteDialog(file, title){
       const r = await fetch('/api/delete-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
       const d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d && d.error ? d.error : 'delete failed');
-      SESSIONS = SESSIONS.filter(s=>s.file!==file); delete SESSION_CACHE[file];
-      if (currentFile === file){ stopStream(); setView(returnView); } else renderBoard(false);
+      S.SESSIONS = S.SESSIONS.filter(s=>s.file!==file); delete SESSION_CACHE[file];
+      if (S.currentFile === file){ stopStream(); setView(S.returnView); } else renderBoard(false);
       toast('Перемещено в корзину (deck-trash)');
     } catch (e){ toast('Не удалось удалить: ' + (e.message||e)); }
   });
@@ -1785,7 +1734,7 @@ function openDeleteDialog(file, title){
 }
 function openForkDialog(t){
   const back = modalBack('forkBack');
-  const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m===sessionMode?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
+  const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m===S.sessionMode?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Форк сессии</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="um-note">Новая сессия продолжит контекст «${esc(t.title||t.file)}» (resume + fork). Оригинал не меняется.</div>
@@ -1817,13 +1766,13 @@ async function load(){
   try {
     const r = await fetch('/api/sessions', { cache:'no-store' });
     const data = await r.json();
-    SESSIONS = Array.isArray(data.sessions) ? data.sessions : [];
-  } catch (e) { SESSIONS = []; }
+    S.SESSIONS = Array.isArray(data.sessions) ? data.sessions : [];
+  } catch (e) { S.SESSIONS = []; }
   seedJiraFromSessions();              // Jira уже в payload → колонки верны на первом рендере
-  prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
+  S.prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
   renderFilters();
   renderNow();
-  if (activeView === 'status' || activeView === 'board') renderBoard(true);   // дорисовать борд с данными (scroll сохраняется)
+  if (S.activeView === 'status' || S.activeView === 'board') renderBoard(true);   // дорисовать борд с данными (scroll сохраняется)
   startPolling();
   hydrateMrs(true);    // рефреш страницы (F5) → live-MR СРАЗУ, мимо кэшей (не ждать цикл поллинга)
   hydrateJira(true);   // рефреш страницы (F5) → live-статусы Jira СРАЗУ, мимо кэшей
@@ -1832,7 +1781,7 @@ async function load(){
   setTimeout(() => {
     loadMcpCatalog();  // реальные MCP-серверы
     loadUsage();
-    if (!usageTimer) usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
+    if (!S.usageTimer) S.usageTimer = setInterval(loadUsage, 30000);   // лимиты обновляем ~раз в 30с (сервер кэширует 45с)
   }, 1500);
 }
 function wireTopbar(){
@@ -1847,14 +1796,14 @@ function wireTopbar(){
 /* ---------- Переключатель проектов (workspaces): «Открыть папку» как в VS Code, доску скоупит сервер ---------- */
 function renderProjSwitch(){
   const nameEl = document.getElementById('projName'); if (!nameEl) return;
-  const active = PROJECTS.find((p) => p.id === ACTIVE_PROJECT);
+  const active = S.PROJECTS.find((p) => p.id === S.ACTIVE_PROJECT);
   nameEl.textContent = active ? active.name : 'Все проекты';
 }
 function toggleProjMenu(){
   const menu = document.getElementById('projMenu'); if (!menu) return;
   if (!menu.hidden){ menu.hidden = true; return; }
-  const rows = [`<div class="pm-item${ACTIVE_PROJECT ? '' : ' active'}" data-id=""><span class="pm-main"><span class="pm-name">Все проекты</span></span></div>`];
-  for (const p of PROJECTS) rows.push(`<div class="pm-item${p.id === ACTIVE_PROJECT ? ' active' : ''}" data-id="${esc(p.id)}"><span class="pm-main"><span class="pm-name">${esc(p.name)}</span><span class="pm-path">${esc(p.path)}</span></span><button class="pm-x" data-rm="${esc(p.id)}" title="Убрать из списка">✕</button></div>`);
+  const rows = [`<div class="pm-item${S.ACTIVE_PROJECT ? '' : ' active'}" data-id=""><span class="pm-main"><span class="pm-name">Все проекты</span></span></div>`];
+  for (const p of S.PROJECTS) rows.push(`<div class="pm-item${p.id === S.ACTIVE_PROJECT ? ' active' : ''}" data-id="${esc(p.id)}"><span class="pm-main"><span class="pm-name">${esc(p.name)}</span><span class="pm-path">${esc(p.path)}</span></span><button class="pm-x" data-rm="${esc(p.id)}" title="Убрать из списка">✕</button></div>`);
   rows.push('<div class="pm-sep"></div><div class="pm-item pm-add" data-add="1"><span class="pm-main"><span class="pm-name">＋ Открыть папку…</span></span></div>');
   menu.innerHTML = rows.join('');
   menu.hidden = false;
@@ -1866,9 +1815,9 @@ function toggleProjMenu(){
   menu.querySelectorAll('.pm-x').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); removeProject(b.dataset.rm); }));
 }
 async function switchProject(id){
-  if (id === ACTIVE_PROJECT) return;
+  if (id === S.ACTIVE_PROJECT) return;
   try { await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'select', id }) }); } catch {}
-  ACTIVE_PROJECT = id; MR_TTL_RESET(); renderProjSwitch();
+  S.ACTIVE_PROJECT = id; MR_TTL_RESET(); renderProjSwitch();
   await load();   // сервер отдаст сессии уже скоупнутые на активный проект
 }
 async function addProject(){
@@ -1876,17 +1825,16 @@ async function addProject(){
   let r; try { r = await window.deckNative.pickPath({ title:'Открыть папку проекта' }); } catch { return; }
   if (!r || !r.ok || !r.path) return;
   let d; try { d = await (await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'add', path: r.path }) })).json(); } catch { toast('Не удалось добавить папку'); return; }
-  PROJECTS = d.projects || []; ACTIVE_PROJECT = d.activeId || ''; MR_TTL_RESET(); renderProjSwitch(); await load();
+  S.PROJECTS = d.projects || []; S.ACTIVE_PROJECT = d.activeId || ''; MR_TTL_RESET(); renderProjSwitch(); await load();
 }
 async function removeProject(id){
   let d; try { d = await (await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'remove', id }) })).json(); } catch { return; }
-  PROJECTS = d.projects || []; ACTIVE_PROJECT = d.activeId || ''; renderProjSwitch();
+  S.PROJECTS = d.projects || []; S.ACTIVE_PROJECT = d.activeId || ''; renderProjSwitch();
   const menu = document.getElementById('projMenu'); if (menu){ menu.hidden = true; toggleProjMenu(); }   // перерисовать открытое меню
   await load();
 }
 
 /* ---------- D1: авторизация Claude из приложения ---------- */
-let AUTH = { loggedIn: false };
 function openExternal(url){   // системный браузер: в Electron — мост, в браузере — новая вкладка
   if (window.deckNative && window.deckNative.openExternal) window.deckNative.openExternal(url);
   else window.open(url, '_blank', 'noopener');
@@ -1900,7 +1848,7 @@ async function openWoJira(wo){
 }
 // Локальный ресурс из вывода (ссылка на .md и т.п.): открыть файл в дефолтном приложении ОС, НЕ навигировать окно Deck.
 function openLocalResource(rawHref){
-  const cwd = (currentFile && SESSION_CACHE[currentFile] && SESSION_CACHE[currentFile].cwd) || '';
+  const cwd = (S.currentFile && SESSION_CACHE[S.currentFile] && SESSION_CACHE[S.currentFile].cwd) || '';
   openFileViewer(rawHref, cwd);
 }
 // Встроенный просмотрщик локального файла (клик по ссылке .md/.txt в выводе): читаем через /api/file и показываем
@@ -1948,31 +1896,30 @@ document.addEventListener('click', (e) => {
   else { try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done(); } catch { toast('Не удалось скопировать'); } }
 }, true);
 async function loadAuth(){
-  try { AUTH = await (await fetch('/api/auth', { cache:'no-store' })).json(); } catch { AUTH = { loggedIn:false, reason:'сеть' }; }
+  try { S.AUTH = await (await fetch('/api/auth', { cache:'no-store' })).json(); } catch { S.AUTH = { loggedIn:false, reason:'сеть' }; }
   renderAuth();
 }
 function renderAuth(){
   const chip = document.getElementById('authChip'), gate = document.getElementById('authGate');
   if (chip){
-    chip.classList.toggle('in', !!AUTH.loggedIn);
-    chip.textContent = AUTH.loggedIn ? (AUTH.email || 'Claude ✓') : 'Войти в Claude';
-    chip.title = AUTH.loggedIn ? ('Claude: ' + (AUTH.email||'') + (AUTH.orgName?(' · '+AUTH.orgName):'') + ' — клик для выхода') : 'Войти в Claude';
+    chip.classList.toggle('in', !!S.AUTH.loggedIn);
+    chip.textContent = S.AUTH.loggedIn ? (S.AUTH.email || 'Claude ✓') : 'Войти в Claude';
+    chip.title = S.AUTH.loggedIn ? ('Claude: ' + (S.AUTH.email||'') + (S.AUTH.orgName?(' · '+S.AUTH.orgName):'') + ' — клик для выхода') : 'Войти в Claude';
   }
-  if (gate) gate.hidden = !!AUTH.loggedIn;
+  if (gate) gate.hidden = !!S.AUTH.loggedIn;
 }
 /* ---------- Плашка неавторизованных интеграций (Jira/TeamCity/GitLab) — красная, если не авторизован хотя бы один ---------- */
-let SVC_CFG = null;
 async function loadServicesGate(){
-  try { SVC_CFG = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch { SVC_CFG = null; }
+  try { S.SVC_CFG = await (await fetch('/api/config', { cache:'no-store' })).json(); } catch { S.SVC_CFG = null; }
   renderServicesGate();
 }
 function renderServicesGate(cfg){
-  if (cfg) SVC_CFG = cfg;
-  if (SVC_CFG && SVC_CFG.jira) JIRA_HOST_CFG = SVC_CFG.jira.host || '';   // хост Jira для ссылок берём из конфига
-  if (SVC_CFG){ PROJECTS = Array.isArray(SVC_CFG.projects) ? SVC_CFG.projects : []; ACTIVE_PROJECT = SVC_CFG.activeProjectId || ''; renderProjSwitch(); }   // проекты в переключатель
+  if (cfg) S.SVC_CFG = cfg;
+  if (S.SVC_CFG && S.SVC_CFG.jira) S.JIRA_HOST_CFG = S.SVC_CFG.jira.host || '';   // хост Jira для ссылок берём из конфига
+  if (S.SVC_CFG){ S.PROJECTS = Array.isArray(S.SVC_CFG.projects) ? S.SVC_CFG.projects : []; S.ACTIVE_PROJECT = S.SVC_CFG.activeProjectId || ''; renderProjSwitch(); }   // проекты в переключатель
   const gate = document.getElementById('svcGate'), msg = document.getElementById('svcGateMsg');
   if (!gate || !msg) return;
-  const c = SVC_CFG || {};
+  const c = S.SVC_CFG || {};
   const missing = [];
   if (!(c.jira && c.jira.enabled)) missing.push('Jira');
   if (!(c.teamcity && c.teamcity.tokenSet && c.teamcity.host)) missing.push('TeamCity');
@@ -1982,26 +1929,25 @@ function renderServicesGate(cfg){
   gate.hidden = false;
 }
 function requireAuth(){   // гейт для chat/usage/новой сессии
-  if (AUTH.loggedIn) return true;
+  if (S.AUTH.loggedIn) return true;
   toast('Войдите в Claude — действие недоступно без авторизации');
   startLogin();
   return false;
 }
-function onAuthChip(){ if (AUTH.loggedIn) confirmLogout(); else startLogin(); }
+function onAuthChip(){ if (S.AUTH.loggedIn) confirmLogout(); else startLogin(); }
 async function confirmLogout(){
   const back = modalBack('logoutBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Выйти из Claude?</span><button class="dm-x" type="button">✕</button></div>
-    <div class="dm-body"><div class="dm-text">${esc(AUTH.email||'')}</div><div class="um-note">После выхода чат/лимиты/новые сессии станут недоступны, пока не войдёте снова.</div>
+    <div class="dm-body"><div class="dm-text">${esc(S.AUTH.email||'')}</div><div class="um-note">После выхода чат/лимиты/новые сессии станут недоступны, пока не войдёте снова.</div>
     <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start dm-danger" type="button">Выйти</button></div></div></div>`;
   back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
   back.querySelector('.dm-cancel').addEventListener('click', ()=>back.classList.remove('open'));
   back.querySelector('.dm-danger').addEventListener('click', async ()=>{ back.classList.remove('open'); try { await fetch('/api/auth/logout', { method:'POST' }); } catch {} await loadAuth(); toast('Вы вышли из Claude'); });
   back.classList.add('open');
 }
-let loginInProgress = false;   // single-flight на клиенте: повторный клик во время активного логина не запускает второй вход
 async function startLogin(){
-  if (loginInProgress) return;   // логин уже идёт — не плодим второй процесс/окно браузера
-  loginInProgress = true;
+  if (S.loginInProgress) return;   // логин уже идёт — не плодим второй процесс/окно браузера
+  S.loginInProgress = true;
   const back = modalBack('loginBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Вход в Claude</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
@@ -2011,7 +1957,7 @@ async function startLogin(){
       <input id="loginCode" class="ns-inp" type="text" placeholder="вставь код и нажми Подтвердить" autocomplete="off">
       <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="loginSubmit" type="button" disabled>Подтвердить</button></div>
     </div></div>`;
-  const close = ()=>{ back.classList.remove('open'); loginInProgress = false; if (loginId) fetch('/api/auth/cancel?id='+encodeURIComponent(loginId)).catch(()=>{}); };
+  const close = ()=>{ back.classList.remove('open'); S.loginInProgress = false; if (loginId) fetch('/api/auth/cancel?id='+encodeURIComponent(loginId)).catch(()=>{}); };
   back.querySelector('.dm-x').addEventListener('click', close);
   back.querySelector('.dm-cancel').addEventListener('click', close);
   back.classList.add('open');
@@ -2031,9 +1977,9 @@ async function startLogin(){
   // Ловим успех по ЛЮБОМУ пути (в т.ч. когда браузер авторизовал сам, без кода): поллим /api/auth ~каждые 2с.
   const started = Date.now();
   const pollAuth = async () => {
-    if (!loginInProgress || !back.classList.contains('open')) return;   // модалку закрыли/отменили — стоп
-    await loadAuth();                                                    // обновляет AUTH + renderAuth: чип зелёный, красная плашка #authGate гаснет
-    if (AUTH.loggedIn){ back.classList.remove('open'); loginInProgress = false; toast('Вход выполнен: ' + (AUTH.email || '')); return; }
+    if (!S.loginInProgress || !back.classList.contains('open')) return;   // модалку закрыли/отменили — стоп
+    await loadAuth();                                                    // обновляет S.AUTH + renderAuth: чип зелёный, красная плашка #authGate гаснет
+    if (S.AUTH.loggedIn){ back.classList.remove('open'); S.loginInProgress = false; toast('Вход выполнен: ' + (S.AUTH.email || '')); return; }
     if (Date.now() - started > 180000) return;                          // таймаут ~3мин
     setTimeout(pollAuth, 2000);
   };
@@ -2044,22 +1990,21 @@ async function startLogin(){
     submit.disabled = true; submit.textContent = 'Проверяю…';
     try {
       const r = await (await fetch('/api/auth/code', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ loginId, code: codeInp.value.trim() }) })).json();
-      if (r.ok){ back.classList.remove('open'); loginInProgress = false; await loadAuth(); toast('Вход выполнен: ' + (AUTH.email||'')); }
+      if (r.ok){ back.classList.remove('open'); S.loginInProgress = false; await loadAuth(); toast('Вход выполнен: ' + (S.AUTH.email||'')); }
       else { back.querySelector('#loginStep').textContent = 'Код не принят — попробуй ещё раз.'; submit.disabled = false; submit.textContent = 'Подтвердить'; }
     } catch { submit.disabled = false; submit.textContent = 'Подтвердить'; }
   });
 }
 
 /* ---------- D3: обновления (только в Electron) — версия + PAT + проверка ---------- */
-let UPDATE_STATUS_EL = null, UPDATE_INSTALL_EL = null, UPDATE_DOWNLOAD_EL = null;
 function renderUpdateStatus(s){
   if (!s) return;
-  if (UPDATE_DOWNLOAD_EL){
-    UPDATE_DOWNLOAD_EL.style.display = (s.state === 'available') ? '' : 'none';   // «Обновить» — только когда апдейт найден и загрузка ещё не начата
-    if (s.state === 'available'){ UPDATE_DOWNLOAD_EL.textContent = '↓ Обновить до ' + (s.version||''); UPDATE_DOWNLOAD_EL.disabled = false; }
+  if (S.UPDATE_DOWNLOAD_EL){
+    S.UPDATE_DOWNLOAD_EL.style.display = (s.state === 'available') ? '' : 'none';   // «Обновить» — только когда апдейт найден и загрузка ещё не начата
+    if (s.state === 'available'){ S.UPDATE_DOWNLOAD_EL.textContent = '↓ Обновить до ' + (s.version||''); S.UPDATE_DOWNLOAD_EL.disabled = false; }
   }
-  if (UPDATE_INSTALL_EL) UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // «Перезапустить» — только когда загружено
-  if (!UPDATE_STATUS_EL) return;
+  if (S.UPDATE_INSTALL_EL) S.UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // «Перезапустить» — только когда загружено
+  if (!S.UPDATE_STATUS_EL) return;
   const m = {
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
     available:'Доступна версия '+(s.version||'')+'. Нажмите «Обновить».',
@@ -2067,7 +2012,7 @@ function renderUpdateStatus(s){
     downloaded:'Обновление '+(s.version||'')+' загружено — нажмите «Перезапустить и установить».',
     error:'Ошибка обновления: '+(s.message||''), dev:'Обновления доступны только в установленном приложении.',
   };
-  UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
+  S.UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
 }
 async function openUpdatesModal(){
   if (!(window.deckNative && window.deckNative.updateInfo)) return;   // только в Electron
@@ -2084,23 +2029,23 @@ async function openUpdatesModal(){
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); UPDATE_STATUS_EL=null; UPDATE_INSTALL_EL=null; UPDATE_DOWNLOAD_EL=null; });
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); S.UPDATE_STATUS_EL=null; S.UPDATE_INSTALL_EL=null; S.UPDATE_DOWNLOAD_EL=null; });
   back.classList.add('open');
-  UPDATE_STATUS_EL = back.querySelector('#updStatus'); UPDATE_INSTALL_EL = back.querySelector('#updInstall'); UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload');
+  S.UPDATE_STATUS_EL = back.querySelector('#updStatus'); S.UPDATE_INSTALL_EL = back.querySelector('#updInstall'); S.UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload');
   async function doUpdCheck(){
-    UPDATE_STATUS_EL.textContent='Проверяю…';
+    S.UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();
     if (!r.ok) renderUpdateStatus({ state: r.reason==='dev'?'dev':'error', message: r.reason });
   }
   back.querySelector('#updCheck').addEventListener('click', doUpdCheck);
-  UPDATE_DOWNLOAD_EL.addEventListener('click', async ()=>{
-    UPDATE_DOWNLOAD_EL.disabled = true; UPDATE_STATUS_EL.textContent='Загрузка…';
+  S.UPDATE_DOWNLOAD_EL.addEventListener('click', async ()=>{
+    S.UPDATE_DOWNLOAD_EL.disabled = true; S.UPDATE_STATUS_EL.textContent='Загрузка…';
     const r = await window.deckNative.downloadUpdate();
     if (r && !r.ok) renderUpdateStatus({ state:'error', message: r.reason });
   });
-  UPDATE_INSTALL_EL.addEventListener('click', async ()=>{
-    UPDATE_STATUS_EL.textContent='Перезапуск и установка…';
-    try { await window.deckNative.quitAndInstall(); } catch { UPDATE_STATUS_EL.textContent='Не удалось установить — попробуйте ещё раз.'; }
+  S.UPDATE_INSTALL_EL.addEventListener('click', async ()=>{
+    S.UPDATE_STATUS_EL.textContent='Перезапуск и установка…';
+    try { await window.deckNative.quitAndInstall(); } catch { S.UPDATE_STATUS_EL.textContent='Не удалось установить — попробуйте ещё раз.'; }
   });
   if (info.packaged) doUpdCheck();   // открыли окно → только ПРОВЕРКА (без загрузки); при наличии апдейта покажется кнопка «Обновить»
 }
