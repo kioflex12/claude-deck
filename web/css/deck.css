@@ -371,3 +371,18 @@
     .unity-row .mcp-rowname{ font-family:var(--mono); font-size:13px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .unity-path{ color:var(--text-faint); font-size:11px; }
     .unity-port{ font-family:var(--mono); font-size:10px; color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border); border-radius:5px; padding:1px 6px; }
+
+    /* правый рейл: переключатель «Контекст | Артефакты» + список артефактов сессии */
+    .rail-tabs{ display:flex; gap:4px; padding:14px 0 2px; }
+    .rail-tab{ flex:1; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:7px 10px; border:0; border-bottom:2px solid transparent; background:none; color:var(--text-faint); font-family:var(--ui); font-size:12px; font-weight:600; cursor:pointer; transition:.13s; }
+    .rail-tab:hover{ color:var(--text-muted); }
+    .rail-tab.sel{ color:var(--accent-ink); border-bottom-color:var(--accent); }
+    .rt-count{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--accent-ink); background:var(--accent-soft); border-radius:20px; padding:1px 6px; }
+    .rail-pane[hidden]{ display:none; }
+    .ra-grouphd{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--text-faint); margin:12px 0 6px; }
+    .ra-grouphd:first-child{ margin-top:2px; }
+    .rail-artifact{ display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:8px 10px; margin-bottom:5px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); cursor:pointer; transition:.13s; }
+    .rail-artifact:hover{ border-color:var(--accent); background:var(--accent-soft); }
+    .rail-artifact.is-feature{ border-left:3px solid var(--accent); }
+    .ra-name{ flex:1; font-family:var(--mono); font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ra-kind{ flex:none; font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); }

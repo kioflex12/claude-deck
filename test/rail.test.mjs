@@ -5,7 +5,8 @@ import './dom-stub.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { watchBrokenRefs } from './dom-stub.mjs';
-import { sideHTML } from '../web/js/rail.js';
+import { sideHTML, wireRailTabs } from '../web/js/rail.js';
+import { S } from '../web/js/store.js';
 
 test('rail.js: sideHTML рендерит рейл синтетической сессии', () => {
   const w = watchBrokenRefs();
@@ -28,4 +29,17 @@ test('rail.js: sideHTML рендерит рейл синтетической с�
 
   w.stop();
   assert.deepEqual(w.errors, [], 'сломанная ссылка в rail.js: ' + w.errors.join(' | '));
+});
+
+test('rail.js: вкладка «Артефакты» рендерит список и не hidden; wireRailTabs в null-DOM не падает', () => {
+  const t = { file:'/x/f.jsonl', title:'t', project:'p', cwd:'/tmp/p', model:'opus', count:1, mtime:0, winTokens:0, ctxPct:0 };
+  S.railTab = 'artifacts';
+  S.artifacts = [{ name:'spec.md', rel:'docs/specs/x/spec.md', ext:'md', kind:'спецификация', feature:true, touched:false, mtime:0 }];
+  S.artifactsCwd = '/tmp/p';
+  const html = sideHTML(t);
+  assert.ok(html.includes('rail-artifact'), 'есть строка-кнопка артефакта');
+  assert.ok(html.includes('spec.md'), 'имя файла в разметке');
+  assert.ok(/data-pane="artifacts"(?![^>]*hidden)/.test(html), 'панель артефактов не hidden при railTab=artifacts');
+  assert.doesNotThrow(() => wireRailTabs(), 'wireRailTabs в null-DOM не бросает');
+  S.railTab = 'context'; S.artifacts = null;   // возврат к дефолту — не влиять на другие проверки
 });

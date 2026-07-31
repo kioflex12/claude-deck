@@ -6,7 +6,7 @@ import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wi
 import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue } from './composer.js';
 import { loadBuilds, loadMrs, loadJira, wireTags, stopAgentsPoll } from './services.js';
 import { ensureNotifyPermission, titleOf, notifyDone } from './notify.js';
-import { sideHTML } from './rail.js';
+import { sideHTML, wireRailTabs } from './rail.js';
 import { launchUnity } from './unity.js';
 import { wireSideActions } from './dialogs.js';
 import { openSession } from './session.js';
@@ -209,7 +209,7 @@ export async function runPrompt(payload){
         if (t && !t.error && Array.isArray(t.blocks) && t.blocks.length){ if (S.currentFile === f) openSession(f); return; }
         if (t && !t.error && S.currentFile === f){   // пусто — консоль не трогаем, обновим правый рейл
           SESSION_CACHE[f] = t;
-          const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); loadBuilds(t); loadMrs(t); loadJira(t); }
+          const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); wireRailTabs(); loadBuilds(t); loadMrs(t); loadJira(t); }
           appendHTML(cons, '<div class="cx-note">Запуск не дал ответа — сообщений в сессии нет. Если это упакованное приложение и ошибка повторяется, пришлите текст ошибки выше.</div>');
         }
       }, 700);

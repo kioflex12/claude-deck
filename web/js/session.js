@@ -8,7 +8,7 @@ import { setView } from './nav.js';
 import { launchUnity } from './unity.js';
 import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira } from './services.js';
 import { wireSideActions } from './dialogs.js';
-import { sideHTML } from './rail.js';
+import { sideHTML, wireRailTabs } from './rail.js';
 import { renderThread } from './transcript.js';
 import { renderComposer, loadSkills } from './composer.js';
 import { stopStream, startRailRefresh } from './stream.js';
@@ -17,6 +17,7 @@ export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
   S.currentFile = file;
   S.returnView = (S.activeView==='status' || S.activeView==='board') ? S.activeView : 'status';
+  S.railTab = 'context'; S.artifacts = null; S.artifactsCwd = '';   // новая сессия — начинаем с вкладки «Контекст»
   document.getElementById('viewBoard').style.display = 'none';
   document.getElementById('viewSkills').style.display = 'none';
   document.getElementById('viewMcp').style.display = 'none';
@@ -53,6 +54,7 @@ export async function openSession(file){
   document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));   // cu-тег в рейле → Unity (фокус/запуск)
   wireTags();          // секция «Теги»: add/edit/delete
   wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
+  wireRailTabs();      // переключатель «Контекст | Артефакты» + клики по артефактам
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   S.sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)

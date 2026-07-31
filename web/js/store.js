@@ -17,6 +17,11 @@ export const S = {
   returnView: 'status',       // куда вернуться из сессии
   SESSIONS: [],               // список сессий доски
 
+  // правый рейл сессии: активная вкладка + кэш артефактов
+  railTab: 'context',         // 'context' | 'artifacts'
+  artifacts: null,            // null — ещё не грузили; [] — загружено, пусто
+  artifactsCwd: '',           // cwd для резолва пути во встроенном просмотрщике
+
   // проекты (папки)
   PROJECTS: [],
   ACTIVE_PROJECT: '',

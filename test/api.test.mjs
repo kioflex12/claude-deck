@@ -19,6 +19,17 @@ const mkFixture = (title, branch, prompt) => [
 writeFileSync(path.join(projSub, 'sess-aaa.jsonl'), mkFixture('Первая сессия', 'WO-777-test', 'Почини баг'));
 writeFileSync(path.join(projSub, 'sess-bbb.jsonl'), mkFixture('Вторая сессия', 'preprod', 'Второй промпт'));
 
+// фикстура для /api/session-artifacts: сессия правит .md-файл в своей cwd (touched)
+const artCwd = path.join(tmp, 'art-cwd');
+mkdirSync(artCwd, { recursive: true });
+const artDoc = path.join(artCwd, 'notes.md');
+writeFileSync(artDoc, '# заметки\n');
+const artSession = [
+  { type: 'user', cwd: artCwd, gitBranch: 'WO-555-art', message: { role: 'user', content: 'сделай' } },
+  { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'tool_use', name: 'Edit', id: 'e1', input: { file_path: artDoc, old_string: 'x', new_string: 'y' } }] } },
+].map((l) => JSON.stringify(l)).join('\n');
+writeFileSync(path.join(projSub, 'sess-art.jsonl'), artSession);
+
 process.env.CLAUDE_PROJECTS_DIR = projectsDir;
 process.env.PORT = '0';
 delete process.env.WO_STATES_DIR;   // детерминизм: без dev-workflow-состояний
@@ -88,6 +99,16 @@ test('/api/auth → 200, деградирует без падения (без cl
   const { status, body } = await getJson('/api/auth');
   assert.equal(status, 200);
   assert.equal(typeof body.loggedIn, 'boolean');
+});
+
+test('/api/session-artifacts → находит .md, изменённый в сессии (touched:true)', async () => {
+  const { status, body } = await getJson('/api/session-artifacts?file=' + encodeURIComponent('test-project/sess-art.jsonl'));
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(body.artifacts), 'artifacts — массив');
+  const a = body.artifacts.find((x) => x.name === 'notes.md');
+  assert.ok(a, 'notes.md найден среди артефактов');
+  assert.equal(a.touched, true, 'файл помечен как изменённый в сессии');
+  assert.equal(a.rel, 'notes.md', 'rel относительно cwd сессии');
 });
 
 test('/api/build?branch=preprod (без wo) → мягко: base-branch builds:[] или available:false', async () => {

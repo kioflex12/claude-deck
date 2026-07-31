@@ -4,6 +4,8 @@ import { esc, timeAgo, kTok, ctxColor } from './util.js';
 import { WF_LABEL } from './columns.js';
 import { aReal, jiraUrl } from './app.js';
 import { runningAgents, agentBoxHTML } from './services.js';
+import { openFileViewer } from './ui.js';
+import { S } from './store.js';
 
 export function sideHTML(t){
   const p = Math.round((t.ctxPct||0)*100);
@@ -50,7 +52,7 @@ export function sideHTML(t){
   const forkBtn = `<button class="btn-ghost" id="forkBtn" type="button" title="Продолжить в новой сессии с контекстом этой"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="20" r="2"/><path d="M6 8v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8M12 14v4"/></svg> Форкнуть сессию</button>`;
   const delBtn = `<button class="btn-ghost btn-danger" id="delSessionBtn" type="button" title="Убрать сессию из Deck (в корзину, восстановимо)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/></svg> Удалить сессию</button>`;
 
-  return `
+  const ctx = `
     <div class="sec"><div class="sec-label">Описание</div><div class="desc">${esc(t.lastPrompt||t.title||'—')}</div></div>
     <div class="sec">
       <div class="sec-label"><span class="ll">Сессия Claude</span><span class="st-note" style="color:${stateColor}">${stateLabel}</span></div>
@@ -88,4 +90,55 @@ export function sideHTML(t){
     <div class="sec"><div class="sec-label">Файл сессии</div><div class="rail-hint"><code>${esc(t.file)}</code></div>
       <div class="side-actions">${jiraBtn}${forkBtn}${delBtn}</div>
     </div>`;
+
+  return railTabsHTML() +
+    `<div class="rail-pane" data-pane="context"${S.railTab==='artifacts'?' hidden':''}>` + ctx + `</div>` +
+    `<div class="rail-pane" data-pane="artifacts"${S.railTab==='artifacts'?'':' hidden'}>` + artifactsHTML() + `</div>`;
+}
+
+function railTabsHTML(){
+  const cnt = (S.artifacts && S.artifacts.length) ? ` <span class="rt-count">${S.artifacts.length}</span>` : '';
+  return `<div class="rail-tabs">`
+    + `<button class="rail-tab ${S.railTab==='context'?'sel':''}" data-rtab="context">Контекст</button>`
+    + `<button class="rail-tab ${S.railTab==='artifacts'?'sel':''}" data-rtab="artifacts">Артефакты${cnt}</button>`
+    + `</div>`;
+}
+
+function artifactsHTML(){
+  if (S.artifacts === null) return `<div class="sec"><div class="rail-hint">Собираю артефакты…</div></div>`;
+  if (!S.artifacts.length) return `<div class="sec"><div class="rail-empty">— артефактов нет —</div></div>`;
+  const row = (a) => `<button class="rail-artifact${a.feature?' is-feature':''}" data-path="${esc(a.rel)}" data-cwd="${esc(S.artifactsCwd)}" title="${esc(a.rel)}"><span class="ra-name">${esc(a.name)}</span><span class="ra-kind">${esc(a.kind)}</span></button>`;
+  const group = (label, arr) => arr.length ? `<div class="ra-grouphd">${label}</div>` + arr.map(row).join('') : '';
+  const feat = S.artifacts.filter(a => a.feature);
+  const rest = S.artifacts.filter(a => !a.feature);
+  return `<div class="sec">` + group('Папка фичи', feat) + group('Изменено в сессии', rest) + `</div>`;
+}
+
+function wireArtifactRows(){
+  document.querySelectorAll('#sessionSide .rail-artifact').forEach(el =>
+    el.addEventListener('click', () => openFileViewer(el.dataset.path, el.dataset.cwd)));
+}
+
+// Идемпотентно (зовётся после каждого рендера рейла): переключатель вкладок + клики по строкам-артефактам.
+export function wireRailTabs(){
+  document.querySelectorAll('#sessionSide .rail-tab').forEach(el => el.addEventListener('click', () => {
+    S.railTab = el.dataset.rtab;
+    document.querySelectorAll('#sessionSide .rail-tab').forEach(b => b.classList.toggle('sel', b.dataset.rtab === S.railTab));
+    document.querySelectorAll('#sessionSide .rail-pane').forEach(p => { p.hidden = p.dataset.pane !== S.railTab; });
+    if (S.railTab === 'artifacts' && S.artifacts === null) loadArtifacts();
+  }));
+  wireArtifactRows();
+}
+
+// Догрузка артефактов при первом открытии вкладки «Артефакты»: заполняем S.artifacts и перерисовываем ТОЛЬКО таб + панель.
+export async function loadArtifacts(){
+  if (!S.currentFile) return;
+  try {
+    const d = await (await fetch('/api/session-artifacts?file=' + encodeURIComponent(S.currentFile), { cache:'no-store' })).json();
+    S.artifacts = Array.isArray(d.artifacts) ? d.artifacts : [];
+    S.artifactsCwd = d.cwd || '';
+  } catch { S.artifacts = []; S.artifactsCwd = ''; }
+  const tabs = document.querySelector('#sessionSide .rail-tabs'); if (tabs) tabs.outerHTML = railTabsHTML();
+  const pane = document.querySelector('#sessionSide .rail-pane[data-pane="artifacts"]'); if (pane) pane.innerHTML = artifactsHTML();
+  wireRailTabs();
 }

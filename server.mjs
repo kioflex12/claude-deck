@@ -635,6 +635,64 @@ function resolveSessionPath(relFile) {
   return { resolved };
 }
 
+// Артефакты сессии: файлы, которые сессия правила инструментами (Write/Edit/…), плюс всё содержимое
+// папки её фичи (docs/specs/features|fixes/<…WO…>). Отдаём относительные пути + вид, для правого рейла.
+function sessionArtifacts(relFile) {
+  const rp = resolveSessionPath(relFile);
+  if (rp.error) return { cwd: '', wo: '', artifacts: [] };
+  let text = '';
+  try { text = readFileSync(rp.resolved, 'utf8'); } catch { return { cwd: '', wo: '', artifacts: [] }; }
+  const cwd = firstString(text, 'cwd') || '';
+  const wo = firstUserWo(text) || '';
+  const DOC_EXT = /\.(md|markdown|sql|txt|json|ya?ml|html|csv)$/i;
+  const touched = new Set();
+  for (const line of text.split('\n')) {
+    const s = line.trim(); if (!s || s[0] !== '{') continue;
+    let o; try { o = JSON.parse(s); } catch { continue; }
+    const content = o && o.message && o.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const c of content) {
+      if (!c || c.type !== 'tool_use' || !/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(c.name || '')) continue;
+      const fp = c.input && (c.input.file_path || c.input.notebook_path);
+      if (fp) touched.add(String(fp));
+    }
+  }
+  const featureAbs = new Set();
+  if (wo && cwd) {
+    for (const base of ['docs/specs/features', 'docs/specs/fixes']) {
+      const dir = path.join(cwd, base);
+      for (const d of safeDirents(dir)) if (d.isDirectory() && d.name.includes(wo)) {
+        const fdir = path.join(dir, d.name);
+        for (const f of safeDirents(fdir)) if (f.isFile()) featureAbs.add(path.join(fdir, f.name));
+      }
+    }
+  }
+  const kindOf = (name, ext) => {
+    const n = name.toLowerCase();
+    if (n === 'spec.md') return 'спецификация';
+    if (n === 'plan.md') return 'план';
+    if (n === 'tasks.md') return 'задачи';
+    if (n.startsWith('db-patches')) return 'SQL-патч';
+    if (n.startsWith('research') || n.startsWith('check_') || n.startsWith('dashboard') || n.startsWith('report')) return 'заметки';
+    return ext ? ext.toUpperCase() : 'файл';
+  };
+  const seen = new Set(), out = [];
+  const addAbs = (abs, fromFeature) => {
+    const norm = path.resolve(abs);
+    if (seen.has(norm)) return;
+    let st; try { st = statSync(norm); if (!st.isFile()) return; } catch { return; }
+    const name = path.basename(norm);
+    const ext = (name.match(/\.([^.]+)$/) || [])[1] || '';
+    const rel = cwd ? path.relative(cwd, norm).split(path.sep).join('/') : name;
+    seen.add(norm);
+    out.push({ name, rel, ext, kind: kindOf(name, ext), touched: touched.has(abs), feature: !!fromFeature, mtime: st.mtimeMs });
+  };
+  for (const abs of featureAbs) addAbs(abs, true);
+  for (const abs of touched) if (DOC_EXT.test(abs)) addAbs(abs, false);
+  out.sort((a, b) => (a.feature ? 0 : 1) - (b.feature ? 0 : 1) || b.mtime - a.mtime);
+  return { cwd, wo, artifacts: out.slice(0, 80) };
+}
+
 function apiSession(relFile) {
   const rp = resolveSessionPath(relFile);
   if (rp.error) return rp;
@@ -1892,6 +1950,7 @@ const server = http.createServer((req, res) => {
     sendJSON(res, out);
     return;
   }
+  if (u.pathname === '/api/session-artifacts') { sendJSON(res, sessionArtifacts(u.searchParams.get('file') || '')); return; }
   if (u.pathname === '/api/skills') {
     const cwd = u.searchParams.get('cwd') || '';
     if (cwd) { const skills = collectSkills(cwd); sendJSON(res, { cwd, count: skills.length, skills }); return; }
