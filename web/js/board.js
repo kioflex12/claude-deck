@@ -67,8 +67,9 @@ export function cardHTML(s){
     tagsChipsHTML(s),
     wfChips,
   ].join('');
-  // тег задачи — в правый верхний угол карточки, кликабельный (→ Jira); из общего ряда чипов убран
-  const woTag = s.wo ? `<span class="card-wo" data-wo="${esc(s.wo)}" title="Открыть ${esc(s.wo)} в Jira">${esc(s.wo)}<span class="ext">↗</span></span>` : '';
+  // тег задачи — в правый верхний угол, кликабельный (→ Jira); цвет привязан к статусу (та же палитра, что точки колонок)
+  const woColor = (WF_COLUMNS.find(c => c.key === st.col) || {}).dot || 'var(--accent)';
+  const woTag = s.wo ? `<span class="card-wo" data-wo="${esc(s.wo)}" title="Открыть ${esc(s.wo)} в Jira · ${esc(WF_LABEL[st.col] || '')}" style="--wo-c:${woColor}">${esc(s.wo)}<span class="ext">↗</span></span>` : '';
   const bg = (s.bgRunning|0) > 0 ? ` · ${s.bgRunning} ${s.bgRunning===1?'агент':'агента'} в фоне` : '';
   const flag = working
     ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
