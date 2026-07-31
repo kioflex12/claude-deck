@@ -5,7 +5,9 @@ import { toast, openExternal, openWoJira, openLocalResource, openFileViewer } fr
 import { renderMcp, loadMcpCatalog } from './mcp.js';
 import { renderSkills, loadSkillsCatalog } from './skills.js';
 import { launchUnity, loadUnityInstances } from './unity.js';
-import { loadUsage, renderUsageBar, openUsageModal, contextSession } from './usage.js';
+import { loadUsage, renderUsageBar, openUsageModal } from './usage.js';
+import { renderBoard, renderNow, renderFilters, isWorking } from './board.js';
+import { loadBuilds, loadMrs, loadJira, hydrateMrs, hydrateJira, MR_TTL_RESET, wireTags, startAgentsPoll, stopAgentsPoll, agentBoxHTML, runningAgents } from './services.js';
 S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 
@@ -17,7 +19,7 @@ const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
 const CONN = "https://claude.ai/settings/connectors";
 const EI = '<svg class="ei" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M7 17 17 7M9 7h8v8"/></svg>';
-const aReal = (href, text, cls='') => `<a class="lnk ${cls}" href="${href}" target="_blank" rel="noopener" title="${href}">${text}${EI}</a>`;
+export const aReal = (href, text, cls='') => `<a class="lnk ${cls}" href="${href}" target="_blank" rel="noopener" title="${href}">${text}${EI}</a>`;
 const aStub = (href, text, cls='') => `<a class="lnk ${cls}" href="#" onclick="return false" title="${href}">${text}${EI}</a>`;
 
 
@@ -36,143 +38,6 @@ function userStop(){
 async function loadModelsCatalog(){
   try { const d = await (await fetch('/api/models', { cache:'no-store' })).json(); S.MODELS = Array.isArray(d.models)?d.models:[]; S.EFFORTS = Array.isArray(d.efforts)?d.efforts:[]; }
   catch { S.MODELS = []; S.EFFORTS = []; }
-}
-
-/* ---------- board = сессии ---------- */
-// Единая searchable-строка из ВСЕХ отображаемых на карточке меток — чтобы «backend», «cu2»,
-// «preupdate», «на qa», «merged», «chat-service» реально фильтровали.
-
-function boardMatch(s){
-  if (S.projFilter!=='all' && s.project!==S.projFilter) return false;
-  if (S.query && !searchableText(s, JIRA_CACHE, MR_CACHE, isWorking(s)).includes(S.query)) return false;
-  return true;
-}
-function ctxMini(s){
-  const p = pctOf(s);
-  return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
-}
-export function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!S.streamingFile && s.file === S.streamingFile)); }
-function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
-  const out = [];
-  if (s.clientCu) out.push(`<span class="chip sc-cu sc-cu-run" data-cu="${esc(s.clientCu)}" data-cwd="${esc(s.cwd||'')}" title="Запустить Unity (${esc(s.clientCu)})">${esc(s.clientCu)}</span>`);
-  if (s.backend)  out.push(`<span class="chip sc-be">backend</span>`);
-  if (s.statics)  out.push(`<span class="chip sc-st">статика</span>`);
-  if (s.baseBranch) out.push(`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(s.baseBranch)}${s.merged?' ✓':''}</span>`);
-  return out.join('');
-}
-function tagsChipsHTML(s){    // пользовательские теги
-  const t = Array.isArray(s.tags) ? s.tags : [];
-  return t.map(x=>`<span class="chip sc-tag">#${esc(x)}</span>`).join('');
-}
-// Единый резолв колонки/стадии (для keyOf и статус-бара): приоритет по уточнению коордиинатора.
-
-function cardHTML(s){
-  const wf = S.activeView === 'status';
-  const working = isWorking(s);
-  const st = cardStatus(s, JIRA_CACHE);
-  const blocked = st.blocked;
-  // Статусы: колонка = стадия → бар ТОЛЬКО для под-стадийного уточнения (без дубля названия колонки).
-  // Доска (по свежести): колонок-стадий нет → бар всегда, полный локализованный ярлык.
-  let statusBar = '';
-  if (wf){
-    if (st.sub) statusBar = `<div class="card-status cs-${esc(st.col)}">${esc(st.sub)}</div>`;
-  } else {
-    const txt = st.sub || WF_LABEL[st.col] || '';
-    if (txt) statusBar = `<div class="card-status cs-${esc(st.col)}${blocked?' cs-blocked':''}">${esc(txt)}</div>`;
-  }
-  const stColor = blocked ? 'var(--bad)' : working ? 'var(--good)' : s.active ? 'var(--accent)' : '';   // blocked — красная полоса (виден и без бара)
-  const stripe = stColor ? `class="card stripe" style="--st:${stColor}"` : 'class="card"';
-  const pulse = working ? '<span class="pulse"></span>' : '';
-  const wfChips = wf ? [
-    (s.wfStep!=null ? `<span class="chip">шаг ${s.wfStep}</span>` : ''),
-    (s.wfMr ? `<span class="chip">MR</span>` : ''),
-  ].join('') : '';
-  const chips = [
-    s.gitBranch ? `<span class="chip repo">⎇ ${esc(s.gitBranch)}</span>` : '',
-    `<span class="chip">${esc(s.model)}</span>`,
-    `<span class="chip">${s.msgs} сообщ.</span>`,
-    scopeChipsHTML(s),
-    tagsChipsHTML(s),
-    wfChips,
-  ].join('');
-  // тег задачи — в правый верхний угол карточки, кликабельный (→ Jira); из общего ряда чипов убран
-  const woTag = s.wo ? `<span class="card-wo" data-wo="${esc(s.wo)}" title="Открыть ${esc(s.wo)} в Jira">${esc(s.wo)}<span class="ext">↗</span></span>` : '';
-  const bg = (s.bgRunning|0) > 0 ? ` · ${s.bgRunning} ${s.bgRunning===1?'агент':'агента'} в фоне` : '';
-  const flag = working
-    ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
-    : s.active ? `<div class="flag attention"><span class="dot"></span>активна · ${timeAgo(s.mtime)}</div>` : '';
-  const buildPill = s.buildActive
-    ? `<span class="pill"><span class="d run"></span>билд</span>` : '';
-  // MR — приоритет live-данным из GitLab (MR_CACHE), stale wfMrUrl лишь как фолбэк пока live не загрузилось
-  const live = (s.gitBranch && MR_CACHE[s.gitBranch]) ? MR_CACHE[s.gitBranch].mrs : null;
-  let mrPill = '';
-  if (live && live.length){
-    mrPill = live.slice(0,2).map(m=>{
-      const cls = m.state==='merged'?'mr-merged':m.state==='closed'?'mr-closed':'mr-open';
-      const dot = m.state==='merged'?'pass':m.state==='closed'?'fail':'';
-      return `<a class="pill ${cls}" href="${esc(m.web_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><span class="d ${dot}"></span>!${esc(String(m.iid))}</a>`;
-    }).join('');
-  } else if (!live && s.wfMrUrl){
-    mrPill = `<a class="pill mr-${s.wfMrState}" href="${esc(s.wfMrUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><span class="d ${s.wfMrState==='merged'?'pass':''}"></span>MR</a>`;
-  }
-  const foot = `<div class="card-foot">${buildPill}${mrPill}<span class="mini-ctx">${timeAgo(s.mtime)}</span><span class="foot-sep"></span>${ctxMini(s)}</div>`;
-  return `<article ${stripe} tabindex="0" role="button" data-file="${esc(s.file)}">${statusBar}<div class="card-top">${pulse}<span class="wo">${esc(s.project)}</span>${woTag}</div><h3 class="card-title">${esc(s.title)}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
-}
-function renderBoard(animate){
-  const board = document.getElementById('board');
-  const workflow = S.activeView==='status';
-  const cols = workflow ? WF_COLUMNS : COLUMNS;
-  const keyOf = s => workflow ? effectiveColumn(s, JIRA_CACHE).col : s.column;   // 7-колоночная логика — единый резолв
-  // поллинг перерисовывает без анимации и с сохранением прокрутки — чтобы доска не «дёргалась»
-  const sx = board.scrollLeft;
-  const colScroll = [...board.querySelectorAll('.col-body')].map(el=>el.scrollTop);
-  board.innerHTML = cols.map(c=>{
-    const items = S.SESSIONS.filter(s=>keyOf(s)===c.key && boardMatch(s));
-    const body = items.length ? items.map((s,i)=>{
-      const styled = animate ? `<article style="animation-delay:${i*35}ms" ` : `<article style="animation:none" `;
-      return cardHTML(s).replace('<article ', styled);
-    }).join('') : `<div class="empty">— пусто —</div>`;
-    return `<section class="col"><div class="col-head" style="--dot:${c.dot}"><span class="col-title">${c.title}</span><span class="col-count">${items.length}</span></div><div class="col-body">${body}</div></section>`;
-  }).join('');
-  board.scrollLeft = sx;
-  const newCols = board.querySelectorAll('.col-body');
-  colScroll.forEach((t,i)=>{ if (newCols[i]) newCols[i].scrollTop = t; });
-  board.querySelectorAll('.card').forEach(el=>{
-    el.addEventListener('click',()=>openSession(el.dataset.file));
-    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openSession(el.dataset.file); } });
-  });
-  board.querySelectorAll('.sc-cu-run').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); launchUnity(el.dataset.cu, el.dataset.cwd); });   // тап по cu-тегу → Unity, НЕ открывать карточку
-  });
-  board.querySelectorAll('.card-wo').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });   // тап по тегу задачи → Jira, НЕ открывать карточку
-  });
-}
-function renderNow(){
-  const now = document.getElementById('now');
-  // кнопка «Новая сессия» — ВСЕГДА (даже без активного контекста)
-  const newBtn = `<button class="btn-resume now-btn" id="nowNewBtn" title="Создать новую сессию"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg> Новая сессия</button>`;
-  const s = contextSession();
-  if (!s){
-    now.innerHTML = `<span class="now-label">нет открытого контекста</span><span class="spacer"></span>${newBtn}`;
-    const nb = now.querySelector('#nowNewBtn'); if (nb) nb.addEventListener('click', openNewSessionDialog);
-    return;
-  }
-  const p = pctOf(s);
-  now.innerHTML = `
-    <span class="now-label">${isWorking(s)?'<span class="pulse"></span>работает · ':''}текущий контекст</span>
-    <a class="now-ctx-link" href="#" data-file="${esc(s.file)}" title="Открыть сессию в Deck"><span class="now-id">${esc(s.project)}</span><span class="now-title">${esc(s.title)}</span></a>
-    <span class="now-meta hide-sm"><span>${esc(s.model)}</span><span><b>${s.msgs}</b> сообщ.</span><span>${timeAgo(s.mtime)}</span>
-      <span style="display:flex;align-items:center;gap:8px">окно<span class="ctxbar" style="width:120px"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span><b style="font-family:var(--mono)">${p}%</b></span></span>
-    ${newBtn}`;
-  now.querySelector('.now-ctx-link').addEventListener('click', e => { e.preventDefault(); openSession(e.currentTarget.dataset.file); });
-  const nb = now.querySelector('#nowNewBtn'); if (nb) nb.addEventListener('click', openNewSessionDialog);
-}
-function renderFilters(){
-  const projects = [...new Set(S.SESSIONS.map(s=>s.project).filter(Boolean))].sort();
-  document.getElementById('filters').innerHTML =
-    `<button class="fchip" data-f="all" aria-pressed="${S.projFilter==='all'}">Все</button>` +
-    projects.map(p=>`<button class="fchip" data-f="${esc(p)}" aria-pressed="${S.projFilter===p}">${esc(p)}</button>`).join('');
 }
 
 const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
@@ -267,185 +132,8 @@ function sideHTML(t){
       <div class="side-actions">${jiraBtn}${forkBtn}${delBtn}</div>
     </div>`;
 }
-/* ---------- live-статус сборок (TeamCity) в секции «Сборки» ---------- */
-function buildDot(b){
-  const state = String(b.state||'').toLowerCase(), status = String(b.status||'').toUpperCase();
-  if (state==='queued')  return { cls:'run',  label:'в очереди', run:true };
-  if (state==='running') return { cls:'run',  label:'идёт',      run:true };
-  if (status==='SUCCESS') return { cls:'pass', label:'успех' };
-  if (status==='FAILURE'||status==='ERROR') return { cls:'fail', label:'упал' };
-  return { cls:'none', label: status || state || '—' };
-}
 const BASE_BRANCHES = new Set(['preprod','preupdate','master','main','develop','dev','prod','release','head','']);
-function isBaseBranch(b){ return BASE_BRANCHES.has(String(b||'').trim().toLowerCase()); }
-async function loadBuilds(t){
-  if (S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; }
-  const box0 = document.getElementById('buildBox'); if (!box0 || !t.gitBranch) return;
-  // базовая ветка без WO не идентифицирует сборки контекста — сразу «нет», без мигания «проверяю…» и без фетча
-  if (isBaseBranch(t.gitBranch) && !t.wo){ box0.innerHTML = `<div class="rail-empty">— сборок нет —</div>`; return; }
-  const url = '/api/build?branch=' + encodeURIComponent(t.gitBranch) + '&wo=' + encodeURIComponent(t.wo||'');
-  const render = async () => {
-    let d; try { const r = await fetch(url, { cache:'no-store' }); d = await r.json(); } catch { return false; }
-    const box = document.getElementById('buildBox'); if (!box) return false;
-    if (!d.available){ box.insertAdjacentHTML('beforeend', `<div class="rail-hint">TeamCity недоступен: ${esc(d.reason||'нет доступа')}</div>`); return false; }
-    if (!d.builds || !d.builds.length){ box.innerHTML = `<div class="rail-empty">— сборок для ветки нет —</div>`; return false; }
-    let running = false;
-    box.innerHTML = d.builds.map(b => {
-      const s = buildDot(b); if (s.run) running = true;
-      const link = b.webUrl ? aReal(b.webUrl, '#'+esc(b.number||'—'), 'plain') : `<span class="ri-v">#${esc(b.number||'—')}</span>`;
-      return `<div class="build-row"><span class="plat">${esc(b.plat)}</span><span class="build-state"><span class="d ${s.cls}"></span>${s.label}</span><span class="bl-link">${link}</span></div>`;
-    }).join('');
-    return running;
-  };
-  const running = await render();
-  if (running && !S.buildTimer){
-    S.buildTimer = setInterval(async () => { const r = await render(); if (!r && S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; } }, 15000);
-  }
-}
-/* ---------- live-MR (GitLab) в секции «Merge Requests» + на карточках ---------- */
-function mrPillHTML(m){
-  const cls = m.state==='merged' ? 'mr-merged' : m.state==='closed' ? 'mr-closed' : 'mr-open';
-  const lbl = m.state==='merged' ? 'влит' : m.state==='closed' ? 'закрыт' : 'открыт';
-  const dot = m.state==='merged' ? 'pass' : m.state==='closed' ? 'fail' : '';
-  return `<span class="ri-badge pill ${cls}"><span class="d ${dot}"></span>${lbl}</span>`;
-}
-async function loadMrs(t){
-  const box = document.getElementById('mrBox'); if (!box) return;
-  let d; try { const r = await fetch('/api/mrs?branch=' + encodeURIComponent(t.gitBranch||'') + '&wo=' + encodeURIComponent(t.wo||''), { cache:'no-store' }); d = await r.json(); } catch { return; }
-  const box2 = document.getElementById('mrBox'); if (!box2) return;
-  if (!d.available){ box2.insertAdjacentHTML('beforeend', `<div class="rail-hint">GitLab недоступен: ${esc(d.reason||'нет доступа')}</div>`); return; }
-  if (t.gitBranch) MR_CACHE[t.gitBranch] = { ts: Date.now(), mrs: d.mrs||[] };
-  if (!d.mrs || !d.mrs.length){ box2.innerHTML = `<div class="rail-empty">— MR нет —</div>`; return; }
-  box2.innerHTML = d.mrs.map(m =>
-    `<div class="row-item"><span class="ri-k">merge</span>${aReal(m.web_url, '!'+m.iid+' → '+esc(m.target_branch), 'plain')}${mrPillHTML(m)}</div>`
-    + (m.project ? `<div class="rail-hint">${esc(m.project)}</div>` : '')
-  ).join('');
-  // ветка/база — авторитетно из MR (реальная source_branch и target_branch), а не из шумной истории gitBranch (там мелькает preprod)
-  const m0 = d.mrs.find(x => x.state === 'opened') || d.mrs[0];
-  if (m0){
-    const repoBase = String(m0.web_url||'').replace(/\/-\/merge_requests\/.*$/,'').replace(/\/$/,'');
-    const branchEl = document.getElementById('branchVal');
-    if (branchEl && m0.source_branch) branchEl.innerHTML = repoBase ? aReal(repoBase+'/-/tree/'+encodeURIComponent(m0.source_branch), esc(m0.source_branch), 'plain') : `<span class="ri-v">${esc(m0.source_branch)}</span>`;
-    const baseEl = document.querySelector('#sessionSide .sc-base');
-    if (baseEl && m0.target_branch) baseEl.innerHTML = '⎇ ' + esc(m0.target_branch) + (m0.state === 'merged' ? ' ✓' : '');
-  }
-}
-async function hydrateMrs(fresh){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама). fresh — рефреш дашборда: мимо кэшей
-  if (S.mrHydrating) return; S.mrHydrating = true;
-  const now = Date.now();
-  const branches = [...new Set(S.SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
-  let changed = false;
-  for (const br of branches){
-    const c = MR_CACHE[br];
-    if (!fresh && c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
-    const s = S.SESSIONS.find(x => x.gitBranch === br);
-    try {
-      const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || '') + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
-      const d = await r.json();
-      if (d && d.available){ MR_CACHE[br] = { ts: Date.now(), mrs: d.mrs || [] }; changed = true; }
-      else MR_CACHE[br] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
-    } catch {}
-  }
-  S.mrHydrating = false;
-  if (changed && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);
-}
-function MR_TTL_RESET(){   // сброс клиентских кэшей MR/Jira (после смены токена в Настройках → сразу перечитать)
-  for (const k of Object.keys(MR_CACHE)) delete MR_CACHE[k];
-  for (const k of Object.keys(JIRA_CACHE)) delete JIRA_CACHE[k];
-}
-/* ---------- live-статус Jira: маппинг в колонку + чип/секция ---------- */
-// Маппинг Jira-статус → колонка (клиент, т.к. In Progress зависит от состояния билда). Возвращает {col, blocked}.
-
-function jiraChipHTML(j){
-  if (!j || !j.status) return '';
-  const cat = j.category || '';
-  return `<span class="chip jira-${esc(cat||'na')}">${esc(j.status)}</span>`;
-}
-async function loadJira(t){
-  const box = document.getElementById('jiraBox'); if (!box || !t.wo) return;
-  let d; try { const r = await fetch('/api/jira?wo=' + encodeURIComponent(t.wo), { cache:'no-store' }); d = await r.json(); } catch { return; }
-  const box2 = document.getElementById('jiraBox'); if (!box2) return;
-  if (!d.available){ box2.innerHTML = `<div class="rail-hint">Jira недоступна: ${esc(d.reason||'нет токена')} — стадия из локального состояния</div>`; return; }
-  JIRA_CACHE[t.wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
-  if (!d.status){ box2.innerHTML = `<div class="rail-empty">— статус не получен —</div>`; return; }
-  box2.innerHTML = `<div class="row-item"><span class="ri-k">статус</span>${jiraChipHTML(d)}</div>` + (d.summary?`<div class="rail-hint">${esc(d.summary)}</div>`:'');
-}
-/* ---------- пользовательские теги сессии (add/edit/delete, Deck-side) ---------- */
-function currentTags(){   // источник — кэш ЛИБО запись в списке (finish() удаляет SESSION_CACHE, теги нельзя терять)
-  const t = (S.currentFile && SESSION_CACHE[S.currentFile]) || S.SESSIONS.find(s=>s.file===S.currentFile);
-  return (t && Array.isArray(t.tags)) ? t.tags.slice() : [];
-}
-async function saveTags(next){
-  if (!S.currentFile) return;
-  const clean = [...new Set(next.map(x=>String(x).trim()).filter(Boolean))].slice(0,30);
-  try {
-    const r = await fetch('/api/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: S.currentFile, tags: clean }) });
-    const d = await r.json();
-    const tags = Array.isArray(d.tags) ? d.tags : clean;
-    if (SESSION_CACHE[S.currentFile]) SESSION_CACHE[S.currentFile].tags = tags;
-    const se = S.SESSIONS.find(s=>s.file===S.currentFile); if (se) se.tags = tags;   // чтобы поиск/фильтр/карточка сразу видели
-    renderTags();
-  } catch {}
-}
-function renderTags(){
-  const wrap = document.getElementById('tagsWrap'); if (!wrap) return;
-  const tags = currentTags();
-  wrap.innerHTML = tags.length ? tags.map((x,i)=>`<span class="tag-chip" data-i="${i}"><span class="tag-txt" title="переименовать">#${esc(x)}</span><button class="tag-x" type="button" title="удалить">✕</button></span>`).join('') : `<span class="rail-empty">тегов нет</span>`;
-  wrap.querySelectorAll('.tag-chip').forEach(chip=>{
-    const i = +chip.dataset.i;
-    chip.querySelector('.tag-x').addEventListener('click', e=>{ e.stopPropagation(); const t=currentTags(); t.splice(i,1); saveTags(t); });
-    chip.querySelector('.tag-txt').addEventListener('click', ()=>{ const t=currentTags(); const v=prompt('Переименовать тег:', t[i]); if (v!=null && v.trim()!==t[i]){ t[i]=v.trim(); saveTags(t); } });
-  });
-}
-function wireTags(){
-  renderTags();
-  const inp = document.getElementById('tagsInput'); if (!inp) return;
-  inp.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); const v=inp.value.trim(); if (v){ const t=currentTags(); t.push(v); saveTags(t); inp.value=''; } } });
-}
-/* ---------- фоновые сабагенты открытой сессии ---------- */
-function runningAgents(agents){ return (Array.isArray(agents)?agents:[]).filter(a=>a && a.running); }
-function agentBoxHTML(agents){   // ТОЛЬКО активные (running); завершённые/остановленные не показываем
-  const live = runningAgents(agents);
-  if (!live.length) return '';
-  return live.map(a=>{
-    const tok = a.tokensIn ? ' · ' + kTok(a.tokensIn) : '';
-    return `<div class="ag-item live"><div class="ag-head"><span class="ag-label">${esc(a.label)}</span><span class="ag-status"><span class="ag-dot run"></span>работает${tok}</span></div>${a.activity?`<div class="ag-act">${esc(a.activity)}</div>`:''}</div>`;
-  }).join('');
-}
-function stopAgentsPoll(){ if (S.agentsTimer){ clearInterval(S.agentsTimer); S.agentsTimer = null; } }
-async function pollAgents(file){
-  if (S.currentFile !== file){ stopAgentsPoll(); return; }
-  let d; try { d = await (await fetch('/api/agents?file=' + encodeURIComponent(file), { cache:'no-store' })).json(); } catch { return; }
-  if (S.currentFile !== file || !d || d.error) return;
-  const sec = document.getElementById('agentsSec'), box = document.getElementById('agentsBox');
-  const agents = Array.isArray(d.agents) ? d.agents : [];
-  const live = runningAgents(agents);
-  if (sec && box){ if (live.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
-  // отражаем в кэше/списке, чтобы признак «работает» на карточке/лейбле держался, пока агенты живы
-  if (SESSION_CACHE[file]){ SESSION_CACHE[file].bgRunning = d.bgRunning; SESSION_CACHE[file].agents = agents; }
-  const se = S.SESSIONS.find(s=>s.file===file); if (se){ se.bgRunning = d.bgRunning; if (d.bgRunning>0) se.working = true; }
-}
-function startAgentsPoll(file){ stopAgentsPoll(); S.agentsTimer = setInterval(()=>pollAgents(file), 4000); pollAgents(file); }
-async function hydrateJira(fresh){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с). fresh — рефреш дашборда: мимо кэшей
-  if (S.jiraHydrating) return; S.jiraHydrating = true;
-  const now = Date.now();
-  const wos = [...new Set(S.SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 30);
-  let changed = false, gated = false;
-  for (const wo of wos){
-    const c = JIRA_CACHE[wo];
-    if (!fresh && c && now - c.ts < LIVE_TTL) continue;
-    try {
-      const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo) + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
-      const d = await r.json();
-      if (!d.available){ gated = true; break; }   // нет токена — не долбим по всем wo
-      JIRA_CACHE[wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
-      changed = true;
-    } catch {}
-  }
-  S.jiraHydrating = false;
-  if (changed && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);
-  void gated;
-}
+export function isBaseBranch(b){ return BASE_BRANCHES.has(String(b||'').trim().toLowerCase()); }
 
 function metaLine(m){
   if (!m) return '';
@@ -1375,7 +1063,7 @@ function renderSearchDrop(){
 }
 
 /* ---------- новая сессия ---------- */
-async function openNewSessionDialog(){
+export async function openNewSessionDialog(){
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
@@ -1968,4 +1656,5 @@ if (window.deckNative && window.deckNative.onOpenUpdates) window.deckNative.onOp
 if (window.deckNative && window.deckNative.onOpenPalette) window.deckNative.onOpenPalette(() => openPal());
 if (window.deckNative && window.deckNative.onUpdateStatus) window.deckNative.onUpdateStatus(renderUpdateStatus);
 load();
+
 

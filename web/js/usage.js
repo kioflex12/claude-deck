@@ -1,9 +1,10 @@
 // Deck — аккаунт-лимиты Claude: индикатор в баре, окно usage и резолв «текущего контекста» (для .now-лейбла).
 // Вынесено из app.js; состояние — в store (S). openUsageModal строит модалку через modalBack (app.js),
-// contextSession опирается на isWorking (app.js); цикл app↔usage безопасен (вызовы в рантайме).
+// contextSession опирается на isWorking (board.js); цикл app↔usage безопасен (вызовы в рантайме).
 import { S, SESSION_CACHE } from './store.js';
 import { esc, kTok } from './util.js';
-import { modalBack, isWorking } from './app.js';
+import { modalBack } from './app.js';
+import { isWorking } from './board.js';
 
 export async function loadUsage(){
   try { const r = await fetch('/api/usage', { cache:'no-store' }); S.USAGE = await r.json(); }
