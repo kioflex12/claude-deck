@@ -119,7 +119,7 @@ export function wireSideActions(t){
   const fork = document.getElementById('forkBtn');
   if (fork) fork.addEventListener('click', () => openForkDialog(t));
 }
-function openDeleteDialog(file, title){
+export function openDeleteDialog(file, title){
   const back = modalBack('delBack');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Удалить сессию из Deck?</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
@@ -141,6 +141,40 @@ function openDeleteDialog(file, title){
     } catch (e){ toast('Не удалось удалить: ' + (e.message||e)); }
   });
   back.classList.add('open');
+}
+export function openRenameDialog(file){
+  const s = S.SESSIONS.find(x=>x.file===file);
+  const back = modalBack('renameBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Изменить имя сессии</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <label class="ns-lbl">Имя сессии (так будет называться карточка)</label>
+      <input id="renameInp" class="ns-inp" type="text" autocomplete="off">
+      <div class="ns-actions"><button id="renameSave" class="ns-start" type="button">Сохранить</button></div>
+    </div></div>`;
+  const inp = back.querySelector('#renameInp');
+  if (inp) inp.value = (s && s.title) || '';   // через свойство, не атрибут — esc() не экранирует кавычки в имени
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  const submit = async ()=>{
+    const name = inp.value.trim();
+    if (!name){ inp.focus(); return; }
+    try {
+      const r = await fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file, name }) });
+      const d = await r.json();
+      if (!r.ok || (d && d.error)) throw new Error((d && d.error) || 'rename failed');
+      const applied = (d && d.name) || name;
+      const se = S.SESSIONS.find(x=>x.file===file); if (se) se.title = applied;
+      if (SESSION_CACHE[file]) SESSION_CACHE[file].title = applied;
+      renderBoard(false);
+      if (S.currentFile === file){ const tl = document.querySelector('#sessionBar .sb-title'); if (tl) tl.textContent = applied; }
+      toast('Имя обновлено');
+    } catch (e){ toast('Не удалось переименовать: ' + (e.message||e)); }
+    close();
+  };
+  back.querySelector('#renameSave').addEventListener('click', submit);
+  inp.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } });
+  back.classList.add('open');
+  setTimeout(()=>{ const p = back.querySelector('#renameInp'); if (p) p.focus(); }, 60);
 }
 function openForkDialog(t){
   const back = modalBack('forkBack');

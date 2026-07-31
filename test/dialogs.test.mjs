@@ -41,6 +41,7 @@ test('dialogs.js: модалки строятся в null-DOM без слома�
   delete window.deckNative;
 
   await dialogs.openSettingsModal();     // fetch /api/config → построение полей + wireRow + updSummary
+  assert.doesNotThrow(() => dialogs.openRenameDialog('a'), 'openRenameDialog — модалка переименования');
 
   await new Promise((r) => setTimeout(r, 80));
   w.stop();

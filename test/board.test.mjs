@@ -42,6 +42,11 @@ test('board.js: рендер доски/фильтров/карточки в nul
   assert.equal(board.isWorking(S.SESSIONS[0]), true, 'isWorking по working=true');
   assert.equal(board.boardMatch(S.SESSIONS[1]), true, 'boardMatch без фильтра');
 
+  // контекстное меню карточки (правый клик) — строится в null-DOM без броска (синтетический contextmenu-евент)
+  const evt = { preventDefault(){}, clientX:10, clientY:10 };
+  assert.doesNotThrow(() => board.openCardMenu(evt, 'a.jsonl'), 'openCardMenu — синтетический contextmenu');
+  assert.equal(typeof board.refreshCard, 'function', 'refreshCard экспортирован');
+
   await new Promise((r) => setTimeout(r, 40));
   w.stop();
   assert.deepEqual(w.errors, [], 'сломанная ссылка в board.js: ' + w.errors.join(' | '));

@@ -2,13 +2,14 @@
 // Вынесено из app.js; состояние — в store (S). Чистую доска-логику (колонки, searchableText) даёт columns.js.
 // Клик по карточке → openSession (session.js), по cu-тегу → launchUnity (unity.js), по тегу задачи → openWoJira (ui.js).
 // Циклы board↔dialogs, board↔session и board↔usage безопасны — импортированные вызовы срабатывают в рантайме.
-import { S, JIRA_CACHE, MR_CACHE, COLUMNS } from './store.js';
+import { S, JIRA_CACHE, MR_CACHE, SESSION_CACHE, COLUMNS } from './store.js';
 import { esc, ctxColor, pctOf, timeAgo } from './util.js';
 import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL } from './columns.js';
-import { openWoJira } from './ui.js';
+import { openWoJira, toast } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
-import { openNewSessionDialog } from './dialogs.js';
+import { openNewSessionDialog, openRenameDialog, openDeleteDialog } from './dialogs.js';
+import { hydrateMrs, hydrateJira } from './services.js';
 import { openSession } from './session.js';
 
 export function boardMatch(s){
@@ -114,6 +115,7 @@ export function renderBoard(animate){
   board.querySelectorAll('.card').forEach(el=>{
     el.addEventListener('click',()=>openSession(el.dataset.file));
     el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openSession(el.dataset.file); } });
+    el.addEventListener('contextmenu',e=>{ e.preventDefault(); openCardMenu(e, el.dataset.file); });
   });
   board.querySelectorAll('.sc-cu-run').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); launchUnity(el.dataset.cu, el.dataset.cwd); });   // тап по cu-тегу → Unity, НЕ открывать карточку
@@ -121,6 +123,55 @@ export function renderBoard(animate){
   board.querySelectorAll('.card-wo').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });   // тап по тегу задачи → Jira, НЕ открывать карточку
   });
+}
+
+let _cardMenu = null;   // одно открытое контекстное меню за раз: { el, cleanup }
+function closeCardMenu(){
+  if (!_cardMenu) return;
+  const m = _cardMenu; _cardMenu = null;
+  m.cleanup(); m.el.remove();
+}
+export function openCardMenu(e, file){
+  closeCardMenu();
+  const s = S.SESSIONS.find(x=>x.file===file);
+  const items = [
+    { label:'Открыть',      act:()=>openSession(file) },
+    { label:'Изменить имя', act:()=>openRenameDialog(file) },
+    { label:'Обновить',     act:()=>refreshCard(file) },
+    { label:'Удалить',      danger:true, act:()=>openDeleteDialog(file, s && s.title) },
+  ];
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = items.map((it,i)=>`<button type="button" data-i="${i}"${it.danger?' class="danger"':''}>${esc(it.label)}</button>`).join('');
+  document.body.appendChild(menu);
+  // держим меню в пределах экрана — у правого/нижнего края сдвигаем внутрь
+  const vw = window.innerWidth || 1920, vh = window.innerHeight || 1080;
+  const mw = menu.offsetWidth || 190, mh = menu.offsetHeight || 170;
+  menu.style.left = Math.max(6, Math.min(e.clientX, vw - mw - 6)) + 'px';
+  menu.style.top  = Math.max(6, Math.min(e.clientY, vh - mh - 6)) + 'px';
+  menu.querySelectorAll('button').forEach(b=>{
+    b.addEventListener('click', ()=>{ const it = items[+b.dataset.i]; closeCardMenu(); it.act(); });
+  });
+  const onDown = ev => { if (!menu.contains(ev.target)) closeCardMenu(); };
+  const onKey  = ev => { if (ev.key === 'Escape') closeCardMenu(); };
+  const onScroll = () => closeCardMenu();
+  // scroll не всплывает — вешаем в фазе перехвата, чтобы ловить прокрутку любой колонки; contextmenu в перехвате гасит меню до открытия нового
+  const wire = add => {
+    document[add]('mousedown', onDown, true);
+    document[add]('contextmenu', onDown, true);
+    document[add]('scroll', onScroll, true);
+    document[add]('keydown', onKey, true);
+  };
+  setTimeout(()=>wire('addEventListener'), 0);   // не ловим текущий contextmenu-евент, что открыл меню
+  _cardMenu = { el: menu, cleanup: ()=>wire('removeEventListener') };
+}
+export function refreshCard(file){
+  const s = S.SESSIONS.find(x=>x.file===file);
+  delete SESSION_CACHE[file];
+  if (s && s.gitBranch) delete MR_CACHE[s.gitBranch];
+  if (s && s.wo) delete JIRA_CACHE[s.wo];
+  hydrateMrs(true); hydrateJira(true); renderBoard(false);
+  toast('Обновлено');
 }
 
 export function renderNow(){
