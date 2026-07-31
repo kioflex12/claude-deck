@@ -1,10 +1,10 @@
 // Deck — вкладка скиллов: каталог с сервера + фильтр по категории/поиску + рендер сетки карточек.
-// Вынесено из app.js; состояние — в store (S). renderSkills зовёт openSession (app.js) в кнопке «вставить» —
-// цикл app↔skills безопасен (вызовы в рантайме).
+// Вынесено из app.js; состояние — в store (S). renderSkills зовёт openSession (session.js) в кнопке «вставить» —
+// цикл session↔skills безопасен (вызовы в рантайме).
 import { S } from './store.js';
 import { esc } from './util.js';
 import { toast } from './ui.js';
-import { openSession } from './app.js';
+import { openSession } from './session.js';
 
 const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
 export async function loadSkillsCatalog(){
