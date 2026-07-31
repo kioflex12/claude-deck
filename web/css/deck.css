@@ -90,6 +90,29 @@
     .ap-result.ap-r-allow{ color:var(--good); }
     .ap-result.ap-r-deny{ color:var(--bad); }
 
+    /* карточка вопроса к пользователю (AskUserQuestion/ExitPlanMode) — акцентная рамка, режим не отвечает за юзера */
+    .cx-question{ background:var(--surface); border:1px solid var(--accent); border-left:3px solid var(--accent); border-radius:9px; padding:11px 13px; gap:9px; }
+    .cx-question.q-resolved{ border-color:var(--border); border-left-color:var(--border-strong); opacity:.9; }
+    .q-title{ font-size:13px; font-weight:600; color:var(--text); display:flex; align-items:center; gap:7px; }
+    .q-icon{ font-size:14px; }
+    .q-block{ display:flex; flex-direction:column; gap:7px; padding-top:4px; }
+    .q-block + .q-block{ border-top:1px solid var(--border); padding-top:9px; margin-top:2px; }
+    .q-head{ font-family:var(--mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); }
+    .q-text{ font-size:13px; color:var(--text); }
+    .q-plan{ margin:0; max-height:320px; overflow:auto; font-family:var(--mono); font-size:11.5px; line-height:1.5; color:var(--text); background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:9px 11px; white-space:pre-wrap; word-break:break-word; }
+    .q-opts{ display:flex; flex-direction:column; gap:6px; }
+    .q-opt{ display:flex; flex-direction:column; gap:2px; text-align:left; font-family:var(--ui); padding:8px 11px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); cursor:pointer; transition:.13s; }
+    .q-opt:hover:not(:disabled){ border-color:var(--border-strong); background:var(--surface); }
+    .q-opt.sel{ border-color:var(--accent); background:var(--accent-soft); }
+    .q-opt:disabled{ opacity:.55; cursor:default; }
+    .q-opt-label{ font-size:12.5px; font-weight:560; }
+    .q-opt-desc{ font-size:11.5px; color:var(--text-muted); }
+    .q-foot{ display:flex; }
+    .q-submit{ font-family:var(--ui); font-size:12.5px; font-weight:560; padding:6px 15px; border-radius:8px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent-ink); cursor:pointer; transition:.13s; }
+    .q-submit:hover:not(:disabled){ background:var(--surface); }
+    .q-submit:disabled{ opacity:.5; cursor:default; }
+    .q-result{ font-family:var(--mono); font-size:12px; font-weight:700; color:var(--good); }
+
     /* P3: чип режима — байпас предупреждающе красным */
     .cx-mode-bypass{ border-color:var(--bad); color:var(--bad); }
     .cx-mode-bypass svg{ color:var(--bad); }

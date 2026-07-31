@@ -8,7 +8,26 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setFetch, watchBrokenRefs } from './dom-stub.mjs';
 import { S } from '../web/js/store.js';
-import { runPrompt, setStreamStatus, updateTailIndicator, updateRailContext, userStop, approvalCardHTML } from '../web/js/stream.js';
+import { runPrompt, setStreamStatus, updateTailIndicator, updateRailContext, userStop, approvalCardHTML, questionCardHTML, wireQuestion } from '../web/js/stream.js';
+
+// Мини-DOM для wireQuestion: узлы с classList/dataset/closest/querySelectorAll по классам (null-DOM stub этого не умеет).
+function makeNode(classes, dataset){
+  const cls = new Set(String(classes || '').split(/\s+/).filter(Boolean));
+  const node = {
+    dataset: dataset || {}, disabled: false, hidden: false, textContent: '', _cls: cls, _parent: null, _kids: [], _lst: {},
+    classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)), contains: (c) => cls.has(c) },
+    addEventListener(ev, fn){ (node._lst[ev] = node._lst[ev] || []).push(fn); },
+    click(){ (node._lst.click || []).forEach((f) => f()); },
+    remove(){ if (node._parent) node._parent._kids = node._parent._kids.filter((k) => k !== node); },
+  };
+  const desc = (n) => n._kids.flatMap((k) => [k, ...desc(k)]);
+  const match = (n, sel) => sel.split(',').some((p) => p.trim().split('.').filter(Boolean).every((c) => n._cls.has(c)));
+  node.querySelectorAll = (sel) => desc(node).filter((n) => match(n, sel));
+  node.querySelector = (sel) => node.querySelectorAll(sel)[0] || null;
+  node.closest = (sel) => { let p = node; while (p){ if (match(p, sel)) return p; p = p._parent; } return null; };
+  node.add = (child) => { child._parent = node; node._kids.push(child); return child; };
+  return node;
+}
 
 test('stream.js: runPrompt(setup) + индикаторы + approvalCardHTML + userStop', async () => {
   setFetch(async () => ({ ok:true, status:200,
@@ -40,4 +59,39 @@ test('stream.js: runPrompt(setup) + индикаторы + approvalCardHTML + us
   await new Promise((r) => setTimeout(r, 40));
   w.stop();
   assert.deepEqual(w.errors, [], 'сломанная ссылка в stream.js: ' + w.errors.join(' | '));
+});
+
+test('stream.js: questionCardHTML рендерит варианты; wireQuestion(single) отвечает и POSTит /api/answer', async () => {
+  const d = { id: 'aq_x', questions: [{ question: 'Куда идём?', header: 'Выбор', options: [{ label: 'Влево', description: 'на запад' }, { label: 'Вправо' }], multiSelect: false }] };
+  const html = questionCardHTML(d);
+  assert.equal(typeof html, 'string');
+  assert.ok(html.includes('Куда идём?'), 'текст вопроса');
+  assert.ok(html.includes('Влево') && html.includes('Вправо'), 'оба варианта');
+  assert.ok(html.includes('на запад'), 'описание варианта');
+  assert.ok(html.includes('data-single="1"'), 'один single-select → auto-submit флаг');
+
+  // multiSelect карточка тоже строится без падения
+  assert.ok(questionCardHTML({ id: 'aq_m', questions: [{ question: 'Что?', options: [{ label: 'A' }], multiSelect: true }] }).includes('data-single="0"'));
+
+  // wireQuestion на null-DOM-элементе (makeEl) — не падает
+  wireQuestion(null, d);
+
+  // функциональный мини-DOM: клик по варианту single-select → auto-submit → POST /api/answer с answers
+  let posted = null;
+  setFetch(async (url, opt) => { posted = { url, body: opt && opt.body ? JSON.parse(opt.body) : null }; return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '', headers: { get(){ return null; } } }; });
+  const card = makeNode('cx-msg cx-question', { single: '1' });
+  const block = card.add(makeNode('q-block', { multi: '0', question: 'Куда идём?' }));
+  const opt1 = block.add(makeNode('q-opt', { label: 'Влево' }));
+  block.add(makeNode('q-opt', { label: 'Вправо' }));
+  const foot = card.add(makeNode('q-foot'));
+  foot.add(makeNode('q-submit'));
+  card.add(makeNode('q-result'));
+  wireQuestion(card, d);
+  opt1.click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(posted, 'fetch вызван');
+  assert.equal(posted.url, '/api/answer', 'POST на /api/answer');
+  assert.equal(posted.body.id, 'aq_x', 'прислан id вопроса');
+  assert.deepEqual(posted.body.answers, { 'Куда идём?': 'Влево' }, 'answers = { текст: выбранный лейбл }');
+  assert.ok(card.classList.contains('q-resolved'), 'карточка помечена отвеченной');
 });

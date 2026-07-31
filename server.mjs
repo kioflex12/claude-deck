@@ -1191,11 +1191,17 @@ async function apiUsage(res) {
 
 // -------- P2: аппрув инструментов (canUseTool). Читающее — молча allow; пишущее/выполняющее — спросить. --------
 const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
+// Вопросы к пользователю (AskUserQuestion/ExitPlanMode) — НЕ разрешения, а ввод: ждут реального ответа человека.
+const pendingQuestions = new Map();      // questionId -> { resolve(answers), questions, sessionKey }
+const pendingQuestionsByKey = new Map(); // sessionKey -> Set(questionId) — для ре-сёрфейса висящих вопросов при перезаходе
 const activeStreams = new Map();      // streamId -> AbortController (для гарантированного /api/stop)
 const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
 const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions']);   // P3: режимы разрешений
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);               // уровни reasoning-effort SDK
 const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoWrite']);
+// Инструменты пользовательского ВВОДА: режим (bypass/acceptEdits/closed/session-allow) даёт право ВЫПОЛНИТЬ инструмент,
+// но не право ОТВЕТИТЬ за пользователя. Их НЕ гейтим как разрешение — вопрос показываем всегда и ждём ответ (PostToolUse-hook).
+const USER_INPUT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);   // правки файлов — авто-принимаются в acceptEdits
 // Мутирующие инструменты, которые managed-тир форсирует в ask. settingSources('project') нужен, чтобы CLI нашёл скиллы
 // проекта (/dev-workflow и пр.) и CLAUDE.md — без него слэш-команды = «Unknown command». Но project несёт и
@@ -1417,6 +1423,9 @@ async function apiChat(req, res, u) {
 
   // canUseTool — ЕДИНСТВЕННЫЙ страж в default-режиме: без него мутирующие инструменты выполнились бы без спроса.
   const canUseTool = async (toolName, input, opts) => {
+    // ПЕРВОЙ проверкой (до read-only/bypass/acceptEdits/closed/session-allow): вопросы к пользователю не гейтятся
+    // как разрешение — их авто-allow здесь, а реальный ответ человека собирает PostToolUse-hook ниже (не авто-скип).
+    if (USER_INPUT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
     if (mode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };            // байпас — ничего не спрашиваем
     if (mode === 'acceptEdits' && EDIT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };  // «Авто-правки»: правки файлов без спроса (в т.ч. вне cwd); Bash/прочее — по-прежнему спрашиваем
@@ -1439,6 +1448,35 @@ async function apiChat(req, res, u) {
         else sig.addEventListener('abort', () => { if (pendingApprovals.has(id)) decide('deny'); }, { once: true });
       }
     });
+  };
+
+  // Пользовательский ввод (AskUserQuestion/ExitPlanMode). Инструмент авто-выполняется (canUseTool allow), а его вывод
+  // здесь ПОДМЕНЯЕТСЯ реальным ответом человека: PostToolUse-hook блокирует ход, пока не придёт /api/answer. При закрытом
+  // канале (ушёл с экрана) вопрос всё равно регистрируем и шлём — подхватится ре-сёрфейсом при перезаходе. Сами НЕ
+  // резолвим по closed/таймауту; на abort (Стоп) отпускаем пустым — модель получит исходный вывод авто-инструмента.
+  const awaitUserInput = (prefix, questions, buildOutput, opts) => {
+    const id = prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const key = sessionKey;
+    if (key) { let set = pendingQuestionsByKey.get(key); if (!set) { set = new Set(); pendingQuestionsByKey.set(key, set); } set.add(id); }
+    const cleanup = () => { pendingQuestions.delete(id); const s = key && pendingQuestionsByKey.get(key); if (s) { s.delete(id); if (!s.size) pendingQuestionsByKey.delete(key); } };
+    send({ type: 'question', id, questions });
+    return new Promise((resolve) => {
+      pendingQuestions.set(id, { questions, sessionKey: key, resolve: (answers) => { cleanup(); resolve(buildOutput(answers)); } });
+      const sig = opts && opts.signal;
+      if (sig) {
+        if (sig.aborted) { cleanup(); resolve({}); }
+        else sig.addEventListener('abort', () => { if (pendingQuestions.has(id)) { cleanup(); resolve({}); } }, { once: true });
+      }
+    });
+  };
+  const askQuestionHook = async (input, _toolUseId, opts) => {
+    const questions = (input && input.tool_input && Array.isArray(input.tool_input.questions)) ? input.tool_input.questions : [];
+    return awaitUserInput('aq_', questions, (answers) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: { questions, answers } } }), opts);
+  };
+  const exitPlanHook = async (input, _toolUseId, opts) => {
+    const plan = (input && input.tool_input && typeof input.tool_input.plan === 'string') ? input.tool_input.plan : '';
+    const questions = [{ question: 'Принять план и продолжить?', header: 'План', plan, options: [{ label: 'Принять' }, { label: 'Оставить в плане' }], multiSelect: false }];
+    return awaitUserInput('ep_', questions, (answers) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: { answers } } }), opts);
   };
 
   // P4: собираем промт для query(). Текстовые файлы вклеиваем в текст блоком ```имя```; картинки — vision-блоки;
@@ -1469,6 +1507,12 @@ async function apiChat(req, res, u) {
       cwd,
       permissionMode: mode,           // P3: default | acceptEdits | plan | bypassPermissions (из &mode=)
       canUseTool,                     // read-only → авто-allow; мутирующее → SSE approval + ожидание решения
+      hooks: {
+        PostToolUse: [
+          { matcher: 'AskUserQuestion', hooks: [askQuestionHook] },   // вопрос с вариантами — всегда ждём ответ пользователя
+          { matcher: 'ExitPlanMode', hooks: [exitPlanHook] },         // выход из плана — принять/оставить, решает пользователь
+        ],
+      },
       settingSources: ['user', 'project', 'local'],   // как настоящая CC-сессия: скиллы (/dev-workflow…), CLAUDE.md, агенты
       skills: 'all',                                   // явно включаем все найденные скиллы
       managedSettings: { permissions: { ask: MANAGED_ASK } },   // страж поверх project-allow (см. MANAGED_ASK)
@@ -1532,6 +1576,30 @@ function apiApprove(res, u) {
   const p = pendingApprovals.get(id);
   if (p) { try { p.decide(decision); } catch { /* уже снят */ } }
   sendJSON(res, { ok: true });
+}
+
+// Ответ пользователя на вопрос (AskUserQuestion/ExitPlanMode). answers = { [текст вопроса]: выбранный лейбл(ы) }.
+// POST-телом (обычный путь клиента) либо GET-параметром answers=<json> (зеркало /api/approve). Нет id → тихо ok:false.
+async function apiAnswer(req, res, u) {
+  let id = u.searchParams.get('id') || '';
+  let answers = null;
+  if (req.method === 'POST') { try { const body = await readJsonBody(req, 256 * 1024); if (body.id) id = String(body.id); answers = body.answers; } catch {} }
+  if (answers == null) { const raw = u.searchParams.get('answers') || ''; if (raw) { try { answers = JSON.parse(raw); } catch {} } }
+  if (answers == null || typeof answers !== 'object') answers = {};
+  const p = pendingQuestions.get(id);
+  if (p && typeof p.resolve === 'function') { try { p.resolve(answers); } catch { /* уже снят */ } sendJSON(res, { ok: true }); return; }
+  sendJSON(res, { ok: false });
+}
+
+// Ре-сёрфейс: висящие (неотвеченные) вопросы для сессии этого файла. sessionKey = session_id = basename без .jsonl —
+// тот же ключ, что apiChat кладёт в pendingQuestionsByKey. Клиент при перезаходе дорисует карточки и снова ждёт ответ.
+function apiPendingQuestions(res, u) {
+  const file = u.searchParams.get('file') || '';
+  const sessionKey = path.basename(file).replace(/\.jsonl$/, '');
+  const set = pendingQuestionsByKey.get(sessionKey);
+  const questions = [];
+  if (set) { for (const id of set) { const rec = pendingQuestions.get(id); if (rec) questions.push({ id, questions: rec.questions }); } }
+  sendJSON(res, { questions });
 }
 
 // -------- TeamCity: live-статус клиентских сборок по ветке (секция «Сборки» в рейле) --------
@@ -1979,6 +2047,8 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }
+  if (u.pathname === '/api/answer') { apiAnswer(req, res, u).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/pending-questions') { apiPendingQuestions(res, u); return; }
   if (u.pathname === '/api/stop') { apiStop(res, u); return; }
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
@@ -2033,4 +2103,5 @@ export {
   classifyUserBlock, buildSessionBlocks,
   wfInfo, scopeInfo,
   isReadOnlyTool, briefArg, woOf, columnByAge,
+  pendingQuestions, pendingQuestionsByKey,   // для тестов /api/answer и /api/pending-questions
 };

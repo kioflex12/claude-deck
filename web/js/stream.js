@@ -101,6 +101,66 @@ function wireApproval(el, d){
   }));
 }
 
+// Карточка вопроса к пользователю (AskUserQuestion/ExitPlanMode): режим НЕ отвечает за пользователя — вопрос всегда
+// показываем и ждём выбор. d = { id, questions:[{ question, header, plan?, options:[{label,description}], multiSelect }] }.
+export function questionCardHTML(d){
+  const questions = Array.isArray(d.questions) ? d.questions : [];
+  const single = questions.length === 1 && !questions[0].multiSelect;   // один single-select → отвечаем сразу по клику
+  const qs = questions.map((q, qi) => {
+    const head = q.header ? `<div class="q-head">${esc(String(q.header))}</div>` : '';
+    const text = q.question ? `<div class="q-text">${esc(String(q.question))}</div>` : '';
+    const plan = q.plan ? `<pre class="q-plan">${esc(String(q.plan))}</pre>` : '';
+    const opts = Array.isArray(q.options) ? q.options : [];
+    const btns = opts.map(o => {
+      const label = String(o && o.label != null ? o.label : o);
+      const desc = o && o.description ? `<span class="q-opt-desc">${esc(String(o.description))}</span>` : '';
+      return `<button class="q-opt" type="button" data-label="${esc(label)}"><span class="q-opt-label">${esc(label)}</span>${desc}</button>`;
+    }).join('');
+    return `<div class="q-block" data-multi="${q.multiSelect ? '1' : '0'}" data-question="${esc(String(q.question || ''))}">${head}${text}${plan}<div class="q-opts">${btns}</div></div>`;
+  }).join('');
+  return `<div class="cx-msg cx-question" data-id="${esc(d.id)}" data-single="${single ? '1' : '0'}">
+    <div class="q-title"><span class="q-icon">💬</span>Вопрос от Claude</div>
+    ${qs}
+    <div class="q-foot"><button class="q-submit" type="button">Ответить</button></div>
+    <div class="q-result" hidden></div>
+  </div>`;
+}
+
+function collectAnswers(el){
+  const answers = {};
+  el.querySelectorAll('.q-block').forEach(blk => {
+    const qtext = blk.dataset.question || '';
+    const sel = [...blk.querySelectorAll('.q-opt.sel')].map(b => b.dataset.label);
+    if (sel.length) answers[qtext] = sel.join(', ');   // multiSelect → лейблы через запятую
+  });
+  return answers;
+}
+
+async function submitAnswers(el, d){
+  if (el.classList.contains('q-resolved')) return;
+  const answers = collectAnswers(el);
+  if (!Object.keys(answers).length) return;   // ничего не выбрано — ждём выбор пользователя
+  el.classList.add('q-resolved');
+  el.querySelectorAll('.q-opt, .q-submit').forEach(b => b.disabled = true);
+  try { await fetch('/api/answer', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: d.id, answers }) }); } catch {}
+  const foot = el.querySelector('.q-foot'); if (foot) foot.remove();
+  const r = el.querySelector('.q-result'); if (r){ r.hidden = false; r.textContent = 'Ответ отправлен: ' + Object.values(answers).join(' · '); }
+}
+
+export function wireQuestion(el, d){
+  if (!el) return;
+  const single = el.dataset.single === '1';
+  el.querySelectorAll('.q-opt').forEach(b => b.addEventListener('click', () => {
+    if (el.classList.contains('q-resolved')) return;
+    const blk = b.closest('.q-block'); if (!blk) return;
+    const multi = blk.dataset.multi === '1';
+    if (multi) b.classList.toggle('sel');
+    else { blk.querySelectorAll('.q-opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel'); }
+    if (single && !multi) submitAnswers(el, d);   // единственный single-select вопрос — сразу отправляем
+  }));
+  const sb = el.querySelector('.q-submit'); if (sb) sb.addEventListener('click', () => submitAnswers(el, d));
+}
+
 export async function runPrompt(payload){
   const text = payload.text || '', mode = payload.mode || 'default', attachments = payload.attachments || [];
   const model = payload.model || '', effort = payload.effort || '';
@@ -250,6 +310,11 @@ export async function runPrompt(payload){
       clearLive(); finalizeThink();   // карточка аппрува — новый элемент ленты
       const el = addBlock(approvalCardHTML(d));
       wireApproval(el, d);
+      if (stick) scrollBottom();
+    } else if (d.type === 'question'){
+      clearLive(); finalizeThink();   // карточка вопроса — новый элемент ленты
+      const el = addBlock(questionCardHTML(d));
+      wireQuestion(el, d);
       if (stick) scrollBottom();
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       S.currentFile = d.file; S.streamingFile = d.file; S.tailCount = 0;

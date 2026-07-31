@@ -34,9 +34,9 @@ process.env.CLAUDE_PROJECTS_DIR = projectsDir;
 process.env.PORT = '0';
 delete process.env.WO_STATES_DIR;   // детерминизм: без dev-workflow-состояний
 
-let srv, base;
+let srv, base, mod;
 before(async () => {
-  const mod = await import(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href);
+  mod = await import(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href);
   srv = await mod.startServer();
   base = srv.url;
 });
@@ -116,4 +116,33 @@ test('/api/build?branch=preprod (без wo) → мягко: base-branch builds:[
   assert.equal(status, 200);
   const ok = body.available === false || (Array.isArray(body.builds) && body.builds.length === 0);
   assert.ok(ok, 'без TC-токена available:false, либо base-branch пустой список сборок');
+});
+
+test('/api/answer резолвит зарегистрированный pendingQuestions-id ответом пользователя', async () => {
+  let got = null;
+  const id = 'aq_test1';
+  mod.pendingQuestions.set(id, { questions: [{ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }], sessionKey: 'sess-aaa', resolve: (answers) => { got = answers; mod.pendingQuestions.delete(id); } });
+  const r = await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, answers: { 'Q?': 'A' } }) });
+  const body = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(body.ok, true, 'известный id → ok:true');
+  assert.deepEqual(got, { 'Q?': 'A' }, 'resolve вызван с ответом пользователя');
+  assert.equal(mod.pendingQuestions.has(id), false, 'id снят после ответа');
+
+  const bad = await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'aq_unknown', answers: {} }) });
+  const badBody = await bad.json();
+  assert.equal(badBody.ok, false, 'неизвестный id → ok:false');
+});
+
+test('/api/pending-questions возвращает висящие вопросы по sessionKey файла', async () => {
+  const id = 'aq_test2';
+  mod.pendingQuestions.set(id, { questions: [{ question: 'Продолжить?', options: [{ label: 'Да' }], multiSelect: false }], sessionKey: 'sess-pending', resolve: () => {} });
+  let set = mod.pendingQuestionsByKey.get('sess-pending'); if (!set) { set = new Set(); mod.pendingQuestionsByKey.set('sess-pending', set); } set.add(id);
+  const { status, body } = await getJson('/api/pending-questions?file=' + encodeURIComponent('test-project/sess-pending.jsonl'));
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(body.questions), 'questions — массив');
+  const q = body.questions.find((x) => x.id === id);
+  assert.ok(q, 'висящий вопрос найден по sessionKey');
+  assert.equal(q.questions[0].question, 'Продолжить?');
+  mod.pendingQuestions.delete(id); set.delete(id);
 });

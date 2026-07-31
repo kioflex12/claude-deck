@@ -9,9 +9,9 @@ import { launchUnity } from './unity.js';
 import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira } from './services.js';
 import { wireSideActions } from './dialogs.js';
 import { sideHTML, wireRailTabs } from './rail.js';
-import { renderThread } from './transcript.js';
+import { renderThread, appendHTML } from './transcript.js';
 import { renderComposer, loadSkills } from './composer.js';
-import { stopStream, startRailRefresh } from './stream.js';
+import { stopStream, startRailRefresh, questionCardHTML, wireQuestion } from './stream.js';
 
 export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
@@ -57,6 +57,7 @@ export async function openSession(file){
   wireRailTabs();      // переключатель «Контекст | Артефакты» + клики по артефактам
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
+  resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
   S.sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
@@ -64,4 +65,17 @@ export async function openSession(file){
   loadMrs(t);          // live-MR из GitLab в рейл
   loadJira(t);         // live-статус Jira в рейл
   if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → ветка/MR/сборки/Jira обновляются по ходу работы
+}
+
+// Ре-сёрфейс висящих вопросов при перезаходе: пока ход в фоне ждёт ответа человека, карточку надо дорисовать в ленту
+// и снова принять выбор (сервер держит вопрос в pendingQuestions до /api/answer). Пусто/ошибка — тихо ничего.
+async function resurfaceQuestions(file){
+  let d; try { const r = await fetch('/api/pending-questions?file=' + encodeURIComponent(file), { cache:'no-store' }); d = await r.json(); } catch { return; }
+  if (S.currentFile !== file || !d || !Array.isArray(d.questions) || !d.questions.length) return;
+  const cons = document.querySelector('.cx-console'); if (!cons) return;
+  for (const q of d.questions){
+    const card = { id: q.id, questions: q.questions };
+    const el = appendHTML(cons, questionCardHTML(card));
+    wireQuestion(el, card);
+  }
 }
