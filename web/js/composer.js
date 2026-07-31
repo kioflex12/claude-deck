@@ -32,7 +32,7 @@ export function updateSlash(){
   if (!ta || !box) return;
   const v = ta.value;
   if (v[0] === '/' && !v.slice(1).includes(' ')) {
-    S.slashItems = slashFilter(v.slice(1)).slice(0, 60);
+    S.slashItems = slashFilter(v.slice(1));   // без лимита: дропдаун .cx-slash скроллится (max-height+overflow), а проектов-скиллов бывает >60
     S.slashOpen = S.slashItems.length > 0;
     S.slashSel = 0;
     renderSlash();
