@@ -1,9 +1,11 @@
 // Deck — общие UI-листья: тосты, открытие внешних ссылок и локальных файлов, встроенный просмотрщик.
-// Вынесены из app.js, потому что их зовут все кластеры. jiraUrl/loadServicesGate/modalBack пока живут
-// в app.js (сервисы/диалоги) — импортируем оттуда; цикл app↔ui безопасен (вызовы только в рантайме).
+// Вынесены из app.js, потому что их зовут все кластеры. jiraUrl остаётся в app.js, loadServicesGate — в
+// auth.js, modalBack — в dialogs.js; циклы безопасны (вызовы только в рантайме).
 import { S, SESSION_CACHE } from './store.js';
 import { esc, mdToHtml } from './util.js';
-import { jiraUrl, loadServicesGate, modalBack } from './app.js';
+import { jiraUrl } from './app.js';
+import { loadServicesGate } from './auth.js';
+import { modalBack } from './dialogs.js';
 
 export function toast(msg){
   let el = document.getElementById('deckToast');

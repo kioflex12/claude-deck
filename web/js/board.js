@@ -1,14 +1,14 @@
 // Deck — вид «Доска»: карточки сессий (cardHTML), колонки/фильтры и лейбл «текущий контекст».
 // Вынесено из app.js; состояние — в store (S). Чистую доска-логику (колонки, searchableText) даёт columns.js.
 // Клик по карточке → openSession (session.js), по cu-тегу → launchUnity (unity.js), по тегу задачи → openWoJira (ui.js).
-// Циклы board↔app, board↔session и board↔usage безопасны — импортированные вызовы срабатывают в рантайме.
+// Циклы board↔dialogs, board↔session и board↔usage безопасны — импортированные вызовы срабатывают в рантайме.
 import { S, JIRA_CACHE, MR_CACHE, COLUMNS } from './store.js';
 import { esc, ctxColor, pctOf, timeAgo } from './util.js';
 import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL } from './columns.js';
 import { openWoJira } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
-import { openNewSessionDialog } from './app.js';
+import { openNewSessionDialog } from './dialogs.js';
 import { openSession } from './session.js';
 
 export function boardMatch(s){

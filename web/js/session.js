@@ -7,7 +7,11 @@ import { toast, openWoJira } from './ui.js';
 import { isWorking } from './board.js';
 import { runningAgents, agentBoxHTML, wireTags, loadBuilds, loadMrs, loadJira, startAgentsPoll, stopAgentsPoll } from './services.js';
 import { launchUnity } from './unity.js';
-import { aReal, jiraUrl, requireAuth, loadModelsCatalog, ensureNotifyPermission, titleOf, notifyDone, wireSideActions, setView } from './app.js';
+import { aReal, jiraUrl, loadModelsCatalog } from './app.js';
+import { requireAuth } from './auth.js';
+import { ensureNotifyPermission, titleOf, notifyDone } from './notify.js';
+import { wireSideActions } from './dialogs.js';
+import { setView } from './nav.js';
 
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 export function userStop(){
