@@ -19,7 +19,10 @@ function mdInline(t){
   const codes = [];
   t = t.replace(/`([^`]+)`/g, (m,c)=>{ codes.push(c); return 'C'+(codes.length-1)+''; });
   t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m,txt,url)=>{
-    const safe = /^(https?:|mailto:|\/)/i.test(url) ? url : '#';
+    // относительные пути (docs/plan.md) — валидные ЛОКАЛЬНЫЕ ссылки: их ловит глобальный обработчик и открывает
+    // во встроенном просмотрщике. Раньше они подменялись на '#' (мёртвая ссылка) — оттого клик «ничего не делал».
+    // Режем только опасные схемы.
+    const safe = /^\s*(javascript|data|vbscript):/i.test(url) ? '#' : url;
     return '<a href="'+safe+'" target="_blank" rel="noopener">'+txt+'</a>';
   });
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

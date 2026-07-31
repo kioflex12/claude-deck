@@ -2,7 +2,7 @@ import { esc, escHtml, ctxColor, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTo
 import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } from './columns.js';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-const UI_BUILD = '0.1.27';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+const UI_BUILD = '0.1.28';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 let PROJECTS = [], ACTIVE_PROJECT = '';        // проекты (папки) + активный id; доску скоупит сервер по активному
 const activeProjectPath = () => { const p = PROJECTS.find(x => x.id === ACTIVE_PROJECT); return p ? p.path : ''; };
 let JIRA_HOST_CFG = "";                        // хост Jira из /api/config (для ссылок «открыть в Jira»); пусто → ссылку не строим (в публичном бинарнике адрес не зашит)
@@ -128,11 +128,12 @@ function cardHTML(s){
     s.gitBranch ? `<span class="chip repo">⎇ ${esc(s.gitBranch)}</span>` : '',
     `<span class="chip">${esc(s.model)}</span>`,
     `<span class="chip">${s.msgs} сообщ.</span>`,
-    s.wo ? `<span class="chip">${esc(s.wo)}</span>` : '',
     scopeChipsHTML(s),
     tagsChipsHTML(s),
     wfChips,
   ].join('');
+  // тег задачи — в правый верхний угол карточки, кликабельный (→ Jira); из общего ряда чипов убран
+  const woTag = s.wo ? `<span class="card-wo" data-wo="${esc(s.wo)}" title="Открыть ${esc(s.wo)} в Jira">${esc(s.wo)}<span class="ext">↗</span></span>` : '';
   const bg = (s.bgRunning|0) > 0 ? ` · ${s.bgRunning} ${s.bgRunning===1?'агент':'агента'} в фоне` : '';
   const flag = working
     ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
@@ -152,7 +153,7 @@ function cardHTML(s){
     mrPill = `<a class="pill mr-${s.wfMrState}" href="${esc(s.wfMrUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><span class="d ${s.wfMrState==='merged'?'pass':''}"></span>MR</a>`;
   }
   const foot = `<div class="card-foot">${buildPill}${mrPill}<span class="mini-ctx">${timeAgo(s.mtime)}</span><span class="foot-sep"></span>${ctxMini(s)}</div>`;
-  return `<article ${stripe} tabindex="0" role="button" data-file="${esc(s.file)}">${statusBar}<div class="card-top">${pulse}<span class="wo">${esc(s.project)}</span></div><h3 class="card-title">${esc(s.title)}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
+  return `<article ${stripe} tabindex="0" role="button" data-file="${esc(s.file)}">${statusBar}<div class="card-top">${pulse}<span class="wo">${esc(s.project)}</span>${woTag}</div><h3 class="card-title">${esc(s.title)}</h3><div class="chips">${chips}</div>${flag}${foot}</article>`;
 }
 function renderBoard(animate){
   const board = document.getElementById('board');
@@ -179,6 +180,9 @@ function renderBoard(animate){
   });
   board.querySelectorAll('.sc-cu-run').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); launchUnity(el.dataset.cu, el.dataset.cwd); });   // тап по cu-тегу → Unity, НЕ открывать карточку
+  });
+  board.querySelectorAll('.card-wo').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });   // тап по тегу задачи → Jira, НЕ открывать карточку
   });
 }
 async function launchUnity(cu, cwd){
