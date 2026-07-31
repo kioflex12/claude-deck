@@ -17,7 +17,7 @@ S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.29';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.30';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
