@@ -8,7 +8,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/unit.test.mjs test/api.test.mjs test/client.test.mjs test/boot.test.mjs test/ui.test.mjs test/mcp.test.mjs",
+    "test": "node --test test/unit.test.mjs test/api.test.mjs test/client.test.mjs test/boot.test.mjs test/ui.test.mjs test/mcp.test.mjs test/skills.test.mjs test/unity.test.mjs test/usage.test.mjs",
     "app": "electron .",
     "dist": "electron-builder --win",
     "dist:mac": "electron-builder --mac",

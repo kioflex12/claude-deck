@@ -3,6 +3,9 @@ import { WF_COLUMNS, WF_LABEL, effectiveColumn, cardStatus, searchableText } fro
 import { S, SESSION_CACHE, MR_CACHE, JIRA_CACHE, notifiedDone, promptQueue, attachDraft, SKILLS_CACHE, COLUMNS, MODE_ORDER, MODE_LABEL, LIVE_TTL, ATTACH_MAX_BYTES } from './store.js';
 import { toast, openExternal, openWoJira, openLocalResource, openFileViewer } from './ui.js';
 import { renderMcp, loadMcpCatalog } from './mcp.js';
+import { renderSkills, loadSkillsCatalog } from './skills.js';
+import { launchUnity, loadUnityInstances } from './unity.js';
+import { loadUsage, renderUsageBar, openUsageModal, contextSession } from './usage.js';
 S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 
@@ -48,7 +51,7 @@ function ctxMini(s){
   const p = pctOf(s);
   return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
 }
-function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!S.streamingFile && s.file === S.streamingFile)); }
+export function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|0) > 0 || (!!S.streamingFile && s.file === S.streamingFile)); }
 function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
   if (s.clientCu) out.push(`<span class="chip sc-cu sc-cu-run" data-cu="${esc(s.clientCu)}" data-cwd="${esc(s.cwd||'')}" title="Запустить Unity (${esc(s.clientCu)})">${esc(s.clientCu)}</span>`);
@@ -145,15 +148,6 @@ function renderBoard(animate){
     el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });   // тап по тегу задачи → Jira, НЕ открывать карточку
   });
 }
-export async function launchUnity(cu, cwd){
-  if (!(window.deckNative && window.deckNative.openUnity)){ toast('Запуск Unity доступен только в приложении'); return; }
-  toast('Unity ' + cu + '…');
-  try {
-    const r = await window.deckNative.openUnity({ cu, cwd });
-    if (r && r.ok) toast(r.focused ? ('Unity ' + cu + ' — окно на передний план') : ('Unity ' + cu + ' запускается' + (r.launched ? ' · ' + r.launched : '')));
-    else toast('Unity не запущен: ' + ((r && r.error) || 'неизвестная ошибка'));
-  } catch (e) { toast('Ошибка запуска Unity: ' + ((e && e.message) || e)); }
-}
 function renderNow(){
   const now = document.getElementById('now');
   // кнопка «Новая сессия» — ВСЕГДА (даже без активного контекста)
@@ -181,76 +175,7 @@ function renderFilters(){
     projects.map(p=>`<button class="fchip" data-f="${esc(p)}" aria-pressed="${S.projFilter===p}">${esc(p)}</button>`).join('');
 }
 
-/* ---------- skills (статический контент макета вкладки) ---------- */
-/* TECH-2: списки НЕ захардкожены — тянутся с сервера (реальные скиллы/MCP из файлов окружения). */
 const mcpExpanded = new Set();   // какие MCP-карточки развёрнуты
-async function loadUnityInstances(){
-  // Источник истины — реальные процессы (Electron): показывает ВСЕ запущенные редакторы, не только те, где есть
-  // pidfile MCP-for-Unity. Порт бриджа (если есть) добираем из /api/unity/instances по совпадению пути/cu.
-  let procList = null;
-  if (window.deckNative && window.deckNative.unityRunning){
-    try { const r = await window.deckNative.unityRunning(); if (r && Array.isArray(r.instances)) procList = r.instances; } catch {}
-  }
-  let apiList = [];
-  try { const d = await (await fetch('/api/unity/instances', { cache:'no-store' })).json(); apiList = Array.isArray(d.instances) ? d.instances : []; } catch {}
-  if (procList){
-    const portOf = (u) => { const m = apiList.find(a => (a.projectPath && u.projectPath && a.projectPath.toLowerCase() === u.projectPath.toLowerCase()) || (a.cu && u.cu && a.cu === u.cu)); return m ? m.port : null; };
-    S.unityInstances = procList.map(u => ({ cu: u.cu || '', projectPath: u.projectPath || '', port: portOf(u), status: 'up' }));
-  } else {
-    S.unityInstances = apiList;
-  }
-  if (S.activeView === 'mcp' && !S.mcpDetail) renderMcp();   // появились/исчезли → перерисовать секцию
-}
-const SCAT_LABEL = { user:'Пользователь', project:'Проект', 'прочее':'Прочее' };
-async function loadSkillsCatalog(){
-  try { const r = await fetch('/api/skills', { cache:'no-store' }); const d = await r.json(); S.SKILLS = Array.isArray(d.skills) ? d.skills : []; }
-  catch { S.SKILLS = []; }
-  S.skillsLoaded = true;
-  if (S.activeView === 'skills') renderSkills();
-}
-function skillMatch(sk){
-  if (S.skillCat !== 'all' && sk.cat !== S.skillCat) return false;
-  if (S.query && !((sk.cmd||'') + ' ' + (sk.does||'') + ' ' + (sk.trig||'')).toLowerCase().includes(S.query)) return false;
-  return true;
-}
-function skillCats(){   // категории строятся динамически из того, что реально пришло
-  const counts = {};
-  for (const s of S.SKILLS){ const c = s.cat || 'прочее'; counts[c] = (counts[c]||0) + 1; }
-  const keys = Object.keys(counts).sort((a,b)=>counts[b]-counts[a] || a.localeCompare(b));
-  return [{ key:'all', label:'Все скиллы' }].concat(keys.map(k=>({ key:k, label: SCAT_LABEL[k] || k })));
-}
-function renderSkills(){
-  if (!S.skillsLoaded){ loadSkillsCatalog(); }
-  const cats = skillCats();
-  const rail = document.getElementById('rail');
-  rail.innerHTML = `<div class="rail-label">Категории</div>` + cats.map(c => {
-    const n = c.key==='all' ? S.SKILLS.length : S.SKILLS.filter(s=>(s.cat||'прочее')===c.key).length;
-    return `<button class="cat" data-c="${esc(c.key)}" aria-pressed="${c.key===S.skillCat}">${esc(c.label)}<span class="c-count">${n}</span></button>`;
-  }).join('');
-  rail.querySelectorAll('.cat').forEach(b => b.addEventListener('click', () => { S.skillCat = b.dataset.c; renderSkills(); }));
-  const grid = document.getElementById('skillsGrid');
-  const items = S.SKILLS.filter(skillMatch);
-  const catLabel = k => { const c = cats.find(x=>x.key===k); return c ? c.label : (SCAT_LABEL[k]||k); };
-  if (!S.skillsLoaded){ grid.innerHTML = `<div class="empty">Загрузка скиллов…</div>`; return; }
-  grid.innerHTML = items.length ? items.map((s,i)=>`
-    <div class="skill-card" style="animation-delay:${i*25}ms">
-      <div class="skill-head"><span class="skill-cmd-tag">/${esc(s.cmd)}</span><span class="skill-cat-chip">${esc(catLabel(s.cat||'прочее'))}</span></div>
-      <div class="skill-does">${esc(s.does||'')}</div>
-      ${s.trig?`<div class="skill-trig"><b>когда зовётся</b>${esc(s.trig)}</div>`:''}
-      <div class="skill-foot"><button class="skill-run" data-cmd="${esc(s.cmd)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg> вставить /${esc(s.cmd)}</button></div>
-    </div>`).join('') : `<div class="empty">${S.SKILLS.length?'Ничего не найдено':'Скиллы не найдены'}</div>`;
-  grid.querySelectorAll('.skill-run').forEach(b => b.addEventListener('click', async () => {
-    const cmd = '/' + b.dataset.cmd;
-    if (S.currentFile){
-      await openSession(S.currentFile);                       // переключаемся в сессию — композер становится видимым
-      const ta = document.getElementById('composer-ta');
-      if (ta){ ta.value = cmd + ' '; ta.dispatchEvent(new Event('input')); ta.focus(); }   // input → включает кнопку отправки/ресайз
-      toast('Вставлено в композер: ' + cmd);
-    } else if (navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(cmd).then(()=>toast('Скопировано: ' + cmd)).catch(()=>toast('Не удалось скопировать'));
-    } else { toast('Открой сессию, чтобы вставить ' + cmd); }
-  }));
-}
 
 
 /* ---------- session: правый рейл контекста (плотные секции на реальных данных + wf) ---------- */
@@ -1112,7 +1037,7 @@ async function runPrompt(payload){
   };
   es.onerror = () => { if (!finished) finish('Соединение прервано'); };
 }
-async function openSession(file){
+export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
   S.currentFile = file;
   S.returnView = (S.activeView==='status' || S.activeView==='board') ? S.activeView : 'status';
@@ -1407,7 +1332,7 @@ async function pollSessions(){
       // tool-call, который не пишет .jsonl >20с, ложно выглядит «готово»). isWorking учитывает и фоновых сабагентов,
       // так что «ничего не работает» = ни генерации, ни bgRunning. Форграунд-финиш (finish()) шлёт сразу — там конец точный.
       for (const file of nowSet){ notifiedDone.delete(file); S.pendingDone.delete(file); }   // снова «работает» → сброс дедупа и кандидата
-      for (const file of [...pendingDone]){                                                 // простаивал прошлый опрос и всё ещё простаивает → подтверждено
+      for (const file of [...S.pendingDone]){                                                 // простаивал прошлый опрос и всё ещё простаивает → подтверждено
         if (S.SESSIONS.some(s=>s.file===file)) notifyDone(file, titleOf(file));
         S.pendingDone.delete(file);
       }
@@ -1421,71 +1346,11 @@ async function pollSessions(){
 }
 function startPolling(){ if (S.pollTimer) clearInterval(S.pollTimer); S.pollTimer = setInterval(pollSessions, 7000); }
 
-/* ---------- аккаунт-лимиты Claude: индикатор в баре + окно usage ---------- */
-async function loadUsage(){
-  try { const r = await fetch('/api/usage', { cache:'no-store' }); S.USAGE = await r.json(); }
-  catch { S.USAGE = { available:false, reason:'сеть' }; }
-  renderUsageBar();
-}
-function usageBarPct(){
-  if (S.USAGE && S.USAGE.available){          // более узкое из 5ч/нед = более израсходованное
-    const a = S.USAGE.fiveHour && S.USAGE.fiveHour.utilization!=null ? S.USAGE.fiveHour.utilization : 0;
-    const b = S.USAGE.sevenDay && S.USAGE.sevenDay.utilization!=null ? S.USAGE.sevenDay.utilization : 0;
-    return { pct: Math.max(a,b), src:'limits' };
-  }
-  const s = contextSession();             // фолбэк: контекст открытой/свежей сессии
-  return { pct: s ? Math.round((s.ctxPct||0)*100) : 0, src:'context' };
-}
-function renderUsageBar(){
-  const fill = document.getElementById('usageBarFill'), lbl = document.getElementById('usagePct'), ind = document.getElementById('usageInd');
-  if (!fill || !lbl) return;
-  const { pct, src } = usageBarPct();
-  fill.style.width = Math.min(pct,100) + '%';
-  fill.style.background = pct>=80?'var(--bad)':pct>=50?'var(--warn)':'var(--good)';
-  lbl.textContent = pct + '%';
-  if (ind) ind.title = src==='limits' ? 'Лимиты Claude (5ч/нед) — клик для деталей' : 'Контекст сессии (лимиты недоступны) — клик для деталей';
-}
-function fmtReset(iso){
-  if (!iso) return '—';
-  const d = new Date(iso); if (isNaN(+d)) return '—';
-  const mins = Math.round((d - Date.now())/60000);
-  if (mins <= 0) return 'скоро';
-  if (mins < 60) return 'через ' + mins + ' мин';
-  const h = Math.round(mins/60); if (h < 48) return 'через ' + h + ' ч';
-  return d.toLocaleString('ru-RU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
-}
 export function modalBack(id){
   let back = document.getElementById(id);
   if (!back){ back = document.createElement('div'); back.id = id; back.className = 'deck-modal-back'; document.body.appendChild(back);
     back.addEventListener('click', e => { if (e.target === back) back.classList.remove('open'); }); }
   return back;
-}
-function openUsageModal(){
-  const back = modalBack('usageBack');
-  const u = S.USAGE || {};
-  const win = (w, title) => {
-    if (!w) return `<div class="um-row"><span class="um-k">${title}</span><span class="um-v">—</span></div>`;
-    const p = w.utilization==null?0:w.utilization;
-    return `<div class="um-win"><div class="um-row"><span class="um-k">${title}</span><span class="um-v">${p}% · сброс ${esc(fmtReset(w.resetsAt))}</span></div><div class="um-bar"><i style="width:${Math.min(p,100)}%;background:${p>=80?'var(--bad)':p>=50?'var(--warn)':'var(--good)'}"></i></div></div>`;
-  };
-  let body;
-  if (u.available){
-    const extra = u.extra ? `<div class="um-row"><span class="um-k">Доп. кредиты</span><span class="um-v">${esc(String(u.extra.usedCredits))}/${esc(String(u.extra.monthlyLimit))} ${esc(u.extra.currency||'')} · ${Math.round(u.extra.utilization||0)}%</span></div>` : '';
-    body = `${win(u.fiveHour,'5-часовое окно')}${win(u.sevenDay,'Недельное окно')}${extra}<div class="um-note">Подписка: ${esc(u.subscriptionType||'—')} · источник: Claude usage (тот же логин)</div>`;
-  } else {
-    const top = [...SESSIONS].sort((a,b)=>(b.winTokens||0)-(a.winTokens||0)).slice(0,8);
-    const rows = top.map(s=>`<div class="um-row"><span class="um-k um-ell">${esc(s.title||s.project||'—')}</span><span class="um-v">${kTok(s.winTokens)} · ${Math.round((s.ctxPct||0)*100)}%</span></div>`).join('');
-    body = `<div class="um-warn">Аккаунт-лимиты недоступны из Deck: ${esc(u.reason||'нет данных')}</div><div class="um-sub">Контекст открытых сессий (то, что доступно):</div>${rows||'<div class="um-note">нет сессий</div>'}`;
-  }
-  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Использование и лимиты</span><button class="dm-x" type="button">✕</button></div><div class="dm-body">${body}</div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
-  back.classList.add('open');
-}
-
-/* ---------- текущий контекст (для .now-лейбла и usage-фолбэка) ---------- */
-function contextSession(){
-  if (S.currentFile) return SESSION_CACHE[S.currentFile] || S.SESSIONS.find(s=>s.file===S.currentFile) || null;
-  return S.SESSIONS.find(isWorking) || S.SESSIONS.find(s=>s.active) || S.SESSIONS[0] || null;
 }
 
 /* ---------- поиск-дропдаун сессий (работает во всех видах) ---------- */
@@ -1515,7 +1380,7 @@ async function openNewSessionDialog(){
   if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
   const ap = activeProjectPath();                                         // папка активного проекта — приоритетный дефолт
-  const cwds = [...new Set([ap, ...SESSIONS.map(s=>s.cwd)].filter(Boolean))].sort();
+  const cwds = [...new Set([ap, ...S.SESSIONS.map(s=>s.cwd)].filter(Boolean))].sort();
   const preferred = ap || cwds[0] || '';
   const opts = cwds.map(c=>`<option value="${esc(c)}"${c===preferred?' selected':''}>${esc(c)}</option>`).join('');
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');

@@ -1,10 +1,10 @@
 // Deck — вид MCP (расширения Claude Code): список серверов по scope + детальный вид с действиями,
 // плюс авто-обнаруженные Unity-инстансы секцией сверху. Вынесено из app.js; состояние — в store (S).
-// launchUnity живёт в app.js (Unity-кластер) — импортируем; цикл app↔mcp безопасен (вызовы в рантайме).
+// launchUnity живёт в unity.js (Unity-кластер) — импортируем; цикл mcp↔unity безопасен (вызовы в рантайме).
 import { S } from './store.js';
 import { esc } from './util.js';
 import { toast, openExternal } from './ui.js';
-import { launchUnity } from './app.js';
+import { launchUnity } from './unity.js';
 
 export async function loadMcpCatalog(refresh){
   // Живой статус через SDK-пробу (mcpServerStatus); refresh=1 = «реконнект» (свежая проба).
