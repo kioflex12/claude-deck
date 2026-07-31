@@ -173,6 +173,11 @@ export function renderUpdateStatus(s){
     if (s.state === 'available'){ S.UPDATE_DOWNLOAD_EL.textContent = '↓ Обновить до ' + (s.version||''); S.UPDATE_DOWNLOAD_EL.disabled = false; }
   }
   if (S.UPDATE_INSTALL_EL) S.UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // «Перезапустить» — только когда загружено
+  if (S.UPDATE_PROGRESS_EL){
+    const dl = s.state === 'downloading';
+    S.UPDATE_PROGRESS_EL.hidden = !dl;
+    if (dl){ const f = S.UPDATE_PROGRESS_EL.firstElementChild; if (f) f.style.width = (s.percent||0) + '%'; }
+  }
   if (!S.UPDATE_STATUS_EL) return;
   const m = {
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
@@ -190,17 +195,18 @@ export async function openUpdatesModal(){
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Обновления</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b> · UI build: <b>${esc(UI_BUILD)}</b></div>
-      ${String(info.version||'')!==UI_BUILD?'<div class="um-note" style="color:var(--warn)">⚠ Версия приложения и UI не совпали — обновление встало не полностью. Скачайте и запустите установщик заново (полная переустановка).</div>':''}
-      <div class="um-note">Нажмите «Проверить» — если появилась новая версия, покажется кнопка «Обновить» (скачает и установит с перезапуском). Пока не нажмёте «Обновить», ничего не качается.</div>
+      ${String(info.version||'')!==UI_BUILD?'<div class="um-note" style="color:var(--warn)">⚠ Версия приложения и UI не совпали — нажмите «Проверить» и обновитесь до последней.</div>':''}
+      <div class="um-note">«Проверить» → если есть новая версия, появится «Обновить»: скачает с прогрессом и тихо установит с перезапуском (без окна установщика). Пока не нажмёте — ничего не качается.</div>
       <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить</button></div>
       <button class="ns-start" id="updDownload" type="button" style="display:none;width:100%;margin-top:10px">↓ Обновить</button>
       <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
+      <div class="upd-progress" id="updProgress" hidden><i></i></div>
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); S.UPDATE_STATUS_EL=null; S.UPDATE_INSTALL_EL=null; S.UPDATE_DOWNLOAD_EL=null; });
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); S.UPDATE_STATUS_EL=null; S.UPDATE_INSTALL_EL=null; S.UPDATE_DOWNLOAD_EL=null; S.UPDATE_PROGRESS_EL=null; });
   back.classList.add('open');
-  S.UPDATE_STATUS_EL = back.querySelector('#updStatus'); S.UPDATE_INSTALL_EL = back.querySelector('#updInstall'); S.UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload');
+  S.UPDATE_STATUS_EL = back.querySelector('#updStatus'); S.UPDATE_INSTALL_EL = back.querySelector('#updInstall'); S.UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload'); S.UPDATE_PROGRESS_EL = back.querySelector('#updProgress');
   async function doUpdCheck(){
     S.UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();

@@ -75,10 +75,8 @@
       "icon": "electron/icon.png"
     },
     "nsis": {
-      "include": "scripts/installer.nsh",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Deck",

@@ -312,7 +312,7 @@ function wireUpdater() {
   autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
   autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
   autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', { percent: Math.round(p && p.percent || 0) }));
-  autoUpdater.on('update-downloaded', (i) => { sendUpdateStatus('downloaded', { version: i && i.version }); promptInstall(i); });
+  autoUpdater.on('update-downloaded', (i) => sendUpdateStatus('downloaded', { version: i && i.version }));   // без нативного попапа — ставит in-app кнопка «Перезапустить и установить» (тихий oneClick)
   autoUpdater.on('error', (e) => sendUpdateStatus('error', { message: String((e && e.message) || e) }));
 }
 // Возвращает {ok, reason?}: 'dev' — не упакован (обновления только в установленном приложении).
