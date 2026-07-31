@@ -2,7 +2,8 @@
 // Вынесено из app.js; состояние — в store (S).
 import { S, notifiedDone, JIRA_CACHE } from './store.js';
 import { isWorking, renderNow, renderBoard } from './board.js';
-import { setStreamStatus, openSession } from './session.js';
+import { openSession } from './session.js';
+import { setStreamStatus } from './stream.js';
 import { hydrateMrs, hydrateJira } from './services.js';
 import { renderUsageBar } from './usage.js';
 

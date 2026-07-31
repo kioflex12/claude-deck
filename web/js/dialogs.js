@@ -3,7 +3,9 @@
 import { S, SESSION_CACHE, MODE_ORDER, MODE_LABEL } from './store.js';
 import { esc } from './util.js';
 import { toast } from './ui.js';
-import { stopStream, wireConsole, renderComposer, paintMode, loadSkills, runPrompt } from './session.js';
+import { stopStream, runPrompt } from './stream.js';
+import { renderComposer, paintMode, loadSkills } from './composer.js';
+import { wireConsole } from './transcript.js';
 import { setView } from './nav.js';
 import { renderBoard } from './board.js';
 import { requireAuth, renderServicesGate } from './auth.js';
