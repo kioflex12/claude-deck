@@ -9,6 +9,8 @@ export const WF_COLUMNS = [
   { key:'done',       title:'Готово',           dot:'var(--good)' },
 ];
 export const WF_LABEL = { blocked:'Заблокировано', todo:'Ждёт', active:'В работе', build:'Build In Progress', qa:'На QA', readymerge:'Ждёт мерджа', done:'Готово' };
+// ключ MR-кэша — пара (ветка, wo), зеркало серверного _mrCache: базовую ветку (preprod) делят десятки задач, ключ по одной ветке склеивал бы их MR в одну запись
+export const mrKey = (s) => ((s && s.gitBranch) || '') + '|' + ((s && s.wo) || '');
 export function jiraColumn(status, category, s){
   const n = String(status||'').toLowerCase();
   const inProg = () => ({ col:(s && s.buildActive===true)?'build':'active', blocked:false });   // In Progress → build ТОЛЬКО если билд реально идёт (TeamCity), иначе active
@@ -77,7 +79,7 @@ export function searchableText(s, jiraCache, mrCache, working){
   if (jira && jira.status){ const m = jiraColumn(jira.status, jira.category, s); if (m.col) col = m.col; if (m.blocked) parts.push('blocked заблокировано'); parts.push(jira.status); }
   if (col) parts.push(col, WF_LABEL[col] || '');
   // MR состояния (live из GitLab, иначе wf-фолбэк)
-  const mrs = (s.gitBranch && mrCache[s.gitBranch]) ? mrCache[s.gitBranch].mrs : null;
+  const mrs = mrCache[mrKey(s)] ? mrCache[mrKey(s)].mrs : null;
   if (mrs && mrs.length){ for (const m of mrs){ parts.push('!'+m.iid, m.target_branch, m.project || ''); parts.push(m.state==='merged'?'влит merged':m.state==='closed'?'закрыт closed':'открыт opened'); } }
   else if (s.wfMrUrl){ parts.push('mr', s.wfMrState==='merged'?'влит merged':'открыт opened'); }
   // билд

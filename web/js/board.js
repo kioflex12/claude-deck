@@ -4,7 +4,7 @@
 // Циклы board↔dialogs, board↔session и board↔usage безопасны — импортированные вызовы срабатывают в рантайме.
 import { S, JIRA_CACHE, MR_CACHE, SESSION_CACHE, COLUMNS } from './store.js';
 import { esc, ctxColor, pctOf, timeAgo } from './util.js';
-import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL } from './columns.js';
+import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL, mrKey } from './columns.js';
 import { openWoJira, toast } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
@@ -78,7 +78,7 @@ export function cardHTML(s){
   const buildPill = s.buildActive
     ? `<span class="pill"><span class="d run"></span>билд</span>` : '';
   // MR — приоритет live-данным из GitLab (MR_CACHE), stale wfMrUrl лишь как фолбэк пока live не загрузилось
-  const live = (s.gitBranch && MR_CACHE[s.gitBranch]) ? MR_CACHE[s.gitBranch].mrs : null;
+  const mk = mrKey(s); const live = MR_CACHE[mk] ? MR_CACHE[mk].mrs : null;
   let mrPill = '';
   if (live && live.length){
     mrPill = live.slice(0,2).map(m=>{
@@ -168,7 +168,7 @@ export function openCardMenu(e, file){
 export function refreshCard(file){
   const s = S.SESSIONS.find(x=>x.file===file);
   delete SESSION_CACHE[file];
-  if (s && s.gitBranch) delete MR_CACHE[s.gitBranch];
+  if (s && s.gitBranch) delete MR_CACHE[mrKey(s)];
   if (s && s.wo) delete JIRA_CACHE[s.wo];
   hydrateMrs(true); hydrateJira(true); renderBoard(false);
   toast('Обновлено');

@@ -6,6 +6,7 @@ import { S, MR_CACHE, JIRA_CACHE, SESSION_CACHE, LIVE_TTL } from './store.js';
 import { esc, kTok } from './util.js';
 import { aReal, isBaseBranch } from './app.js';
 import { renderBoard } from './board.js';
+import { mrKey } from './columns.js';
 
 function buildDot(b){
   const state = String(b.state||'').toLowerCase(), status = String(b.status||'').toUpperCase();
@@ -53,7 +54,7 @@ export async function loadMrs(t){
   let d; try { const r = await fetch('/api/mrs?branch=' + encodeURIComponent(t.gitBranch||'') + '&wo=' + encodeURIComponent(t.wo||''), { cache:'no-store' }); d = await r.json(); } catch { return; }
   const box2 = document.getElementById('mrBox'); if (!box2) return;
   if (!d.available){ box2.insertAdjacentHTML('beforeend', `<div class="rail-hint">GitLab недоступен: ${esc(d.reason||'нет доступа')}</div>`); return; }
-  if (t.gitBranch) MR_CACHE[t.gitBranch] = { ts: Date.now(), mrs: d.mrs||[] };
+  if (t.gitBranch) MR_CACHE[mrKey(t)] = { ts: Date.now(), mrs: d.mrs||[] };
   if (!d.mrs || !d.mrs.length){ box2.innerHTML = `<div class="rail-empty">— MR нет —</div>`; return; }
   box2.innerHTML = d.mrs.map(m =>
     `<div class="row-item"><span class="ri-k">merge</span>${aReal(m.web_url, '!'+m.iid+' → '+esc(m.target_branch), 'plain')}${mrPillHTML(m)}</div>`
@@ -73,17 +74,19 @@ export async function loadMrs(t){
 export async function hydrateMrs(fresh){   // фоновая подгрузка MR для карточек (клиент-кэш ~30с + серверный 30с → без спама). fresh — рефреш дашборда: мимо кэшей
   if (S.mrHydrating) return; S.mrHydrating = true;
   const now = Date.now();
-  const branches = [...new Set(S.SESSIONS.filter(s => s.wo && s.gitBranch).map(s => s.gitBranch))].slice(0, 25);
+  // Идентичность MR карточки — пара (ветка, wo), как серверный ключ. По одной ветке ключевать нельзя: preprod делят десятки
+  // задач, и запрос по первой попавшейся размножал бы её MR по всем preprod-карточкам.
+  const want = new Map();   // mrKey -> { branch, wo }
+  for (const s of S.SESSIONS){ if (s.wo && s.gitBranch && !want.has(mrKey(s))) want.set(mrKey(s), { branch: s.gitBranch, wo: s.wo }); }
   let changed = false;
-  for (const br of branches){
-    const c = MR_CACHE[br];
+  for (const [k, { branch, wo }] of [...want].slice(0, 120)){
+    const c = MR_CACHE[k];
     if (!fresh && c && now - c.ts < LIVE_TTL) continue;   // свежий клиент-кэш (в т.ч. негативный) — не дёргаем GitLab
-    const s = S.SESSIONS.find(x => x.gitBranch === br);
     try {
-      const r = await fetch('/api/mrs?branch=' + encodeURIComponent(br) + '&wo=' + encodeURIComponent((s && s.wo) || '') + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
+      const r = await fetch('/api/mrs?branch=' + encodeURIComponent(branch) + '&wo=' + encodeURIComponent(wo) + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
-      if (d && d.available){ MR_CACHE[br] = { ts: Date.now(), mrs: d.mrs || [] }; changed = true; }
-      else MR_CACHE[br] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
+      if (d && d.available){ MR_CACHE[k] = { ts: Date.now(), mrs: d.mrs || [] }; changed = true; }
+      else MR_CACHE[k] = { ts: Date.now(), mrs: [], unavailable: true };   // нет токена → кэшируем негатив на ~30с (без спама); MR_TTL_RESET снимет после ввода токена
     } catch {}
   }
   S.mrHydrating = false;
