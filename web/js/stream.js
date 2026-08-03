@@ -13,12 +13,13 @@ import { openSession } from './session.js';
 
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 export function userStop(){
-  if (!S.streaming && !S.currentES){ clearQueue(); return; }
+  if (!S.streaming && !S.currentES && !S.currentStreamId){ clearQueue(); return; }   // currentStreamId — фоновый ход после обрыва канала (tail-режим) тоже можно оборвать
   if (S.currentStreamId) fetch('/api/stop?id=' + encodeURIComponent(S.currentStreamId), { cache:'no-store' }).catch(()=>{});
   if (S.liveFinish){ S.liveFinish('Остановлено пользователем', { silent:true, stopped:true }); return; }
-  // стрим жив, но finish потерялся (перерисовка/edge) — жёстко обрываем сами
+  // стрим жив, но finish потерялся (перерисовка/edge) ИЛИ фоновое слежение после обрыва — жёстко обрываем сами
   if (S.currentES){ try { S.currentES.close(); } catch {} S.currentES = null; }
   if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+  stopTail();
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
   S.streamingFile = null; S.currentStreamId = null; setComposerBusy(false); clearQueue();
 }
@@ -331,7 +332,26 @@ export async function runPrompt(payload){
     }
     // 'system' — в UI не показываем
   };
-  es.onerror = () => { if (!finished) finish('Соединение прервано'); };
+  es.onerror = () => {
+    if (finished || S.currentES !== es) return;   // штатный done или намеренное закрытие (уход/Стоп) — не трогаем
+    // Абнормальный обрыв канала (не done): на сервере ход НЕ прерывается — в bypass дорабатывает в фоне, на вопрос/аппрув
+    // встаёт и ждёт. Не объявляем «завершено» (иначе спиннер гаснет, а агент висит незаметно): переходим на фоновое
+    // слежение — live-tail показывает дальнейший вывод, tailTick опрашивает висящие вопросы/аппрувы (surfacePending).
+    finished = true;
+    if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+    try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.streaming = false;   // currentStreamId НЕ сбрасываем — Стоп сможет оборвать фоновый ход (/api/stop)
+    clearLive(); finalizeThink();
+    if (runEl && runEl.parentElement) runEl.remove();
+    const f = S.streamingFile || S.currentFile;
+    S.streamingFile = null; setComposerBusy(false);
+    if (!(f && S.currentFile === f)) return;
+    setStreamStatus('Канал прервался — слежу за фоном…', 5000);
+    delete SESSION_CACHE[f];
+    (async () => {   // синхронизируем курсор tail с диском (как в finish), иначе after=0 продублировал бы уже показанное
+      try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; } catch {}
+      if (S.currentFile === f) startTail(f);
+    })();
+  };
 }
 
 export function stopTail(){ if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
@@ -386,6 +406,24 @@ export function updateRailContext(ctxPct, winTokens){
   if (typeof winTokens === 'number'){ const w = side.querySelector('.stat-win'); if (w) w.textContent = kTok(winTokens) + ' / 1M'; }
 }
 
+// Опрос висящих вопросов/аппрувов (в т.ч. заданных агентом ПОСЛЕ обрыва канала) + дорисовка карточек. Дедуп по data-id:
+// в одном потоке проверка-и-вставка атомарны, поэтому дублей с одноразовым ре-сёрфейсом при перезаходе не будет. Возвращает: есть ли висящие.
+async function surfacePending(file){
+  const cons = document.querySelector('.cx-console'); if (!cons) return false;
+  let q, a;
+  try { [q, a] = await Promise.all([
+    fetch('/api/pending-questions?file=' + encodeURIComponent(file), { cache:'no-store' }).then(r => r.json()),
+    fetch('/api/pending-approvals?file=' + encodeURIComponent(file), { cache:'no-store' }).then(r => r.json()),
+  ]); } catch { return false; }
+  if (S.currentFile !== file) return false;
+  const ind = document.getElementById('tailInd');
+  const add = (sel, html, wire, card) => { if (cons.querySelector(sel)) return; const el = appendHTML(cons, html); if (!el) return; if (ind) cons.insertBefore(el, ind); wire(el, card); };
+  let has = false;
+  if (q && Array.isArray(q.questions)) for (const it of q.questions){ has = true; const card = { id: it.id, questions: it.questions }; add('.cx-question[data-id="' + it.id + '"]', questionCardHTML(card), wireQuestion, card); }
+  if (a && Array.isArray(a.approvals)) for (const it of a.approvals){ has = true; const card = { id: it.id, tool: it.tool, input: it.input }; add('.cx-approval[data-id="' + it.id + '"]', approvalCardHTML(card), wireApproval, card); }
+  return has;
+}
+
 async function tailTick(file){
   if (S.currentFile !== file){ stopTail(); return; }
   if (S.streaming && S.streamingFile === file) return;   // Deck-стрим сам рендерит — не мешаем
@@ -400,6 +438,7 @@ async function tailTick(file){
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateTailIndicator(!!d.working, d.turnStartTs);   // «работает… Nс» пока файл пишется (< 20с) — индикатор в самом низу
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
-  if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора (иначе он прячется под фолдом)
-  if (!d.active) stopTail();                // сессия остыла — прекращаем tail
+  const pending = await surfacePending(file);        // висящие вопросы/аппрувы (в т.ч. заданные после обрыва канала) — дорисовать
+  if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
+  if (!d.active && !pending) stopTail();   // остываем только когда файл затих И нет висящих вопросов/аппрувов (иначе агент ждёт ответ — держим опрос)
 }

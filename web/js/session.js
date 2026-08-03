@@ -75,6 +75,7 @@ async function resurfaceQuestions(file){
   if (S.currentFile !== file || !d || !Array.isArray(d.questions) || !d.questions.length) return;
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   for (const q of d.questions){
+    if (cons.querySelector('.cx-question[data-id="' + q.id + '"]')) continue;   // уже показана (tail-опрос) — не дублируем
     const card = { id: q.id, questions: q.questions };
     const el = appendHTML(cons, questionCardHTML(card));
     wireQuestion(el, card);
@@ -88,6 +89,7 @@ async function resurfaceApprovals(file){
   if (S.currentFile !== file || !d || !Array.isArray(d.approvals) || !d.approvals.length) return;
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   for (const a of d.approvals){
+    if (cons.querySelector('.cx-approval[data-id="' + a.id + '"]')) continue;   // уже показан (tail-опрос) — не дублируем
     const card = { id: a.id, tool: a.tool, input: a.input };
     const el = appendHTML(cons, approvalCardHTML(card));
     wireApproval(el, card);
