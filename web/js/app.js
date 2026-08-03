@@ -1,6 +1,6 @@
 // Deck — тонкий entry: head-консты и хелперы-ссылки, глобальные document-листенеры (внешние ссылки + копирование кода),
 // оркестрация загрузки доски (load) и init-хвост. Кластеры вынесены в модули (nav/notify/auth/projects/dialogs/…).
-import { S } from './store.js';
+import { S, normMode } from './store.js';
 import { toast, openExternal, openLocalResource } from './ui.js';
 import { renderBoard, renderNow, renderFilters } from './board.js';
 import { loadMcpCatalog } from './mcp.js';
@@ -15,10 +15,10 @@ import { toggleProjMenu } from './projects.js';
 import { openSettingsModal, openUpdatesModal, renderUpdateStatus } from './dialogs.js';
 S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
-S.sessionMode = localStorage.getItem('deckMode') || 'default';   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз
+S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.42';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.43';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";

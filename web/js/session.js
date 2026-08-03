@@ -1,6 +1,6 @@
 // Deck — оркестратор экрана сессии: открытие сессии (openSession) собирает рейл, ленту, композер и стрим.
 // Кластер сессии/чата разнесён по rail/transcript/composer/stream; здесь — только точка сборки.
-import { S, SESSION_CACHE } from './store.js';
+import { S, SESSION_CACHE, normMode } from './store.js';
 import { esc } from './util.js';
 import { openWoJira } from './ui.js';
 import { isWorking } from './board.js';
@@ -55,7 +55,7 @@ export async function openSession(file){
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
   resurfaceApprovals(file);   // висящие аппрувы (обрыв SSE их не решил) — снова показать и ждать решение
-  S.sessionMode = localStorage.getItem('deckMode') || 'default';   // сохранённый режим (как модель/effort) — перезаход больше не сбрасывает выбор на default
+  S.sessionMode = normMode(localStorage.getItem('deckMode'));   // сохранённый режим (как модель/effort) — перезаход больше не сбрасывает выбор на default; невалидное → default
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
   if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → описание/скоуп/ветка/MR/сборки/Jira обновляются по ходу работы

@@ -86,5 +86,8 @@ export const COLUMNS = [
 ];
 export const MODE_ORDER = ['default','acceptEdits','plan','bypassPermissions'];
 export const MODE_LABEL = { default:'Обычный', acceptEdits:'Авто-правки', plan:'План', bypassPermissions:'Байпас' };
+// Нормализация сохранённого режима: устаревшее/битое значение в localStorage (напр. старое 'bypass' вместо
+// 'bypassPermissions') не должно молча уезжать на сервер и откатываться в default — кнопка бы показывала «Обычный».
+export const normMode = (m) => MODE_ORDER.includes(m) ? m : 'default';
 export const LIVE_TTL = 30000;              // TTL клиентских кэшей MR/Jira
 export const ATTACH_MAX_BYTES = 18 * 1024 * 1024;  // суммарный лимит вложений ~18МБ
