@@ -33,6 +33,9 @@ writeFileSync(path.join(projSub, 'sess-art.jsonl'), artSession);
 process.env.CLAUDE_PROJECTS_DIR = projectsDir;
 process.env.PORT = '0';
 delete process.env.WO_STATES_DIR;   // детерминизм: без dev-workflow-состояний
+// Херметичность: гасим креды интеграций (пустая строка «занимает» ключ → loadDotEnv из репо-.env не перебьёт).
+// Иначе на машине разработчика с реальным .env тест /api/config/test дёрнул бы живую сеть.
+for (const k of ['JIRA_HOST', 'JIRA_EMAIL', 'JIRA_TOKEN', 'TEAMCITY_HOST', 'TEAMCITY_TOKEN', 'GITLAB_HOST', 'GITLAB_TOKEN']) process.env[k] = '';
 
 let srv, base, mod;
 before(async () => {
@@ -129,6 +132,19 @@ test('/api/health → 200, сводка трёх интеграций прави
     // На старте (до первого запроса к интеграции) ничто не помечено упавшим: свежий сервис ok:true.
     if (!body.services[k].configured) assert.equal(body.services[k].ok, true, k + ' не настроен → не «упал»');
   }
+});
+
+test('/api/config/test → 200, {ok, message}; неизвестный svc → ok:false', async () => {
+  const r = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
+  const body = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(typeof body.ok, 'boolean');
+  assert.equal(typeof body.message, 'string');
+  assert.equal(body.ok, false, 'без host/email/token — не ок');
+
+  const bad = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'nope' }) });
+  const badBody = await bad.json();
+  assert.equal(badBody.ok, false, 'неизвестный сервис → ok:false');
 });
 
 test('/api/answer резолвит зарегистрированный pendingQuestions-id ответом пользователя', async () => {

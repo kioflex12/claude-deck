@@ -1,11 +1,60 @@
 // Deck — интеграции с внешними сервисами: live-статус клиентских сборок TeamCity, MR по ветке из GitLab
 // и статус задачи в Jira. Хосты/токены резолвятся в applyConfig (core); нет токена → мягкая деградация.
 
-import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, fetchRetry, markHealth, svcHealth } from './core.mjs';
+import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, readJsonBody, fetchRetry, markHealth, svcHealth } from './core.mjs';
 import { isBaseBranch } from './text.mjs';
 
 // TECH-4: /api/health — сводка здоровья интеграций для топбар-индикатора (какой сервис деградирует и почему).
 export function apiHealth(res) { sendJSON(res, { services: svcHealth }); }
+
+// -------- Проверка подключения из Настроек: бьём по «кто я» (не по конкретной задаче/ветке) — отличаем
+// неверный хост (404/нет связи) от неверных учётных данных (401/403) от рабочего подключения (200). --------
+const normHost = (h) => String(h || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+async function testJira(host, email, token) {
+  host = normHost(host);
+  if (!host || !email || !token) return { ok: false, message: 'Заполните host, email и токен' };
+  try {
+    const auth = Buffer.from(email + ':' + token).toString('base64');
+    const r = await fetchRetry('https://' + host + '/rest/api/3/myself', { headers: { Authorization: 'Basic ' + auth, Accept: 'application/json' } }, { retries: 1 });
+    if (r.ok) { const j = await r.json().catch(() => ({})); return { ok: true, message: 'OK: ' + (j.displayName || 'вход выполнен') + (j.emailAddress ? ' <' + j.emailAddress + '>' : '') }; }
+    if (r.status === 401 || r.status === 403) return { ok: false, message: 'HTTP ' + r.status + ' — неверные email/токен (или нет доступа к сайту)' };
+    if (r.status === 404) return { ok: false, message: 'HTTP 404 — учётка ок, но проверьте host: должен быть ВАШ сайт *.atlassian.net (задачи 404 = не тот сайт/нет доступа к проекту)' };
+    return { ok: false, message: 'HTTP ' + r.status };
+  } catch (e) { return { ok: false, message: 'Хост недоступен: ' + ((e && e.message) || e) }; }
+}
+async function testGitlab(host, token) {
+  host = normHost(host);
+  if (!host || !token) return { ok: false, message: 'Заполните host и токен' };
+  try {
+    const r = await fetchRetry('https://' + host + '/api/v4/user', { headers: { 'PRIVATE-TOKEN': token } }, { retries: 1 });
+    if (r.ok) { const j = await r.json().catch(() => ({})); return { ok: true, message: 'OK: ' + (j.username ? '@' + j.username : (j.name || 'вход выполнен')) }; }
+    if (r.status === 401 || r.status === 403) return { ok: false, message: 'HTTP ' + r.status + ' — неверный private-токен (или нет прав)' };
+    return { ok: false, message: 'HTTP ' + r.status + (r.status === 404 ? ' — проверьте host GitLab' : '') };
+  } catch (e) { return { ok: false, message: 'Хост недоступен: ' + ((e && e.message) || e) }; }
+}
+async function testTeamcity(host, token) {
+  host = normHost(host);
+  if (!host || !token) return { ok: false, message: 'Заполните host и токен' };
+  try {
+    const r = await fetchRetry('https://' + host + '/app/rest/server', { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } }, { retries: 1 });
+    if (r.ok) { const j = await r.json().catch(() => ({})); return { ok: true, message: 'OK: TeamCity ' + (j.version || 'подключение работает') }; }
+    if (r.status === 401 || r.status === 403) return { ok: false, message: 'HTTP ' + r.status + ' — неверный bearer-токен (или нет прав)' };
+    return { ok: false, message: 'HTTP ' + r.status + (r.status === 404 ? ' — проверьте host TeamCity' : '') };
+  } catch (e) { return { ok: false, message: 'Хост недоступен: ' + ((e && e.message) || e) }; }
+}
+// Значения берём из тела (то, что сейчас в полях Настроек — можно проверить ДО сохранения); токен пустой в теле →
+// используем уже сохранённый (write-only, наружу не отдаётся, поэтому в поле его нет).
+export async function apiConfigTest(req, res) {
+  let body = {};
+  try { body = await readJsonBody(req, 8192); } catch {}
+  const svc = String(body.svc || '');
+  let out;
+  if (svc === 'jira') out = await testJira(body.host || JIRA_HOST, body.email || JIRA_EMAIL, body.token || JIRA_TOKEN);
+  else if (svc === 'gitlab') out = await testGitlab(body.host || GL_HOST, body.token || GL_TOKEN);
+  else if (svc === 'teamcity') out = await testTeamcity(body.host || TC_HOST, body.token || TC_TOKEN);
+  else out = { ok: false, message: 'unknown svc' };
+  sendJSON(res, out);
+}
 
 // -------- TeamCity: live-статус клиентских сборок по ветке (секция «Сборки» в рейле) --------
 // Хост дефолтный, токен из env (TEAMCITY_TOKEN). Нет токена → { available:false } и клиент

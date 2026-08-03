@@ -313,6 +313,7 @@ export async function openSettingsModal(){
     setUhub:{id:'setUhub',type:'path',pick:'file',label:'Путь к Unity Hub (опц., фолбэк)',ph:'дефолт …/Unity Hub.exe'},
   };
   const row = (id)=> nsFieldHtml(FIELDS[id], st[id], HAS_NATIVE);
+  const testRow = (svc)=> `<div class="ns-actions" style="justify-content:flex-start;margin:2px 0 8px"><button class="btn-ghost svc-test" type="button" data-svc="${svc}">Проверить подключение</button><span class="svc-test-res" data-svc="${svc}"></span></div>`;
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="ns-summary" id="setSummary"></div>
@@ -320,11 +321,11 @@ export async function openSettingsModal(){
       <div class="um-note" id="setImportRes" style="margin:0 0 8px"></div>
       ${row('setEnv')}${row('setWo')}${row('setProj')}
       <div class="ns-grouphd">Jira — колонка «Статусы» и живые статусы задач</div>
-      ${row('setJh')}${row('setJe')}${row('setJt')}
+      ${row('setJh')}${row('setJe')}${row('setJt')}${testRow('jira')}
       <div class="ns-grouphd">TeamCity — рейл «Сборки» (статус Android/iOS-билдов)</div>
-      ${row('setTh')}${row('setTt')}
+      ${row('setTh')}${row('setTt')}${testRow('teamcity')}
       <div class="ns-grouphd">GitLab — секция «Merge Requests» (живые MR по ветке)</div>
-      ${row('setGh')}${row('setGt')}
+      ${row('setGh')}${row('setGt')}${testRow('gitlab')}
       <div class="ns-grouphd">Unity — запуск инстанса по клику на cu-тег карточки (только в приложении)</div>
       ${row('setCup')}${row('setUed')}${row('setUhub')}
       ${tokHint}
@@ -375,6 +376,22 @@ export async function openSettingsModal(){
   }
   Object.keys(FIELDS).forEach(wireRow);
   updSummary();
+  // «Проверить подключение»: бьём тест-эндпоинт значениями ИЗ ПОЛЕЙ (можно проверить до сохранения; пустой токен в
+  // поле → сервер возьмёт сохранённый). Отличает неверный хост (404/нет связи) от учётки (401/403) от рабочего (200).
+  async function testSvc(svc){
+    const resEl = back.querySelector('.svc-test-res[data-svc="'+svc+'"]'); if (!resEl) return;
+    const btn = back.querySelector('.svc-test[data-svc="'+svc+'"]');
+    const body = { svc };
+    if (svc==='jira'){ body.host = st.setJh.value.trim(); body.email = st.setJe.value.trim(); body.token = tokVal('setJt').trim(); }
+    else if (svc==='teamcity'){ body.host = st.setTh.value.trim(); body.token = tokVal('setTt').trim(); }
+    else if (svc==='gitlab'){ body.host = st.setGh.value.trim(); body.token = tokVal('setGt').trim(); }
+    resEl.className = 'svc-test-res'; resEl.textContent = 'Проверяю…'; if (btn) btn.disabled = true;
+    let r; try { r = await (await fetch('/api/config/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })).json(); } catch { r = { ok:false, message:'Ошибка запроса' }; }
+    if (btn) btn.disabled = false;
+    resEl.textContent = (r.ok ? '✓ ' : '✗ ') + (r.message||'');
+    resEl.classList.add(r.ok ? 'ok' : 'err');
+  }
+  back.querySelectorAll('.svc-test').forEach(b => b.addEventListener('click', ()=>testSvc(b.dataset.svc)));
   // «Подтянуть токены» — автоимпорт из существующих секретов (.env / ~/.claude.json / MCP-конфиги).
   back.querySelector('#setImport').addEventListener('click', async ()=>{
     const box = back.querySelector('#setImportRes'); box.textContent = 'Ищу секреты…';
