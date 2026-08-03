@@ -114,7 +114,8 @@ export async function apiChat(req, res, u) {
   const ac = new AbortController();
   let closed = false;
   const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  activeStreams.set(streamId, ac);                                  // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
+  const streamEntry = { ac, key: sessionKey };                      // key = session_id: даёт Стоп/индикацию по файлу сессии (не только по streamId, который теряется при перезаходе)
+  activeStreams.set(streamId, streamEntry);                         // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
   // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
   // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
   const _t0 = Date.now();
@@ -237,6 +238,7 @@ export async function apiChat(req, res, u) {
         send({ type: 'system', model: m.model, apiKeySource: m.apiKeySource });
         if ((isNew || isFork) && m.session_id) {         // новая/форкнутая сессия → сообщаем клиенту НОВЫЙ файл (переключиться/тейлить)
           sessionKey = m.session_id;
+          streamEntry.key = sessionKey;                              // новая/форкнутая сессия узнала id → привязываем активный ход к её файлу
           const rel = String(cwd).replace(/[^a-zA-Z0-9]/g, '-') + '/' + m.session_id + '.jsonl';
           send({ type: 'session', id: m.session_id, file: rel });
         }
@@ -266,11 +268,18 @@ export async function apiChat(req, res, u) {
   }
 }
 
-// Явный обрыв стрима по id (клиент дёргает на Стоп, плюс закрывает ES) — гарантированно рвём SDK-запрос.
+// Явный обрыв хода: по streamId (живой стрим) ИЛИ по файлу сессии (после перезахода streamId у клиента потерян, но ход
+// на сервере жив — рвём по session_id). Гарантированно останавливает SDK-запрос независимо от детекта дисконнекта.
 export function apiStop(res, u) {
   const id = u.searchParams.get('id') || '';
-  const ac = activeStreams.get(id);
-  if (ac) { try { ac.abort(); } catch {} activeStreams.delete(id); }
+  const file = u.searchParams.get('file') || '';
+  if (id) {
+    const e = activeStreams.get(id);
+    if (e) { try { e.ac.abort(); } catch {} activeStreams.delete(id); }
+  } else if (file) {
+    const key = path.basename(file).replace(/\.jsonl$/, '');
+    for (const [sid, e] of activeStreams) { if (e && e.key === key) { try { e.ac.abort(); } catch {} activeStreams.delete(sid); } }
+  }
   sendJSON(res, { ok: true });
 }
 

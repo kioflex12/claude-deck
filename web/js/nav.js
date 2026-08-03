@@ -6,6 +6,7 @@ import { searchableText, cardStatus } from './columns.js';
 import { renderBoard, isWorking } from './board.js';
 import { openSession } from './session.js';
 import { stopStream } from './stream.js';
+import { pollSessions } from './notify.js';
 import { renderSkills } from './skills.js';
 import { renderMcp } from './mcp.js';
 import { loadUnityInstances } from './unity.js';
@@ -36,6 +37,7 @@ function setSel(i){ S.palSel=i; document.querySelectorAll('.pal-item').forEach((
 function runPal(i){ const it=S.palItems[i]; if(!it) return; closePal(); it.act(); }
 
 export function setView(v){
+  const leavingSession = !!S.currentFile;   // уходим из открытой сессии → доску надо освежить сразу, не ждать поллинг
   stopStream();   // уходя из сессии — закрыть живой стрим
   S.activeView = v; S.currentFile = null;
   const boardish = (v==='board' || v==='status');
@@ -46,6 +48,7 @@ export function setView(v){
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
   if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else renderBoard(true);
+  if (boardish && leavingSession) pollSessions(true);   // форс-рефреш: свежий список сессий + live MR/Jira сразу после выхода из контекста (не ждём 7с-поллинг)
 }
 
 export function applySearchQuery(){                    // единый ре-рендер под текущий query (после ввода/очистки)

@@ -160,3 +160,13 @@ test('/api/pending-approvals возвращает висящие аппрувы 
   assert.equal(a.input.command, 'ls');
   mod.pendingApprovals.delete(id); set.delete(id);
 });
+
+test('/api/stop?file=... рвёт активный ход по ключу сессии (после перезахода streamId потерян)', async () => {
+  let aborted = false;
+  mod.activeStreams.set('sx_stoptest', { ac: { abort: () => { aborted = true; } }, key: 'sess-stopf' });
+  const { status, body } = await getJson('/api/stop?file=' + encodeURIComponent('proj/sess-stopf.jsonl'));
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(aborted, true, 'AbortController найден по ключу сессии и прерван');
+  assert.equal(mod.activeStreams.has('sx_stoptest'), false, 'запись активного хода снята');
+});

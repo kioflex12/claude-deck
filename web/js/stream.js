@@ -13,10 +13,11 @@ import { openSession } from './session.js';
 
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 export function userStop(){
-  if (!S.streaming && !S.currentES && !S.currentStreamId){ clearQueue(); return; }   // currentStreamId — фоновый ход после обрыва канала (tail-режим) тоже можно оборвать
-  if (S.currentStreamId) fetch('/api/stop?id=' + encodeURIComponent(S.currentStreamId), { cache:'no-store' }).catch(()=>{});
+  if (S.currentStreamId){ fetch('/api/stop?id=' + encodeURIComponent(S.currentStreamId), { cache:'no-store' }).catch(()=>{}); }
+  else if (S.currentFile){ fetch('/api/stop?file=' + encodeURIComponent(S.currentFile), { cache:'no-store' }).catch(()=>{}); }   // после перезахода streamId потерян — рвём фоновый ход по файлу сессии
+  else { clearQueue(); return; }
   if (S.liveFinish){ S.liveFinish('Остановлено пользователем', { silent:true, stopped:true }); return; }
-  // стрим жив, но finish потерялся (перерисовка/edge) ИЛИ фоновое слежение после обрыва — жёстко обрываем сами
+  // нет живого стрима (перезаход / tail-режим) — гасим индикацию/tail сами
   if (S.currentES){ try { S.currentES.close(); } catch {} S.currentES = null; }
   if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
   stopTail();
@@ -454,7 +455,9 @@ async function tailTick(file){
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
   const pending = await surfacePending(file);        // висящие вопросы/аппрувы (в т.ч. заданные после обрыва канала) — дорисовать
-  updateTailIndicator(!!d.working || pending, d.turnStartTs, pending);   // висит вопрос/аппрув → «ожидает ответа» (даже если файл затих); иначе пишется → «работает»
+  const working = !!d.serverActive || !!d.working;   // serverActive — авторитетно: ход жив на сервере, даже если файл не писался >20с (долгий инструмент/пауза) → индикатор не пропадает
+  updateTailIndicator(working || pending, d.turnStartTs, pending);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает»; иначе скрыт
+  const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
-  if (!d.active && !pending) stopTail();   // остываем только когда файл затих И нет висящих вопросов/аппрувов (иначе агент ждёт ответ — держим опрос)
+  if (!d.serverActive && !d.active && !pending) stopTail();   // остываем только когда ход на сервере завершён, файл затих и нет висящих (иначе агент ждёт ответ — держим опрос)
 }

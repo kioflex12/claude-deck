@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   userDataDir, PROJECTS_DIR, WO_STATES_DIR, NON_ENVS, JIRA_ENABLED,
   ACTIVE_MS, WORKING_MS, BG_ACTIVE_MS, LIST_CAP, CTX_LIMIT, SYSREM,
-  sendJSON, readJsonBody, movePath, oneLine,
+  sendJSON, readJsonBody, movePath, oneLine, activeStreams,
   loadProjects, saveProjects, slugForPath, activeProject,
 } from './core.mjs';
 import {
@@ -464,6 +464,9 @@ export function apiSessionTail(relFile, after) {
   const { blocks, winTokens, lastUserTs } = buildSessionBlocks(text);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   const a = Math.max(0, after | 0);
+  const key = path.basename(rp.resolved).replace(/\.jsonl$/, '');
+  let serverActive = false;
+  for (const e of activeStreams.values()) { if (e && e.key === key) { serverActive = true; break; } }   // на сервере есть живой ход этой сессии
   return {
     count: blocks.length,
     blocks: a < blocks.length ? blocks.slice(a) : [],
@@ -473,6 +476,7 @@ export function apiSessionTail(relFile, after) {
     turnStartTs: lastUserTs,   // старт текущего хода — для таймера «работает… Nс» при перезаходе
     active: (Date.now() - mtime) < ACTIVE_MS,
     working: (Date.now() - mtime) < WORKING_MS,
+    serverActive,   // авторитетно: на сервере ЕСТЬ активный ход этой сессии → индикатор держится даже в паузах записи (>20с без изменений файла)
   };
 }
 

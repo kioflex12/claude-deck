@@ -66,10 +66,10 @@ export function seedJiraFromSessions(){
 // Один таймер. Лёгкий тик перерисовывает доску (пульс «работает», timeAgo) СОХРАНЯЯ скролл/фильтр/поиск.
 // Тяжёлый тик (раз в ~30с) перечитывает /api/sessions + гидрирует MR/Jira, чтобы влитый MR сам стал «влит».
 // Открытая session-view (лента/композер/стрим) НЕ трогается — рендерим только на доске «Статусы»/«Доска».
-export async function pollSessions(){
+export async function pollSessions(force){
   if (S.polling) return; S.polling = true;
   const onBoard = (S.activeView === 'board' || S.activeView === 'status');
-  const heavy = Date.now() - S._lastHeavy >= 29000;
+  const heavy = force || (Date.now() - S._lastHeavy >= 29000);   // force — немедленный рефреш (выход из сессии): обойти 29с-гейт
   try {
     if (heavy){
       S._lastHeavy = Date.now();
@@ -90,7 +90,7 @@ export async function pollSessions(){
       S.prevWorkingFiles = nowSet;
     }
   } catch { S.polling = false; return; }
-  if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(); hydrateJira(); } }   // renderBoard(false) сохраняет colScroll; session-view не трогаем
+  if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(!!force); hydrateJira(!!force); } }   // renderBoard(false) сохраняет colScroll; force → гидрация мимо кэшей (свежий MR/Jira сразу)
   renderUsageBar();
   S.polling = false;
 }

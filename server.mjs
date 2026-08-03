@@ -135,4 +135,4 @@ if (_isMain) startServer(Number(process.env.PORT) || 4317);
 export { isBaseBranch, pickWorkingBranch, pickBaseBranch, classifyUserBlock, buildSessionBlocks, briefArg, woOf, columnByAge } from './text.mjs';
 export { wfInfo, scopeInfo } from './sessions.mjs';
 export { isReadOnlyTool } from './chat.mjs';
-export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals
+export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop
