@@ -346,6 +346,13 @@ export async function runPrompt(payload){
         .then(t => { if (t && !t.error && S.currentFile === d.file){ SESSION_CACHE[d.file] = t; renderRail(t); startRailRefresh(d.file); } }).catch(()=>{});
     } else if (d.type === 'start'){
       if (d.streamId) S.currentStreamId = d.streamId;   // для гарантированного /api/stop
+    } else if (d.type === 'turn'){
+      // граница ХОДА в живой сессии (steering): предыдущий промт отработал, стрим НЕ рвём. Обновляем контекст,
+      // сбрасываем индикатор шага и снимаем «ожидает» с подкинутых промтов (их ход сейчас начнётся).
+      updateRailContext(d.ctxPct, d.winTokens);
+      waiting = false; activity = ''; t0 = Date.now(); paintRun();
+      clearLive(); finalizeThink();
+      cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){

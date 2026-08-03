@@ -190,6 +190,21 @@ test('/api/pending-approvals возвращает висящие аппрувы 
   mod.pendingApprovals.delete(id); set.delete(id);
 });
 
+test('/api/chat-input докидывает промт в живой ход по ключу сессии; нет живого → ok:false', async () => {
+  let got = null;
+  mod.activeStreams.set('sx_steer', { ac: { abort() {} }, key: 'sess-steer', push: (m) => { got = m; return true; } });
+  const r = await fetch(base + '/api/chat-input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', prompt: 'дальше' }) });
+  const b = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(b.ok, true, 'нашёл живой ход по ключу → запушено');
+  assert.ok(got && got.message && Array.isArray(got.message.content), 'push получил SDKUserMessage');
+  mod.activeStreams.delete('sx_steer');
+
+  const r2 = await fetch(base + '/api/chat-input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/no-such.jsonl', prompt: 'x' }) });
+  const b2 = await r2.json();
+  assert.equal(b2.ok, false, 'нет живого хода → ok:false (клиент фолбэкнется на новый ход)');
+});
+
 test('/api/stop?file=... рвёт активный ход по ключу сессии (после перезахода streamId потерян)', async () => {
   let aborted = false;
   mod.activeStreams.set('sx_stoptest', { ac: { abort: () => { aborted = true; } }, key: 'sess-stopf' });

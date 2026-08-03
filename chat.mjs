@@ -32,6 +32,42 @@ function addSessionAllow(sessionId, tool) {
   set.add(tool);
 }
 
+// -------- Steering: очередной промт доярыдывается в ЖИВУЮ сессию (streaming-input SDK), а не ждёт конца всего
+// агентного цикла + пере-спавн. Модель читает ввод на границе хода/шага — канал отдаёт следующее сообщение, как
+// только SDK готов его взять. --------
+// Собираем SDKUserMessage из текста+вложений (content ВСЕГДА массив блоков — единый формат для первого и подкинутых).
+export function buildUserMessage(text, attachments) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  const images = list.filter((a) => a && a.kind === 'image' && a.dataB64);
+  const textFiles = list.filter((a) => a && a.kind === 'text' && typeof a.text === 'string');
+  const otherFiles = list.filter((a) => a && a.kind === 'binary');
+  let combinedText = text || '';
+  if (textFiles.length) combinedText = textFiles.map((a) => '```' + a.name + '\n' + a.text + '\n```').join('\n\n') + (text ? '\n\n' + text : '');
+  if (otherFiles.length) combinedText += '\n\n[вложения без встраивания: ' + otherFiles.map((a) => a.name).join(', ') + ']';
+  const content = [];
+  if (combinedText.trim()) content.push({ type: 'text', text: combinedText });
+  for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType || 'image/png', data: im.dataB64 } });
+  return { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null };
+}
+// Async-канал ввода: gen() отдаёт очередь по мере наполнения; push добавляет сообщение (разбудив ожидание),
+// end() закрывает поток (gen завершится, когда очередь опустеет → query штатно завершится).
+export function makeInputChannel(first) {
+  const queue = first ? [first] : [];
+  let wake = null, ended = false;
+  return {
+    push(msg) { if (ended) return false; queue.push(msg); if (wake) { const w = wake; wake = null; w(); } return true; },   // false → канал закрыт (гонка с завершением) → клиент фолбэкнется на новый ход
+    end() { ended = true; if (wake) { const w = wake; wake = null; w(); } },
+    pending() { return queue.length; },
+    async *gen() {
+      while (true) {
+        if (queue.length) { yield queue.shift(); continue; }   // сначала осушаем очередь (даже если end уже вызван)
+        if (ended) return;
+        await new Promise((r) => { wake = r; });                // ждём push/end
+      }
+    },
+  };
+}
+
 const STAGE_MAX_BYTES = 24 * 1024 * 1024;   // ~24МБ тела (включая base64)
 export async function apiChatPrepare(req, res) {
   let body;
@@ -111,10 +147,11 @@ export async function apiChat(req, res, u) {
   }
   let sessionKey = sessionId;                                       // для новой сессии станет известен на init
 
+  const channel = makeInputChannel(buildUserMessage(prompt, attachments));   // steering: первый промт + канал для подкидываемых
   const ac = new AbortController();
   let closed = false;
   const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const streamEntry = { ac, key: sessionKey };                      // key = session_id: даёт Стоп/индикацию по файлу сессии (не только по streamId, который теряется при перезаходе)
+  const streamEntry = { ac, key: sessionKey, push: channel.push };  // key = session_id: Стоп/индикация по файлу; push — /api/chat-input докидывает промт в живой ход
   activeStreams.set(streamId, streamEntry);                         // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
   // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
   // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
@@ -185,27 +222,6 @@ export async function apiChat(req, res, u) {
     return awaitUserInput('ep_', questions, (answers) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: { answers } } }), opts);
   };
 
-  // P4: собираем промт для query(). Текстовые файлы вклеиваем в текст блоком ```имя```; картинки — vision-блоки;
-  // при наличии картинок промт — async-iterable из одного user-сообщения с массивом content-блоков.
-  const images = attachments.filter((a) => a && a.kind === 'image' && a.dataB64);
-  const textFiles = attachments.filter((a) => a && a.kind === 'text' && typeof a.text === 'string');
-  const otherFiles = attachments.filter((a) => a && a.kind === 'binary');
-  let combinedText = prompt;
-  if (textFiles.length) {
-    const blocks = textFiles.map((a) => '```' + a.name + '\n' + a.text + '\n```').join('\n\n');
-    combinedText = blocks + (prompt ? '\n\n' + prompt : '');
-  }
-  if (otherFiles.length) combinedText += '\n\n[вложения без встраивания: ' + otherFiles.map((a) => a.name).join(', ') + ']';
-  let sdkPrompt;
-  if (images.length) {
-    const content = [];
-    if (combinedText.trim()) content.push({ type: 'text', text: combinedText });
-    for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType || 'image/png', data: im.dataB64 } });
-    sdkPrompt = (async function* () { yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null }; })();
-  } else {
-    sdkPrompt = combinedText || prompt;
-  }
-
   send({ type: 'start', streamId, sessionId: sessionId || '', cwd: cwd || '', isNew });
   try {
     const query = await getSdkQuery();
@@ -231,8 +247,17 @@ export async function apiChat(req, res, u) {
     if (!isNew) options.resume = sessionId;   // существующая сессия / форк — resume; новая — без resume
     if (isFork) options.forkSession = true;   // форк: resume создаёт НОВЫЙ session_id (контекст исходной), оригинал не трогаем
     options.systemPrompt = { type: 'preset', preset: 'claude_code' };   // CLAUDE.md грузится нативно через settingSources('project')
-    const q = query({ prompt: sdkPrompt, options });
+    const q = query({ prompt: channel.gen(), options });
+    let lastWin, lastCtx, lastSub, lastErr = false;
     for await (const m of q) {
+      if (m.type === 'result') {   // конец ОДНОГО хода — обрабатываем ВСЕГДА (в т.ч. при closed), иначе канал не закроется и query зависнет
+        const u = m.usage || {};
+        const win = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+        lastWin = win; lastCtx = win ? Math.min(win / CTX_LIMIT, 1) : undefined; lastSub = m.subtype; lastErr = !!m.is_error;
+        if (!closed) send({ type: 'turn', subtype: m.subtype, isError: !!m.is_error, winTokens: win || undefined, ctxPct: lastCtx });   // граница хода: обновить контекст/индикатор, но стрим НЕ рвём
+        if (channel.pending() === 0) channel.end();   // нет подкинутого ввода → закрываем канал (query завершится); есть → steering: следующий ход в той же сессии
+        continue;
+      }
       if (closed) continue;   // клиент ушёл — продолжаем вычитывать поток (CLI дорабатывает и пишет .jsonl), но в закрытый res не шлём
       if (m.type === 'system' && m.subtype === 'init') {
         send({ type: 'system', model: m.model, apiKeySource: m.apiKeySource });
@@ -253,19 +278,33 @@ export async function apiChat(req, res, u) {
         }
       } else if (m.type === 'assistant' && m.error) {
         send({ type: 'error', message: String(m.error) });
-      } else if (m.type === 'result') {
-        const u = m.usage || {};
-        const win = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);   // контекст текущего хода — чтобы UI обновил % СРАЗУ, не ждя поллинга
-        send({ type: 'done', subtype: m.subtype, isError: !!m.is_error, winTokens: win || undefined, ctxPct: win ? Math.min(win / CTX_LIMIT, 1) : undefined });
       }
     }
+    if (!closed) send({ type: 'done', subtype: lastSub, isError: lastErr, winTokens: lastWin || undefined, ctxPct: lastCtx });   // весь query завершился (канал закрыт и осушен)
   } catch (e) {
+    channel.end();   // прекратить ожидание ввода на ошибке/аборте
     if (!closed) send({ type: 'error', message: (e && e.message) ? e.message : String(e) });
   } finally {
     clearInterval(heartbeat);
     activeStreams.delete(streamId);
     if (!closed) { try { res.end(); } catch {} }
   }
+}
+
+// Steering: докинуть промт в ЖИВОЙ ход сессии (streaming-input). Находим активный поток по ключу сессии и пушим
+// user-сообщение в его канал — SDK возьмёт его на ближайшей границе хода. Нет живого потока / канал закрылся →
+// { ok:false }: клиент запустит обычный новый ход (fallback без потери промта).
+export async function apiChatInput(req, res, u) {
+  let body = {};
+  try { body = await readJsonBody(req, STAGE_MAX_BYTES); } catch {}
+  const file = String(body.file || u.searchParams.get('file') || '');
+  const key = file ? path.basename(file).replace(/\.jsonl$/, '') : '';
+  const prompt = String(body.prompt || '');
+  const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 20) : [];
+  if (!prompt.trim() && !attachments.length) { sendJSON(res, { ok: false, reason: 'empty' }); return; }
+  let pushed = false;
+  if (key) for (const e of activeStreams.values()) { if (e && e.key === key && typeof e.push === 'function') { pushed = e.push(buildUserMessage(prompt, attachments)) === true; break; } }
+  sendJSON(res, { ok: pushed });
 }
 
 // Явный обрыв хода: по streamId (живой стрим) ИЛИ по файлу сессии (после перезахода streamId у клиента потерян, но ход

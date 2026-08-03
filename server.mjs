@@ -20,7 +20,7 @@ import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, a
 import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, apiMcpRemove } from './skills-mcp.mjs';
 import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
-import { apiChatPrepare, apiChat, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
+import { apiChatPrepare, apiChat, apiChatInput, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
 import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest } from './services.mjs';
 import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout } from './auth.mjs';
 
@@ -79,6 +79,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/models') { apiModels(res); return; }
   if (u.pathname === '/api/chat-prepare') { apiChatPrepare(req, res); return; }
   if (u.pathname === '/api/chat') { apiChat(req, res, u); return; }
+  if (u.pathname === '/api/chat-input') { apiChatInput(req, res, u).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }
   if (u.pathname === '/api/answer') { apiAnswer(req, res, u).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/pending-questions') { apiPendingQuestions(res, u); return; }
@@ -142,5 +143,5 @@ if (_isMain) startServer(Number(process.env.PORT) || 4317);
 // Named-экспорты чистых хелперов для тестов (D4b). Аддитивно — поведение не меняем. startServer уже экспортирован.
 export { isBaseBranch, pickWorkingBranch, pickBaseBranch, classifyUserBlock, buildSessionBlocks, briefArg, woOf, columnByAge } from './text.mjs';
 export { wfInfo, scopeInfo } from './sessions.mjs';
-export { isReadOnlyTool } from './chat.mjs';
+export { isReadOnlyTool, buildUserMessage, makeInputChannel } from './chat.mjs';
 export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop

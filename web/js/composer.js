@@ -293,6 +293,29 @@ export function drainQueue(){                                     // по зав
   setTimeout(() => { if (S.currentFile) runPrompt(next); }, 60);
 }
 
+// Steering: промт во время активного стрима — НЕ ждём конца всего агентного цикла, а докидываем в ЖИВОЙ ход
+// (/api/chat-input). Клод прочитает его на ближайшей границе шага/хода. Бабл рисуем сразу с меткой «ожидает»
+// (снимется на событии turn). Сервер не нашёл живой ход (только что завершился) → обычный новый ход тем же баблом.
+async function steerPrompt(payload){
+  const cons = ensureConsole();
+  const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
+  if (el){
+    if (payload.attachments && payload.attachments.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(payload.attachments));
+    el.classList.add('cx-queued');
+    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидает — Клод прочитает на ближайшем шаге</div>');
+    const runEl = cons.querySelector('.cx-run-chat'); if (runEl) cons.insertBefore(el, runEl);
+  }
+  payload.el = el;
+  scrollBottom();
+  const slim = (payload.attachments || []).map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
+  let ok = false;
+  try {
+    const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, prompt: payload.text, attachments: slim }) });
+    const d = await r.json(); ok = !!(d && d.ok);
+  } catch {}
+  if (!ok) runPrompt(payload);   // живой ход уже завершился → обычный новый (переиспользуя уже нарисованный бабл payload.el)
+}
+
 function sendMessage(){
   const ta = document.getElementById('composer-ta'); if (!ta) return;
   if (!requireAuth()) return;                             // чат требует логина в Claude
@@ -305,6 +328,7 @@ function sendMessage(){
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
   const payload = { text, mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
   if (!S.currentFile && S.pendingNewSession){ payload.newSessionCwd = S.pendingNewSession.cwd; payload.pendingName = S.pendingNewSession.name; }  // первый промт → создать именованную сессию
-  if (S.streaming){ enqueuePrompt(payload); return; }       // идёт стрим → в очередь
+  if (S.streaming && S.currentFile){ steerPrompt(payload); return; }   // идёт стрим по существующей сессии → докидываем в живой ход (steering), Клод прочитает на ближайшей границе
+  if (S.streaming){ enqueuePrompt(payload); return; }       // стрим новой (файла ещё нет) → в очередь до появления сессии
   runPrompt(payload);
 }

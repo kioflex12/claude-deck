@@ -72,8 +72,33 @@ test('fetchRetry: повторяет транзиентные до первог�
 const {
   isBaseBranch, pickWorkingBranch, pickBaseBranch,
   classifyUserBlock, buildSessionBlocks, wfInfo, scopeInfo,
-  isReadOnlyTool, briefArg, woOf,
+  isReadOnlyTool, briefArg, woOf, buildUserMessage, makeInputChannel,
 } = await import(SRV);
+
+test('buildUserMessage: текст+вложения → SDKUserMessage с массивом content-блоков', () => {
+  const m = buildUserMessage('привет', []);
+  assert.equal(m.type, 'user');
+  assert.equal(m.message.role, 'user');
+  assert.ok(Array.isArray(m.message.content), 'content — массив');
+  assert.equal(m.message.content[0].type, 'text');
+  assert.equal(m.message.content[0].text, 'привет');
+  const img = buildUserMessage('', [{ kind: 'image', dataB64: 'AAA', mediaType: 'image/png' }]);
+  assert.ok(img.message.content.some((b) => b.type === 'image'), 'картинка → image-блок');
+});
+
+test('makeInputChannel: gen отдаёт первое, ждёт push, осушает очередь перед end', async () => {
+  const ch = makeInputChannel({ n: 1 });
+  const it = ch.gen();
+  assert.deepEqual((await it.next()).value, { n: 1 }, 'первое сообщение');
+  const p = it.next();                     // очередь пуста → ждёт
+  assert.equal(ch.push({ n: 2 }), true, 'push в открытый канал → true');
+  assert.deepEqual((await p).value, { n: 2 }, 'push разбудил ожидание');
+  ch.push({ n: 3 });                        // лежит в очереди
+  ch.end();
+  assert.equal(ch.push({ n: 4 }), false, 'после end push отвергнут');
+  assert.deepEqual((await it.next()).value, { n: 3 }, 'очередь осушается перед закрытием');
+  assert.equal((await it.next()).done, true, 'осушено → gen завершается');
+});
 
 test('isBaseBranch: базовые ветки → true, рабочая/пустая', () => {
   for (const b of ['preprod', 'preupdate', 'master', 'main', 'develop', 'dev', 'prod', 'release']) assert.equal(isBaseBranch(b), true, b);
