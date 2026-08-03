@@ -1,11 +1,11 @@
-    .cx-console{ display:flex; flex-direction:column; gap:14px; background:var(--bg-elev); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+    .cx-console{ display:flex; flex-direction:column; gap:16px; background:var(--bg-elev); border:1px solid var(--border); border-radius:12px; padding:18px 22px; }
     /* каждое сообщение — отдельный визуально разделённый блок с меткой роли */
-    .cx-msg{ display:flex; flex-direction:column; gap:5px; }
+    .cx-msg{ display:flex; flex-direction:column; gap:5px; max-width:780px; }   /* ограничение длины строки: на широком окне текст не тянется в нечитаемо-длинные строки (таблицы/код при нужде скроллятся внутри) */
     .cx-role{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-faint); }
-    .cx-user{ background:var(--surface-2); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:8px; padding:9px 12px; }
+    .cx-user{ background:var(--surface-2); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:8px; padding:11px 15px; }
     .cx-user .cx-role{ color:var(--accent); }
     .cx-user .cx-md{ min-width:0; color:var(--accent-ink); }
-    .cx-asst{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 13px; color:var(--text); }
+    .cx-asst{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:13px 16px; color:var(--text); }
     .cx-asst .cx-role{ color:var(--accent-ink); }
     .cx-meta{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:3px; }
     .cx-sys{ font-family:var(--mono); font-size:11px; color:var(--text-faint); background:var(--surface-2); border:1px dashed var(--border); border-radius:7px; padding:4px 10px; align-self:flex-start; }
@@ -17,23 +17,24 @@
     .cx-think-h:hover{ color:var(--text); }
     .cx-think-body{ margin-top:7px; color:var(--text-muted); font-style:italic; }
 
-    .cx-md{ font-size:13.5px; line-height:1.62; }
+    .cx-md{ font-size:13.5px; line-height:1.68; }
     .cx-md > :first-child{ margin-top:0; }
     .cx-md > :last-child{ margin-bottom:0; }
-    .cx-md p{ margin:8px 0; }
-    .cx-md h1,.cx-md h2,.cx-md h3,.cx-md h4,.cx-md h5,.cx-md h6{ margin:14px 0 7px; line-height:1.3; font-weight:680; letter-spacing:-0.01em; }
-    .cx-md h1{ font-size:18px; } .cx-md h2{ font-size:16px; } .cx-md h3{ font-size:14.5px; }
-    .cx-md h4,.cx-md h5,.cx-md h6{ font-size:13.5px; }
-    .cx-md ul,.cx-md ol{ margin:8px 0; padding-left:22px; }
-    .cx-md li{ margin:3px 0; }
+    .cx-md p{ margin:10px 0; }
+    .cx-md h1,.cx-md h2,.cx-md h3,.cx-md h4,.cx-md h5,.cx-md h6{ margin:22px 0 9px; line-height:1.3; font-weight:700; letter-spacing:-0.01em; }
+    .cx-md h1{ font-size:18.5px; } .cx-md h2{ font-size:15.5px; padding-bottom:6px; border-bottom:1px solid var(--border); } .cx-md h3{ font-size:14px; }
+    .cx-md h4,.cx-md h5,.cx-md h6{ font-size:13px; color:var(--text-muted); }
+    .cx-md ul,.cx-md ol{ margin:10px 0; padding-left:22px; }
+    .cx-md li{ margin:5px 0; }
+    .cx-md li::marker{ color:var(--text-faint); }
     .cx-md blockquote{ margin:8px 0; padding:2px 12px; border-left:3px solid var(--border-strong); color:var(--text-muted); }
     .cx-md hr{ border:0; border-top:1px solid var(--border); margin:12px 0; }
     .cx-md a{ color:var(--info); text-decoration:none; }
     .cx-md a:hover{ text-decoration:underline; }
     .cx-md strong{ font-weight:700; color:var(--text); }
     .cx-md em{ font-style:italic; }
-    .cx-md code.cx-ic{ font-family:var(--mono); font-size:12px; background:var(--surface-2); border:1px solid var(--border); padding:1px 5px; border-radius:5px; }
-    .cx-user .cx-md code.cx-ic{ background:var(--surface); }
+    .cx-md code.cx-ic{ font-family:var(--mono); font-size:12px; background:rgba(127,127,127,.13); border:0; padding:1px 5px; border-radius:5px; }   /* без рамки, мягкий фон — плотный текст со множеством код-ссылок не дробится на «коробочки» */
+    .cx-user .cx-md code.cx-ic{ background:rgba(127,127,127,.2); }
     .cx-md pre.cx-code{ position:relative; margin:9px 0; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:11px 13px; overflow:auto; }
     .cx-md pre.cx-code code{ font-family:var(--mono); font-size:12px; line-height:1.5; white-space:pre; }
     /* кнопка копирования блока кода — справа сверху, проявляется при наведении */
@@ -42,9 +43,9 @@
     .cx-md pre.cx-code .code-copy:hover{ color:var(--accent); border-color:var(--accent); opacity:1; }
     .cx-md pre.cx-code .code-copy.ok{ color:var(--good); border-color:var(--good); opacity:1; }
     /* GFM-таблицы: обёртка со скроллом (широкая таблица не рвёт layout), сетка на var-токенах, шапка с фоном */
-    .cx-md .cx-tblwrap{ margin:9px 0; overflow-x:auto; }
-    .cx-md table.cx-table{ border-collapse:collapse; font-size:12.5px; }
-    .cx-md table.cx-table th,.cx-md table.cx-table td{ border:1px solid var(--border); padding:5px 10px; text-align:left; vertical-align:top; }
+    .cx-md .cx-tblwrap{ margin:13px 0; overflow-x:auto; }
+    .cx-md table.cx-table{ border-collapse:collapse; font-size:12.5px; line-height:1.5; }
+    .cx-md table.cx-table th,.cx-md table.cx-table td{ border:1px solid var(--border); padding:7px 12px; text-align:left; vertical-align:top; max-width:none; }
     .cx-md table.cx-table th{ background:var(--surface-2); font-weight:700; color:var(--text); white-space:nowrap; }
     .cx-md table.cx-table tbody tr:nth-child(even) td{ background:rgba(127,127,127,.05); }
 
