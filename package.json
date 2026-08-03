@@ -1,6 +1,6 @@
 {
   "name": "claude-deck",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
@@ -34,7 +34,7 @@
     },
     "files": [
       "electron/**",
-      "server.mjs",
+      "*.mjs",
       "index.html",
       "web/**",
       "node_modules/@anthropic-ai/**",
