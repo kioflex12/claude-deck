@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectClientCuFromText, detectBranchFromText } from '../sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, tailActivity } from '../sessions.mjs';
 import { fetchRetry, isTransientStatus } from '../core.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
@@ -20,6 +20,15 @@ test('detectBranchFromText: только ветка WO самой сессии (
   assert.equal(detectBranchFromText(txt, ''), '', 'без WO сессии не угадываем');
   assert.equal(detectBranchFromText('нет веток', 'WO-1'), '');
 });
+test('tailActivity: «что делает» из последнего блока ленты', () => {
+  assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');
+  assert.equal(tailActivity([{ kind: 'tool', name: 'Read', arg: '/a/b.cs', result: 'ok' }]), '', 'инструмент с result (завершён) → общий «работает»');
+  assert.equal(tailActivity([{ kind: 'thinking', text: '...' }]), '✻ размышляет');
+  assert.equal(tailActivity([{ kind: 'assistant', text: 'ответ' }]), '✍ пишет ответ');
+  assert.equal(tailActivity([{ kind: 'user', text: 'привет' }]), '', 'человеческий блок → без активности');
+  assert.equal(tailActivity([]), '', 'пусто → пусто');
+});
+
 test('isTransientStatus: 429/5xx транзиентны (повтор имеет шанс), 2xx/4xx — нет', () => {
   for (const s of [429, 500, 502, 503, 599]) assert.equal(isTransientStatus(s), true, String(s));
   for (const s of [200, 301, 400, 404, 409]) assert.equal(isTransientStatus(s), false, String(s));

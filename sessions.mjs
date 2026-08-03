@@ -481,6 +481,16 @@ export function apiAgents(relFile) {
   return { agents, bgRunning: agents.filter((a) => a.running).length };
 }
 
+// Текущая активность хода из последнего блока ленты — «что именно делает Claude» для строки индикатора.
+// tool без result → инструмент ВЫПОЛНЯЕТСЯ; thinking → размышляет; assistant-текст → пишет ответ; иначе — общий «работает».
+export function tailActivity(blocks) {
+  const b = blocks[blocks.length - 1];
+  if (!b) return '';
+  if (b.kind === 'tool') return b.result ? '' : ('⚙ ' + b.name + (b.arg ? ' · ' + String(b.arg).slice(0, 48) : ''));
+  if (b.kind === 'thinking') return '✻ размышляет';
+  if (b.kind === 'assistant') return '✍ пишет ответ';
+  return '';
+}
 // Инкремент для live-tail: те же блоки, но отдаём только «хвост» после индекса after (poll+diff по числу блоков).
 export function apiSessionTail(relFile, after) {
   const rp = resolveSessionPath(relFile);
@@ -503,6 +513,7 @@ export function apiSessionTail(relFile, after) {
     active: (Date.now() - mtime) < ACTIVE_MS,
     working: (Date.now() - mtime) < WORKING_MS,
     serverActive,   // авторитетно: на сервере ЕСТЬ активный ход этой сессии → индикатор держится даже в паузах записи (>20с без изменений файла)
+    activity: tailActivity(blocks),   // «что делает» — для строки индикатора при перезаходе/фоне
   };
 }
 

@@ -188,10 +188,11 @@ export async function runPrompt(payload){
   scrollBottom();
   let t0 = Date.now();
   let waiting = false;   // висит вопрос/аппрув — Claude ЖДЁТ ответа, а не работает: индикатор меняется, таймер замирает
+  let activity = '';     // что ИМЕННО делает сейчас: инструмент/размышление/ответ (обновляется по событиям SSE)
   const paintRun = () => {
     const el = runEl.querySelector('.cx-run-txt'); if (!el) return;
     const sp = runEl.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
-    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : ('Claude работает… ' + Math.round((Date.now()-t0)/1000) + 'с');
+    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : ((activity || '✻ Claude работает') + '… ' + Math.round((Date.now()-t0)/1000) + 'с');
   };
   S.streamTimer = setInterval(paintRun, 1000);
 
@@ -281,11 +282,12 @@ export async function runPrompt(payload){
           appendHTML(cons, '<div class="cx-note">Запуск не дал ответа — сообщений в сессии нет. Если это упакованное приложение и ошибка повторяется, пришлите текст ошибки выше.</div>');
         }
       }, 700);
-    } else {
-      // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление)
+    } else if (!(opts && opts.stopped)) {
+      // синхронизируем курсор live-tail с диском БЕЗ перерисовки (сохраняем live-блоки, включая размышление).
+      // При Стопе НЕ перезапускаем tail: ход оборван, иначе tail всплыл бы призраком «работает» (баг «после Стопа появилось-исчезло»).
       setTimeout(async () => {
         if (S.currentFile !== f || S.streaming) return;
-        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; if (dd.active) startTail(f); } catch {}
+        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; if (dd.serverActive) startTail(f); } catch {}
       }, 600);
     }
     if (opts && opts.stopped) clearQueue();          // Стоп → чистим очередь (не сыпем дальше)
@@ -296,7 +298,8 @@ export async function runPrompt(payload){
     let d; try { d = JSON.parse(e.data); } catch { return; }
     const stick = isNearBottom();        // держим низ, только если пользователь уже внизу
     if (d.type === 'text'){
-      if (waiting){ waiting = false; t0 = Date.now(); paintRun(); }   // пришёл ответ модели — снова «работает», таймер шага сброшен
+      if (waiting){ waiting = false; t0 = Date.now(); }   // пришёл ответ модели — снова «работает», таймер шага сброшен
+      activity = '✍ пишет ответ'; paintRun();
       finalizeThink();                   // размышление закончилось — начинается ответ
       if (!liveMd) startNewMd();
       liveAccum += d.delta;
@@ -305,6 +308,7 @@ export async function runPrompt(payload){
     } else if (d.type === 'thinking'){
       const piece = d.delta || '';
       if (liveThink || piece.trim()){        // блок создаём только с первым НЕПУСТЫМ thinking_delta
+        if (activity !== '✻ размышляет'){ activity = '✻ размышляет'; paintRun(); }
         clearLive();
         if (!liveThink) startNewThink();
         liveThinkAccum += piece;
@@ -312,7 +316,7 @@ export async function runPrompt(payload){
         if (stick) scrollBottom();
       }
     } else if (d.type === 'tool'){
-      waiting = false; t0 = Date.now(); paintRun();   // новый инструмент = новый шаг → таймер «работает» сбрасывается (не сквозной по всему ходу)
+      waiting = false; t0 = Date.now(); activity = '⚙ ' + d.name; paintRun();   // новый инструмент = новый шаг → таймер сбрасывается + показываем что за инструмент
       clearLive(); finalizeThink();   // следующий текст пойдёт в новый блок
       addBlock('<div class="cx-msg cx-twrap"><div class="cx-tool"><span class="cx-tw">·</span><span class="cx-mk">⏺</span><span class="cx-name">' + esc(d.name) + '</span></div></div>');
       if (stick) scrollBottom();
@@ -391,7 +395,7 @@ export function startRailRefresh(file){
 
 // Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
 // РЕАЛЬНУЮ длительность хода, а не с момента перезахода; нет — фолбэк на локальное время появления индикатора.
-export function updateTailIndicator(on, turnStartTs, waiting){
+export function updateTailIndicator(on, turnStartTs, waiting, activity){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');
   if (on){
@@ -405,7 +409,8 @@ export function updateTailIndicator(on, turnStartTs, waiting){
     } else {
       const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
       ind._start = start;
-      const paint = () => { if (txt) txt.textContent = '✻ Claude работает… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
+      const label = activity || '✻ Claude работает';   // «что делает» из tail (⚙ инструмент / ✻ размышляет / ✍ пишет), иначе общий текст
+      const paint = () => { if (txt) txt.textContent = label + '… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
       paint();
       if (S.tailCountTimer) clearInterval(S.tailCountTimer);
       S.tailCountTimer = setInterval(paint, 1000);
@@ -459,9 +464,11 @@ async function tailTick(file){
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
   const pending = await surfacePending(file);        // висящие вопросы/аппрувы (в т.ч. заданные после обрыва канала) — дорисовать
-  const working = !!d.serverActive || !!d.working;   // serverActive — авторитетно: ход жив на сервере, даже если файл не писался >20с (долгий инструмент/пауза) → индикатор не пропадает
-  updateTailIndicator(working || pending, d.turnStartTs, pending);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает»; иначе скрыт
+  // Занятость — ТОЛЬКО по serverActive (на сервере жив ход этой сессии). mtime-«working» НЕ используем: он устаревает
+  // на долгих инструментах (индикатор мигал «то есть, то нет») и остаётся свежим ~20с после Стопа (индикатор всплывал призраком).
+  const working = !!d.serverActive;
+  updateTailIndicator(working || pending, d.turnStartTs, pending, d.activity);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает <активность>»; иначе скрыт
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
-  if (!d.serverActive && !d.active && !pending) stopTail();   // остываем только когда ход на сервере завершён, файл затих и нет висящих (иначе агент ждёт ответ — держим опрос)
+  if (!working && !pending) stopTail();    // ход на сервере завершён и ничего не ждём → прекращаем опрос (не крутим по mtime и не показываем ложную занятость)
 }
