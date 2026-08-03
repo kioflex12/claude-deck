@@ -1,11 +1,11 @@
 // Deck — движок живого ответа: SSE-стрим Agent SDK (runPrompt), inline-аппрувы инструментов,
 // обрыв по Стоп, live-tail ленты при перезаходе и периодический рефреш правого рейла. Состояние — в store (S).
-import { S, notifiedDone, SESSION_CACHE, promptQueue } from './store.js';
+import { S, notifiedDone, notifiedInput, SESSION_CACHE, promptQueue } from './store.js';
 import { esc, mdToHtml, ctxColor, kTok } from './util.js';
 import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wireConsole } from './transcript.js';
 import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue } from './composer.js';
 import { loadBuilds, loadMrs, loadJira, wireTags, stopAgentsPoll } from './services.js';
-import { ensureNotifyPermission, titleOf, notifyDone } from './notify.js';
+import { ensureNotifyPermission, titleOf, notifyDone, notifyInput } from './notify.js';
 import { sideHTML, wireRailTabs } from './rail.js';
 import { launchUnity } from './unity.js';
 import { wireSideActions } from './dialogs.js';
@@ -34,6 +34,7 @@ export function stopStream(){
   stopAgentsPoll();
   S.streaming = false; S.liveFinish = null; S.streamingFile = null; S.currentStreamId = null;
   promptQueue.length = 0; updateQueueIndicator();        // уходя с сессии — очередь сбрасываем
+  notifiedInput.clear();                                 // дедуп «требуется ответ» — по сессии; уходя, сбрасываем
   // жёсткий сброс UI стрима: убрать индикатор «работает» и снять недостроенный live-блок из чата
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
   document.querySelectorAll('.cx-asst.cx-live').forEach(el => el.classList.remove('cx-live'));
@@ -325,12 +326,14 @@ export async function runPrompt(payload){
       clearLive(); finalizeThink();   // карточка аппрува — новый элемент ленты
       const el = addBlock(approvalCardHTML(d));
       wireApproval(el, d);
+      notifyInput(S.streamingFile || S.currentFile, d.id, titleOf(S.streamingFile || S.currentFile));   // «требуется ответ» — если юзер не смотрит
       if (stick) scrollBottom();
     } else if (d.type === 'question'){
       waiting = true; paintRun();     // ждём ответа пользователя — не «работает»
       clearLive(); finalizeThink();   // карточка вопроса — новый элемент ленты
       const el = addBlock(questionCardHTML(d));
       wireQuestion(el, d);
+      notifyInput(S.streamingFile || S.currentFile, d.id, titleOf(S.streamingFile || S.currentFile));   // «требуется ответ» — если юзер не смотрит
       if (stick) scrollBottom();
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       S.currentFile = d.file; S.streamingFile = d.file; S.tailCount = 0;
@@ -445,8 +448,9 @@ async function surfacePending(file){
   const ind = document.getElementById('tailInd');
   const add = (sel, html, wire, card) => { if (cons.querySelector(sel)) return; const el = appendHTML(cons, html); if (!el) return; if (ind) cons.insertBefore(el, ind); wire(el, card); };
   let has = false;
-  if (q && Array.isArray(q.questions)) for (const it of q.questions){ has = true; const card = { id: it.id, questions: it.questions }; add('.cx-question[data-id="' + it.id + '"]', questionCardHTML(card), wireQuestion, card); }
-  if (a && Array.isArray(a.approvals)) for (const it of a.approvals){ has = true; const card = { id: it.id, tool: it.tool, input: it.input }; add('.cx-approval[data-id="' + it.id + '"]', approvalCardHTML(card), wireApproval, card); }
+  const t = titleOf(file);
+  if (q && Array.isArray(q.questions)) for (const it of q.questions){ has = true; const card = { id: it.id, questions: it.questions }; add('.cx-question[data-id="' + it.id + '"]', questionCardHTML(card), wireQuestion, card); notifyInput(file, it.id, t); }
+  if (a && Array.isArray(a.approvals)) for (const it of a.approvals){ has = true; const card = { id: it.id, tool: it.tool, input: it.input }; add('.cx-approval[data-id="' + it.id + '"]', approvalCardHTML(card), wireApproval, card); notifyInput(file, it.id, t); }
   return has;
 }
 

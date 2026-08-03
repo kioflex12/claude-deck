@@ -74,6 +74,7 @@ export const SESSION_CACHE = {};   // file -> полный транскрипт
 export const MR_CACHE = {};        // branch -> { ts, mrs } (клиентский кэш MR ~30с)
 export const JIRA_CACHE = {};      // wo -> { ts, available, status, category, summary }
 export const notifiedDone = new Set();  // файлы, за чей рабочий эпизод уже уведомили (дедуп)
+export const notifiedInput = new Set();  // id вопросов/аппрувов, о которых уже уведомили «требуется ответ» (дедуп)
 export const promptQueue = [];     // FIFO промтов, отправленных во время активного стрима
 export const attachDraft = [];     // черновик вложений текущего сообщения
 export const SKILLS_CACHE = {};

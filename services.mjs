@@ -28,12 +28,14 @@ async function tcJson(pathq) {
 async function tcLatestBuild(btId, branch, wo) {
   // Точный матч по ветке — ТОЛЬКО для реальной фича/WO-ветки. У базовой (preprod/preupdate/…) он вернул бы
   // чужой неродственный dev-билд, крутившийся на этой ветке (баг «сборки упали» на контексте без сборок).
+  // state:any — включаем СТОЯЩИЕ В ОЧЕРЕДИ и ВЫПОЛНЯЮЩИЕСЯ сборки (по умолчанию локатор отдаёт только finished →
+  // только что поставленный билд не виден ни в рейле, ни в детекте buildActive → карточка не уходила в «Build In Progress»).
   if (branch && !isBaseBranch(branch)) {
-    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(name:' + encodeURIComponent(branch) + ',default:any),count:1&' + TC_FIELDS);
+    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(name:' + encodeURIComponent(branch) + ',default:any),state:any,count:1&' + TC_FIELDS);
     if (j.count && j.build && j.build[0]) return j.build[0];
   }
   if (wo) {
-    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(default:any),count:40&' + TC_FIELDS);
+    const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(default:any),state:any,count:40&' + TC_FIELDS);
     const hit = (j.build || []).find((b) => b.branchName && b.branchName.indexOf(wo) === 0);
     if (hit) return hit;
   }

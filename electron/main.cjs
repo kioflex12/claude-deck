@@ -23,7 +23,7 @@ let serverHandle = null;   // { port, url, close }
 app.isQuitting = false;    // true только при реальном выходе (не при сворачивании в трей)
 
 // Настройки + геометрия окна, переживающие перезапуск. Живут в userData (доступно после ready).
-let deckState = { minimizeToTray: true, bounds: null, isMaximized: false, autostart: false };
+let deckState = { minimizeToTray: true, bounds: null, isMaximized: false, autostart: false, port: null };
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 
 function loadState() {
@@ -66,7 +66,11 @@ async function start() {
   loadState();
   // server.mjs — ESM; грузим динамическим import() из CommonJS-main.
   const mod = await import(pathToFileURL(path.join(__dirname, '..', 'server.mjs')).href);
-  serverHandle = await mod.startServer();   // listen(0) → свободный порт
+  // СТАБИЛЬНЫЙ порт (переиспользуем прошлый, дефолт 4317): origin = localhost:<порт> постоянен → localStorage
+  // (режим/модель/effort/уведомления) переживает перезапуск. Раньше был listen(0) → новый порт каждый раз →
+  // новый origin → пустой localStorage → настройки «сбрасывались». Порт занят → startServer падает на свободный.
+  serverHandle = await mod.startServer(deckState.port || 4317);
+  if (serverHandle.port !== deckState.port) { deckState.port = serverHandle.port; saveState(); }   // запомнить фактический (для следующего запуска)
 
   const iconPng = path.join(__dirname, 'icon.png');
   const useBounds = boundsVisible(deckState.bounds);

@@ -1,6 +1,6 @@
 // Deck — «работает сейчас», уведомления о завершении хода Claude и живой поллинг доски (лёгкий тик 7с + тяжёлый re-fetch 30с).
 // Вынесено из app.js; состояние — в store (S).
-import { S, notifiedDone, JIRA_CACHE } from './store.js';
+import { S, notifiedDone, notifiedInput, JIRA_CACHE } from './store.js';
 import { isWorking, renderNow, renderBoard } from './board.js';
 import { openSession } from './session.js';
 import { setStreamStatus } from './stream.js';
@@ -45,6 +45,7 @@ export function notifyDone(file, title, heading){       // одно уведом
   if (notifiedDone.has(file)) return;            // и Deck-finish, и poll-переход — одно и то же завершение
   notifiedDone.add(file);
   if (!S.notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
+  if (!document.hidden && S.currentFile === file) return;   // юзер сам смотрит эту сессию в фокусе — результат виден, не пингуем
   const head = (heading || 'Claude завершил') + (title ? ' · ' + title : '');
   if (window.deckNative && window.deckNative.notify){   // Electron: через main — сработает и из свёрнутого в трей окна, клик сфокусит + откроет сессию
     window.deckNative.notify({ title: head, body: 'Открыть сессию в Deck', file });
@@ -55,6 +56,18 @@ export function notifyDone(file, title, heading){       // одно уведом
     const n = new Notification(head, { body: 'Открыть сессию в Deck', tag: 'deck-'+file });
     n.onclick = () => { window.focus(); openSession(file); n.close(); };
   } catch {}
+}
+// Уведомление «требуется ответ» (вопрос/аппрув повис). Дедуп по id вопроса; помечаем ТОЛЬКО когда реально шлём —
+// если сейчас выключено/юзер смотрит, id не помечаем, чтобы уведомить позже, когда он отойдёт.
+export function notifyInput(file, id, title){
+  if (!id || notifiedInput.has(id)) return;
+  if (!S.notifyEnabled) return;
+  if (!document.hidden && S.currentFile === file) return;   // смотрит эту сессию в фокусе — карточку вопроса и так видно
+  notifiedInput.add(id);
+  const head = 'Требуется ответ' + (title ? ' · ' + title : '');
+  if (window.deckNative && window.deckNative.notify){ window.deckNative.notify({ title: head, body: 'Claude ждёт вашего ответа', file }); return; }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try { const n = new Notification(head, { body: 'Claude ждёт вашего ответа', tag: 'deck-input-'+file }); n.onclick = () => { window.focus(); openSession(file); n.close(); }; } catch {}
 }
 
 // Сидим JIRA_CACHE из серверного payload сессий — чтобы effectiveColumn был верен уже на ПЕРВОМ рендере (без прыжков).

@@ -292,7 +292,9 @@ function buildSessionSummary(f, wfStates) {
   const c = textSummary(f);   // кэшируемая (из файла) часть
   // Свежее на каждый вызов: зависит от «сейчас» (время), mtime сабагентов, dev-workflow-состояния и тегов.
   const bgRunning = sessionSubagents(f.projDir, f.id).filter((a) => a.running).length;
-  const active = (Date.now() - f.mtime) < ACTIVE_MS || bgRunning > 0;
+  let serverActive = false;
+  for (const e of activeStreams.values()) { if (e && e.key === f.id) { serverActive = true; break; } }   // на сервере жив ход этой сессии (авторитетно, не по mtime)
+  const active = (Date.now() - f.mtime) < ACTIVE_MS || bgRunning > 0 || serverActive;
   const st = c.wo ? wfStates.get(c.wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, c.cwd);
@@ -308,7 +310,8 @@ function buildSessionSummary(f, wfStates) {
     ctxPct: Math.min(c.winTokens / CTX_LIMIT, 1),
     mtime: f.mtime,
     active,
-    working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0,   // живая генерация ИЛИ живой фоновый агент
+    working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0 || serverActive,   // живая генерация ИЛИ фоновый агент ИЛИ живой ход на сервере (не гаснет на долгом инструменте → нет ложного «завершено»)
+    serverActive,
     bgRunning,
     wfHasState: !!st,   // есть ли dev-workflow-состояние (спеккит) для этой WO — иначе Jira одна не двигает в продвинутые колонки
     column: columnByAge(f.mtime),

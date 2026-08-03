@@ -114,7 +114,7 @@ export function startServer(preferredPort) {
   server.keepAliveTimeout = 0;    // не закрывать keep-alive соединение по простою
   server.headersTimeout = 0;
   return new Promise((resolve) => {
-    server.listen(listenPort, () => {
+    const done = () => {
       const port = server.address().port;
       const url = 'http://localhost:' + port;
       console.log('');
@@ -124,7 +124,13 @@ export function startServer(preferredPort) {
       console.log('  адрес:          ' + url);
       console.log('');
       resolve({ port, url, close: () => new Promise((r) => server.close(() => r())) });
+    };
+    // Предпочтительный порт (стабильный origin → localStorage переживает перезапуск) занят → падаем на свободный listen(0).
+    server.once('error', (e) => {
+      if (e && e.code === 'EADDRINUSE' && listenPort !== 0) server.listen(0, done);
+      else console.error('Deck server listen error:', (e && e.message) || e);
     });
+    server.listen(listenPort, done);
   });
 }
 
