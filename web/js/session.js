@@ -11,7 +11,7 @@ import { wireSideActions } from './dialogs.js';
 import { sideHTML, wireRailTabs } from './rail.js';
 import { renderThread, appendHTML } from './transcript.js';
 import { renderComposer, loadSkills } from './composer.js';
-import { stopStream, startRailRefresh, questionCardHTML, wireQuestion } from './stream.js';
+import { stopStream, startRailRefresh, questionCardHTML, wireQuestion, approvalCardHTML, wireApproval } from './stream.js';
 
 export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
@@ -58,6 +58,7 @@ export async function openSession(file){
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
+  resurfaceApprovals(file);   // висящие аппрувы (обрыв SSE их не решил) — снова показать и ждать решение
   S.sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
@@ -77,5 +78,18 @@ async function resurfaceQuestions(file){
     const card = { id: q.id, questions: q.questions };
     const el = appendHTML(cons, questionCardHTML(card));
     wireQuestion(el, card);
+  }
+}
+
+// Ре-сёрфейс висящих аппрувов (зеркало resurfaceQuestions): при обрыве SSE аппрув не решается за пользователя, ход в
+// фоне ждёт решения (сервер держит его в pendingApprovals до /api/approve) — при перезаходе дорисовываем карточку.
+async function resurfaceApprovals(file){
+  let d; try { const r = await fetch('/api/pending-approvals?file=' + encodeURIComponent(file), { cache:'no-store' }); d = await r.json(); } catch { return; }
+  if (S.currentFile !== file || !d || !Array.isArray(d.approvals) || !d.approvals.length) return;
+  const cons = document.querySelector('.cx-console'); if (!cons) return;
+  for (const a of d.approvals){
+    const card = { id: a.id, tool: a.tool, input: a.input };
+    const el = appendHTML(cons, approvalCardHTML(card));
+    wireApproval(el, card);
   }
 }

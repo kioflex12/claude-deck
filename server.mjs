@@ -20,7 +20,7 @@ import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, a
 import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, apiMcpRemove } from './skills-mcp.mjs';
 import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
-import { apiChatPrepare, apiChat, apiApprove, apiAnswer, apiPendingQuestions, apiStop } from './chat.mjs';
+import { apiChatPrepare, apiChat, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
 import { apiBuild, apiMrs, apiJira } from './services.mjs';
 import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout } from './auth.mjs';
 
@@ -82,6 +82,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/approve') { apiApprove(res, u); return; }
   if (u.pathname === '/api/answer') { apiAnswer(req, res, u).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/pending-questions') { apiPendingQuestions(res, u); return; }
+  if (u.pathname === '/api/pending-approvals') { apiPendingApprovals(res, u); return; }
   if (u.pathname === '/api/stop') { apiStop(res, u); return; }
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
@@ -134,4 +135,4 @@ if (_isMain) startServer(Number(process.env.PORT) || 4317);
 export { isBaseBranch, pickWorkingBranch, pickBaseBranch, classifyUserBlock, buildSessionBlocks, briefArg, woOf, columnByAge } from './text.mjs';
 export { wfInfo, scopeInfo } from './sessions.mjs';
 export { isReadOnlyTool } from './chat.mjs';
-export { pendingQuestions, pendingQuestionsByKey } from './core.mjs';   // для тестов /api/answer и /api/pending-questions
+export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals

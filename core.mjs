@@ -118,7 +118,8 @@ export const NON_ENVS = new Set(['null', 'без деплоя', 'local', '']);
 export const BASE_BRANCHES = new Set(['preprod', 'preupdate', 'master', 'main', 'develop', 'dev', 'prod', 'release', 'head', '']);
 
 // -------- P2: аппрув инструментов (canUseTool). Читающее — молча allow; пишущее/выполняющее — спросить. --------
-export const pendingApprovals = new Map();   // approvalId -> { decide(decision) }
+export const pendingApprovals = new Map();   // approvalId -> { decide(decision), tool, input, sessionKey }
+export const pendingApprovalsByKey = new Map(); // sessionKey -> Set(approvalId) — для ре-сёрфейса висящих аппрувов при перезаходе (обрыв SSE не решает за пользователя)
 // Вопросы к пользователю (AskUserQuestion/ExitPlanMode) — НЕ разрешения, а ввод: ждут реального ответа человека.
 export const pendingQuestions = new Map();      // questionId -> { resolve(answers), questions, sessionKey }
 export const pendingQuestionsByKey = new Map(); // sessionKey -> Set(questionId) — для ре-сёрфейса висящих вопросов при перезаходе

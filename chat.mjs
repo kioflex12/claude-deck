@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   sendJSON, readJsonBody, dbgLog, CTX_LIMIT,
   VALID_MODES, VALID_EFFORTS, READ_ONLY_TOOLS, USER_INPUT_TOOLS, EDIT_TOOLS, PROJECTS_DIR,
-  pendingApprovals, pendingQuestions, pendingQuestionsByKey, activeStreams, sessionAllow, stagedRequests,
+  pendingApprovals, pendingApprovalsByKey, pendingQuestions, pendingQuestionsByKey, activeStreams, sessionAllow, stagedRequests,
 } from './core.mjs';
 import { firstString } from './text.mjs';
 import { getSdkQuery } from './sdk.mjs';
@@ -129,19 +129,24 @@ export async function apiChat(req, res, u) {
     if (isReadOnlyTool(toolName)) return { behavior: 'allow', updatedInput: input };
     if (mode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };            // байпас — ничего не спрашиваем
     if (mode === 'acceptEdits' && EDIT_TOOLS.has(toolName)) return { behavior: 'allow', updatedInput: input };  // «Авто-правки»: правки файлов без спроса (в т.ч. вне cwd); Bash/прочее — по-прежнему спрашиваем
-    if (closed) { dbgLog('tool ' + toolName + ' @closed → auto-allow (обрыв SSE не должен рвать ход; фоновая доработка завершается)'); return { behavior: 'allow', updatedInput: input }; }  // канал закрыт → НЕ отклоняем (иначе «Клиент отключён» ломает создание файлов); ход доводится до конца
     const set = sessionKey && sessionAllow.get(sessionKey);
     if (set && set.has(toolName)) return { behavior: 'allow', updatedInput: input };
+    // Обрыв SSE (ушёл с экрана) НЕ решает за пользователя: аппрув — это решение человека, а не право, которое даёт режим.
+    // Регистрируем по ключу сессии и ждём; при закрытом канале send уходит в никуда (ок), а перезаход ре-сёрфейснёт карточку
+    // (/api/pending-approvals) и снова будет ждать решения. Отпускаем только явным решением или abort'ом (Стоп → deny).
     const id = 'ap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const key = sessionKey;
+    if (key) { let s = pendingApprovalsByKey.get(key); if (!s) { s = new Set(); pendingApprovalsByKey.set(key, s); } s.add(id); }
+    const cleanupKey = () => { const s = key && pendingApprovalsByKey.get(key); if (s) { s.delete(id); if (!s.size) pendingApprovalsByKey.delete(key); } };
     send({ type: 'approval', id, tool: toolName, input });
     return await new Promise((resolve) => {
-      const finalize = (result) => { pendingApprovals.delete(id); resolve(result); };
+      const finalize = (result) => { pendingApprovals.delete(id); cleanupKey(); resolve(result); };
       const decide = (decision) => {
         if (decision === 'always') { if (sessionKey) addSessionAllow(sessionKey, toolName); finalize({ behavior: 'allow', updatedInput: input }); }
         else if (decision === 'allow') { finalize({ behavior: 'allow', updatedInput: input }); }
         else finalize({ behavior: 'deny', message: 'Запрещено пользователем' });
       };
-      pendingApprovals.set(id, { decide });
+      pendingApprovals.set(id, { decide, tool: toolName, input, sessionKey: key });   // tool/input — для ре-сёрфейса карточки при перезаходе
       const sig = opts && opts.signal;
       if (sig) {
         if (sig.aborted) decide('deny');
@@ -300,4 +305,15 @@ export function apiPendingQuestions(res, u) {
   const questions = [];
   if (set) { for (const id of set) { const rec = pendingQuestions.get(id); if (rec) questions.push({ id, questions: rec.questions }); } }
   sendJSON(res, { questions });
+}
+
+// Ре-сёрфейс висящих аппрувов сессии (зеркало apiPendingQuestions): обрыв SSE их не решает, они ждут решения — при
+// перезаходе клиент дорисует карточки. Отдаём tool+input (как в живом send({type:'approval'})), решение идёт в /api/approve.
+export function apiPendingApprovals(res, u) {
+  const file = u.searchParams.get('file') || '';
+  const sessionKey = path.basename(file).replace(/\.jsonl$/, '');
+  const set = pendingApprovalsByKey.get(sessionKey);
+  const approvals = [];
+  if (set) { for (const id of set) { const rec = pendingApprovals.get(id); if (rec) approvals.push({ id, tool: rec.tool, input: rec.input }); } }
+  sendJSON(res, { approvals });
 }

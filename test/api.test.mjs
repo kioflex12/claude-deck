@@ -146,3 +146,17 @@ test('/api/pending-questions возвращает висящие вопросы 
   assert.equal(q.questions[0].question, 'Продолжить?');
   mod.pendingQuestions.delete(id); set.delete(id);
 });
+
+test('/api/pending-approvals возвращает висящие аппрувы по sessionKey файла', async () => {
+  const id = 'ap_test2';
+  mod.pendingApprovals.set(id, { decide: () => {}, tool: 'Bash', input: { command: 'ls' }, sessionKey: 'sess-appr' });
+  let set = mod.pendingApprovalsByKey.get('sess-appr'); if (!set) { set = new Set(); mod.pendingApprovalsByKey.set('sess-appr', set); } set.add(id);
+  const { status, body } = await getJson('/api/pending-approvals?file=' + encodeURIComponent('test-project/sess-appr.jsonl'));
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(body.approvals), 'approvals — массив');
+  const a = body.approvals.find((x) => x.id === id);
+  assert.ok(a, 'висящий аппрув найден по sessionKey');
+  assert.equal(a.tool, 'Bash');
+  assert.equal(a.input.command, 'ls');
+  mod.pendingApprovals.delete(id); set.delete(id);
+});

@@ -88,7 +88,7 @@ export function approvalCardHTML(d){
   </div>`;
 }
 
-function wireApproval(el, d){
+export function wireApproval(el, d){
   if (!el) return;
   el.querySelectorAll('.ap-btn').forEach(b => b.addEventListener('click', async () => {
     const decision = b.dataset.d;
