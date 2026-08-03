@@ -8,13 +8,16 @@ import { detectClientCuFromText, detectBranchFromText } from '../sessions.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
-test('detectClientCuFromText: клиентская копия из путей сессии (самая частая), не из cwd', () => {
-  assert.equal(detectClientCuFromText('правки в client-unity-2/Assets и ещё client-unity-2/foo, вскользь client-unity-1'), 'cu2');
-  assert.equal(detectClientCuFromText('cwd d:/wo_vibecode/vibecode, ничего про копии'), '');
+test('detectClientCuFromText: копия из cwd-полей (реальная рабочая папка), а не из вскользь-упоминаний', () => {
+  const txt = '"cwd":"D:/wo/client-unity-2/Assets" ... "cwd":"D:/wo/client-unity-2" ... а в тексте client-unity-1 client-unity-1 client-unity-1';
+  assert.equal(detectClientCuFromText(txt), 'cu2', 'cwd-поля указывают на 2, хоть 1 упомянут чаще');
+  assert.equal(detectClientCuFromText('без копий'), '');
 });
-test('detectBranchFromText: рабочая ветка из текста (самый частый WO-токен ветки)', () => {
-  assert.equal(detectBranchFromText('ветка WO-13887-chat-r4-r5-realtime-preprod; снова WO-13887-chat-r4-r5-realtime-preprod; мимоходом WO-14178-x'), 'WO-13887-chat-r4-r5-realtime-preprod');
-  assert.equal(detectBranchFromText('просто текст без веток'), '');
+test('detectBranchFromText: только ветка WO самой сессии (чужую задачу отсекает даже если чаще)', () => {
+  const txt = 'WO-14178-x WO-14178-x WO-14178-x, а рабочая WO-13887-chat-r4-r5-realtime-preprod';
+  assert.equal(detectBranchFromText(txt, 'WO-13887'), 'WO-13887-chat-r4-r5-realtime-preprod');
+  assert.equal(detectBranchFromText(txt, ''), '', 'без WO сессии не угадываем');
+  assert.equal(detectBranchFromText('нет веток', 'WO-1'), '');
 });
 const {
   isBaseBranch, pickWorkingBranch, pickBaseBranch,

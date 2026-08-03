@@ -188,7 +188,8 @@ export async function hydrateJira(fresh){   // фоновая подгрузка
     try {
       const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo) + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
-      if (!d.available){ break; }   // нет токена/Jira недоступна — не долбим по всем wo
+      if (d.configured === false){ break; }   // Jira РЕАЛЬНО не настроена (нет токена/хоста) — не долбим по всем wo
+      if (!d.available){ continue; }           // временный сбой/503 у одной задачи — пропускаем её, НЕ роняем весь Jira по доске (иначе один 503 обнулял «Заблокировано» и прочие Jira-колонки)
       JIRA_CACHE[wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
       changed = true;
       if (++done % 12 === 0 && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);   // прогрессивно: колонки заполняются по мере доставки, а не одним скачком в конце (при 150 wo это ~десятки секунд)

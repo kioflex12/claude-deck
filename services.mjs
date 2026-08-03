@@ -136,7 +136,7 @@ const JIRA_TTL = 30000;
 // Реюзабельный резолвер статуса Jira (кэш 30с). Возвращает {available,status,category,summary}. Не бросает.
 export async function jiraStatus(wo, fresh) {
   wo = String(wo || '').trim();
-  if (!JIRA_ENABLED) return { available: false, reason: 'no JIRA token/email/host' };
+  if (!JIRA_ENABLED) return { available: false, configured: false, reason: 'no JIRA token/email/host' };
   if (!/^WO-\d+$/i.test(wo)) return { available: true, status: null };
   const cached = _jiraCache.get(wo);
   if (!fresh && cached && Date.now() - cached.ts < JIRA_TTL) return cached.data;   // refresh=1 (рефреш дашборда) обходит кэш
@@ -149,11 +149,11 @@ export async function jiraStatus(wo, fresh) {
     if (!r.ok) throw new Error('Jira HTTP ' + r.status);
     const j = await r.json();
     const st = j.fields && j.fields.status;
-    const data = { available: true, status: st ? st.name : null, category: st && st.statusCategory ? st.statusCategory.key : '', summary: (j.fields && j.fields.summary) || '' };
+    const data = { available: true, configured: true, status: st ? st.name : null, category: st && st.statusCategory ? st.statusCategory.key : '', summary: (j.fields && j.fields.summary) || '' };
     _jiraCache.set(wo, { ts: Date.now(), data });
     return data;
   } catch (e) {
-    const data = { available: false, reason: (e && e.message) || String(e) };
+    const data = { available: false, configured: true, reason: (e && e.message) || String(e) };   // configured:true — Jira настроена, но ход/сеть сбойнули (503/timeout): клиент НЕ должен ронять весь Jira
     _jiraCache.set(wo, { ts: Date.now(), data });   // кэшируем и неудачу — не долбим на каждый поллинг
     return data;
   }
