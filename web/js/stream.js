@@ -185,8 +185,14 @@ export async function runPrompt(payload){
   // существует только пока идёт ИМЕННО этот стрим (создаётся здесь, снимается в finish/stopStream).
   const runEl = appendHTML(cons, '<div class="cx-run-chat"><span class="cx-spin"></span><span class="cx-run-txt">Claude работает… 0с</span></div>');
   scrollBottom();
-  const t0 = Date.now();
-  S.streamTimer = setInterval(() => { const el = runEl.querySelector('.cx-run-txt'); if (el) el.textContent = 'Claude работает… ' + Math.round((Date.now()-t0)/1000) + 'с'; }, 1000);
+  let t0 = Date.now();
+  let waiting = false;   // висит вопрос/аппрув — Claude ЖДЁТ ответа, а не работает: индикатор меняется, таймер замирает
+  const paintRun = () => {
+    const el = runEl.querySelector('.cx-run-txt'); if (!el) return;
+    const sp = runEl.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
+    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : ('Claude работает… ' + Math.round((Date.now()-t0)/1000) + 'с');
+  };
+  S.streamTimer = setInterval(paintRun, 1000);
 
   let liveMd = null, liveAccum = '';           // текущий текстовый блок ассистента (дельты text)
   let liveThink = null, liveThinkAccum = '';   // текущий блок размышления (дельты thinking)
@@ -289,6 +295,7 @@ export async function runPrompt(payload){
     let d; try { d = JSON.parse(e.data); } catch { return; }
     const stick = isNearBottom();        // держим низ, только если пользователь уже внизу
     if (d.type === 'text'){
+      if (waiting){ waiting = false; t0 = Date.now(); paintRun(); }   // пришёл ответ модели — снова «работает», таймер шага сброшен
       finalizeThink();                   // размышление закончилось — начинается ответ
       if (!liveMd) startNewMd();
       liveAccum += d.delta;
@@ -304,15 +311,18 @@ export async function runPrompt(payload){
         if (stick) scrollBottom();
       }
     } else if (d.type === 'tool'){
+      waiting = false; t0 = Date.now(); paintRun();   // новый инструмент = новый шаг → таймер «работает» сбрасывается (не сквозной по всему ходу)
       clearLive(); finalizeThink();   // следующий текст пойдёт в новый блок
       addBlock('<div class="cx-msg cx-twrap"><div class="cx-tool"><span class="cx-tw">·</span><span class="cx-mk">⏺</span><span class="cx-name">' + esc(d.name) + '</span></div></div>');
       if (stick) scrollBottom();
     } else if (d.type === 'approval'){
+      waiting = true; paintRun();     // ждём решения пользователя — не «работает»
       clearLive(); finalizeThink();   // карточка аппрува — новый элемент ленты
       const el = addBlock(approvalCardHTML(d));
       wireApproval(el, d);
       if (stick) scrollBottom();
     } else if (d.type === 'question'){
+      waiting = true; paintRun();     // ждём ответа пользователя — не «работает»
       clearLive(); finalizeThink();   // карточка вопроса — новый элемент ленты
       const el = addBlock(questionCardHTML(d));
       wireQuestion(el, d);
@@ -376,19 +386,25 @@ export function startRailRefresh(file){
 
 // Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
 // РЕАЛЬНУЮ длительность хода, а не с момента перезахода; нет — фолбэк на локальное время появления индикатора.
-export function updateTailIndicator(on, turnStartTs){
+export function updateTailIndicator(on, turnStartTs, waiting){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');
   if (on){
-    if (!ind) ind = appendHTML(cons, '<div class="cx-run-chat" id="tailInd"><span class="cx-spin"></span><span class="cx-run-txt">✻ Claude работает…</span></div>');
+    if (!ind) ind = appendHTML(cons, '<div class="cx-run-chat" id="tailInd"><span class="cx-spin"></span><span class="cx-run-txt"></span></div>');
     else cons.appendChild(ind);            // держим индикатор внизу
-    const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
-    ind._start = start;
+    const sp = ind.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
     const txt = ind.querySelector('.cx-run-txt');
-    const paint = () => { if (txt) txt.textContent = '✻ Claude работает… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
-    paint();
-    if (S.tailCountTimer) clearInterval(S.tailCountTimer);
-    S.tailCountTimer = setInterval(paint, 1000);
+    if (waiting){   // висит вопрос/аппрув — Claude ждёт ответа, а не работает: таймер замирает, спиннер убран
+      if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }
+      if (txt) txt.textContent = '⏳ Ожидает вашего ответа';
+    } else {
+      const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
+      ind._start = start;
+      const paint = () => { if (txt) txt.textContent = '✻ Claude работает… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
+      paint();
+      if (S.tailCountTimer) clearInterval(S.tailCountTimer);
+      S.tailCountTimer = setInterval(paint, 1000);
+    }
   } else {
     if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }
     if (ind) ind.remove();
@@ -436,9 +452,9 @@ async function tailTick(file){
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
-  updateTailIndicator(!!d.working, d.turnStartTs);   // «работает… Nс» пока файл пишется (< 20с) — индикатор в самом низу
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
   const pending = await surfacePending(file);        // висящие вопросы/аппрувы (в т.ч. заданные после обрыва канала) — дорисовать
+  updateTailIndicator(!!d.working || pending, d.turnStartTs, pending);   // висит вопрос/аппрув → «ожидает ответа» (даже если файл затих); иначе пишется → «работает»
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
   if (!d.active && !pending) stopTail();   // остываем только когда файл затих И нет висящих вопросов/аппрувов (иначе агент ждёт ответ — держим опрос)
 }

@@ -59,7 +59,7 @@ export async function openSession(file){
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
   resurfaceApprovals(file);   // висящие аппрувы (обрыв SSE их не решил) — снова показать и ждать решение
-  S.sessionMode = 'default';   // при открытии существующей сессии — обычный режим (модель/effort — сохранённые)
+  S.sessionMode = localStorage.getItem('deckMode') || 'default';   // сохранённый режим (как модель/effort) — перезаход больше не сбрасывает выбор на default
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
   loadBuilds(t);       // live-статус сборок TeamCity в рейл

@@ -180,20 +180,20 @@ export function startAgentsPoll(file){ stopAgentsPoll(); S.agentsTimer = setInte
 export async function hydrateJira(fresh){   // фоновая подгрузка статусов Jira для карточек (клиент-кэш 60с + серверный 30с). fresh — рефреш дашборда: мимо кэшей
   if (S.jiraHydrating) return; S.jiraHydrating = true;
   const now = Date.now();
-  const wos = [...new Set(S.SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 30);
-  let changed = false, gated = false;
+  const wos = [...new Set(S.SESSIONS.filter(s => s.wo).map(s => s.wo))].slice(0, 150);   // ВСЕ WO доски, не только 30 свежих: иначе у задач ниже топ-30 нет Jira-статуса → «Заблокировано» и прочие Jira-уточнения к ним не применяются
+  let changed = false, done = 0;
   for (const wo of wos){
     const c = JIRA_CACHE[wo];
     if (!fresh && c && now - c.ts < LIVE_TTL) continue;
     try {
       const r = await fetch('/api/jira?wo=' + encodeURIComponent(wo) + (fresh ? '&refresh=1' : ''), { cache:'no-store' });
       const d = await r.json();
-      if (!d.available){ gated = true; break; }   // нет токена — не долбим по всем wo
+      if (!d.available){ break; }   // нет токена/Jira недоступна — не долбим по всем wo
       JIRA_CACHE[wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };
       changed = true;
+      if (++done % 12 === 0 && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);   // прогрессивно: колонки заполняются по мере доставки, а не одним скачком в конце (при 150 wo это ~десятки секунд)
     } catch {}
   }
   S.jiraHydrating = false;
   if (changed && (S.activeView==='board' || S.activeView==='status')) renderBoard(false);
-  void gated;
 }

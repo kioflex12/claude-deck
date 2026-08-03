@@ -191,7 +191,7 @@ function openModePop(){
     <div class="mp-eff"><div class="mp-eff-top"><span>Effort</span><b id="mpEffLbl">${esc(effs[ei].label.replace(/^Effort:\s*/,''))}</b></div>
       <input type="range" class="mp-slider" id="mpEff" min="0" max="${Math.max(0,effs.length-1)}" step="1" value="${ei}"${effs.length<=1?' disabled':''}></div>`;
   pop.hidden = false;
-  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ S.sessionMode=r.dataset.m; paintMode(); openModePop(); }));
+  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ S.sessionMode=r.dataset.m; localStorage.setItem('deckMode',S.sessionMode); paintMode(); openModePop(); }));
   const ms = pop.querySelector('#mpModel');
   if (ms) ms.onchange = ()=>{ S.sessionModel=ms.value; localStorage.setItem('deckModel',S.sessionModel); openModePop(); paintMode(); };
   const es = pop.querySelector('#mpEff'), el = pop.querySelector('#mpEffLbl');
@@ -206,6 +206,7 @@ function toggleModePop(){ const pop=document.getElementById('modePop'); if (!pop
 export function cycleMode(){
   const i = MODE_ORDER.indexOf(S.sessionMode);
   S.sessionMode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
+  localStorage.setItem('deckMode', S.sessionMode);
   paintMode();
   const pop = document.getElementById('modePop'); if (pop && !pop.hidden) openModePop();   // поповер открыт → отразить смену
 }
