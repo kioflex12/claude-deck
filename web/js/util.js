@@ -40,12 +40,16 @@ function mdToHtml(src){
     return ' B'+(blocks.length-1)+' ';
   });
   s = esc(s);
+  const splitCells = (ln) => ln.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+  const isDelim = (ln) => /-/.test(ln) && splitCells(ln).every(c=>/^:?-+:?$/.test(c));   // строка-разделитель GFM-таблицы: |---|:--:|
+  const alignOf = (c) => { const l=c.startsWith(':'), r=c.endsWith(':'); return l&&r?'center':r?'right':l?'left':''; };
   const lines = s.split('\n');
   const html = [];
   let para = [], list = null;
   const flushPara = () => { if (para.length){ html.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } };
   const flushList = () => { if (list){ html.push('<'+list.type+'>'+list.items.map(x=>'<li>'+mdInline(x)+'</li>').join('')+'</'+list.type+'>'); list=null; } };
-  for (const line of lines){
+  for (let i = 0; i < lines.length; i++){
+    const line = lines[i];
     const mf = line.match(/^ B(\d+) $/);
     if (mf){ flushPara(); flushList(); html.push(blocks[+mf[1]]); continue; }
     if (/^\s*$/.test(line)){ flushPara(); flushList(); continue; }
@@ -54,6 +58,23 @@ function mdToHtml(src){
     if (mh){ flushPara(); flushList(); const lvl=Math.min(mh[1].length,6); html.push('<h'+lvl+'>'+mdInline(mh[2])+'</h'+lvl+'>'); continue; }
     const mq = line.match(/^\s*&gt;\s?(.*)$/);
     if (mq){ flushPara(); flushList(); html.push('<blockquote>'+mdInline(mq[1])+'</blockquote>'); continue; }
+    // GFM-таблица: строка с '|' + следующая строка-разделитель того же числа колонок (счётчик отсекает «абзац с | над hr»).
+    if (line.includes('|') && i+1 < lines.length && isDelim(lines[i+1])){
+      const heads = splitCells(line), aligns = splitCells(lines[i+1]).map(alignOf);
+      if (aligns.length === heads.length){
+        flushPara(); flushList();
+        const cell = (c,tag,al) => '<'+tag+(al?' style="text-align:'+al+'"':'')+'>'+mdInline(c||'')+'</'+tag+'>';
+        let t = '<table class="cx-table"><thead><tr>'+heads.map((h,j)=>cell(h,'th',aligns[j])).join('')+'</tr></thead><tbody>';
+        let j = i + 2;
+        for (; j < lines.length && lines[j].includes('|'); j++){
+          const cs = splitCells(lines[j]);
+          t += '<tr>'+heads.map((_,c)=>cell(cs[c],'td',aligns[c])).join('')+'</tr>';
+        }
+        html.push('<div class="cx-tblwrap">'+t+'</tbody></table></div>');
+        i = j - 1;
+        continue;
+      }
+    }
     const mu = line.match(/^\s*[-*]\s+(.*)$/);
     if (mu){ flushPara(); if (!list||list.type!=='ul'){ flushList(); list={type:'ul',items:[]}; } list.items.push(mu[1]); continue; }
     const mo = line.match(/^\s*\d+\.\s+(.*)$/);

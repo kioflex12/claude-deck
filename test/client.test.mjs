@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { esc, kTok, fmtTok, pctOf, ctxColor, timeAgo, mdToHtml } from '../web/js/util.js';
-import { jiraColumn, effectiveColumn, cardStatus, searchableText, WF_COLUMNS, WF_LABEL } from '../web/js/columns.js';
+import { jiraColumn, effectiveColumn, cardStatus, searchableText, WF_COLUMNS, WF_LABEL, mrKey } from '../web/js/columns.js';
 
 test('jiraColumn: Jira-статус → колонка/blocked', () => {
   assert.deepEqual(jiraColumn('Blocked', ''), { col: null, blocked: true });
@@ -67,6 +67,23 @@ test('mdToHtml: базовый markdown → html (escape-first)', () => {
   assert.equal(mdToHtml('- a\n- b'), '<ul><li>a</li><li>b</li></ul>');
   assert.ok(mdToHtml('[t](https://a.b)').includes('<a href="https://a.b" target="_blank" rel="noopener">t</a>'));
   assert.ok(mdToHtml('<script>alert(1)</script>').includes('&lt;script&gt;'), 'html экранируется');
+});
+
+test('mdToHtml: GFM-таблицы + защита от ложных', () => {
+  const t = mdToHtml('| A | B |\n|---|---|\n| 1 | **x** |');
+  assert.ok(t.includes('<table class="cx-table">'), 'таблица рендерится');
+  assert.ok(/<th[^>]*>A<\/th>/.test(t) && /<th[^>]*>B<\/th>/.test(t), 'шапка из header-строки');
+  assert.ok(t.includes('<td>1</td>') && t.includes('<strong>x</strong>'), 'ячейки + инлайн-формат внутри');
+  assert.equal((t.match(/<table/g) || []).length, 1, 'ровно одна таблица');
+  assert.ok(!mdToHtml('a | b\nтекст').includes('<table'), 'нет строки-разделителя ниже → не таблица');
+  assert.ok(!mdToHtml('a | b\n---').includes('<table'), 'разделитель другого числа колонок → не таблица (абзац с | над hr)');
+  assert.ok(mdToHtml('| h |\n|:-:|\n| c |').includes('text-align:center'), 'выравнивание из :--:');
+});
+
+test('mrKey: ключ MR-кэша = ветка|wo (не по одной ветке)', () => {
+  assert.equal(mrKey({ gitBranch: 'preprod', wo: 'WO-1' }), 'preprod|WO-1');
+  assert.notEqual(mrKey({ gitBranch: 'preprod', wo: 'WO-1' }), mrKey({ gitBranch: 'preprod', wo: 'WO-2' }), 'разные wo на общей ветке → разные ключи');
+  assert.equal(mrKey({}), '|');
 });
 
 test('format-хелперы', () => {
