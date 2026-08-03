@@ -308,6 +308,10 @@ function wireUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
   autoUpdater.disableDifferentialDownload = true;   // качаем ВЕСЬ инсталлятор, не блочный diff: у неподписанной сборки
                                                     // block-diff давал побитый asar (часть файлов новая, часть старая)
+  // Подпись убрана (self-signed сертификата больше нет) → штатная проверка Authenticode отклоняла бы неподписанную
+  // сборку («not signed by the application owner»). Отключаем её: целостность обеспечивает sha512 из latest.yml
+  // (HTTPS + хэш из GitHub-релиза). Только Windows — verifyUpdateCodeSignature есть лишь у NsisUpdater.
+  if (process.platform === 'win32') autoUpdater.verifyUpdateCodeSignature = () => Promise.resolve(null);
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
   autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
   autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
