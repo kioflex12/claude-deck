@@ -4,8 +4,18 @@ import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { detectClientCuFromText, detectBranchFromText } from '../sessions.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
+
+test('detectClientCuFromText: клиентская копия из путей сессии (самая частая), не из cwd', () => {
+  assert.equal(detectClientCuFromText('правки в client-unity-2/Assets и ещё client-unity-2/foo, вскользь client-unity-1'), 'cu2');
+  assert.equal(detectClientCuFromText('cwd d:/wo_vibecode/vibecode, ничего про копии'), '');
+});
+test('detectBranchFromText: рабочая ветка из текста (самый частый WO-токен ветки)', () => {
+  assert.equal(detectBranchFromText('ветка WO-13887-chat-r4-r5-realtime-preprod; снова WO-13887-chat-r4-r5-realtime-preprod; мимоходом WO-14178-x'), 'WO-13887-chat-r4-r5-realtime-preprod');
+  assert.equal(detectBranchFromText('просто текст без веток'), '');
+});
 const {
   isBaseBranch, pickWorkingBranch, pickBaseBranch,
   classifyUserBlock, buildSessionBlocks, wfInfo, scopeInfo,

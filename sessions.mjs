@@ -146,6 +146,23 @@ export function scopeInfo(st, cwd) {
   const targetEnv = NON_ENVS.has(String(st.targetEnv || '')) ? '' : String(st.targetEnv);
   return { clientCu: clientCu(st.client && st.client.copy, cwd), backend, changedServices: changed.slice(0, 6), statics, targetEnv, merged };
 }
+// Fallback-детект из ТЕКСТА сессии: bugfix-сессии стартуют из центрального репо (cwd=vibecode, gitBranch=preprod), а правят
+// клиентскую копию по абсолютным путям и в кастомной ветке — это видно только в переписке. Берём самое частое упоминание.
+export function detectClientCuFromText(text) {
+  const hits = String(text).match(/client-unity-(\d+)/g);
+  if (!hits) return '';
+  const cnt = {};
+  for (const h of hits) { const n = h.match(/\d+/)[0]; cnt[n] = (cnt[n] || 0) + 1; }
+  const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
+  return top ? 'cu' + top : '';
+}
+export function detectBranchFromText(text) {
+  const hits = String(text).match(/\bWO-\d+-[a-z0-9][a-z0-9._-]{2,}/gi);
+  if (!hits) return '';
+  const cnt = {};
+  for (const h of hits) cnt[h] = (cnt[h] || 0) + 1;
+  return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '';
+}
 
 // -------- сбор списка сессий --------
 
@@ -262,7 +279,7 @@ function textSummary(f) {
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
-  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo };
+  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text) };
   _summaryCache.set(key, c);
   return c;
 }
@@ -274,11 +291,13 @@ function buildSessionSummary(f, wfStates) {
   const st = c.wo ? wfStates.get(c.wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, c.cwd);
+  if (!scope.clientCu && c.clientCuText) scope.clientCu = c.clientCuText;   // копия из путей сессии (bugfix правит копию не из своего cwd)
+  const workBranch = (c.gitBranch && !isBaseBranch(c.gitBranch)) ? c.gitBranch : (c.branchText || c.gitBranch);   // кастомная ветка из текста, если cwd на базовой
   const baseBranch = c.baseBranchText || scope.targetEnv || '';
   return {
     id: f.id,
     file: f.rel,
-    title: nameOf(f.rel) || c.title, lastPrompt: c.lastPrompt, cwd: c.cwd, project: c.project, gitBranch: c.gitBranch, wo: c.wo, model: c.model, baseBranch,
+    title: nameOf(f.rel) || c.title, lastPrompt: c.lastPrompt, cwd: c.cwd, project: c.project, gitBranch: workBranch, wo: c.wo, model: c.model, baseBranch,
     msgs: c.msgs,
     winTokens: c.winTokens,
     ctxPct: Math.min(c.winTokens / CTX_LIMIT, 1),
@@ -419,6 +438,8 @@ export function apiSession(relFile) {
   const st = wo ? loadWfStates().get(wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
+  if (!scope.clientCu){ const cu = detectClientCuFromText(text); if (cu) scope.clientCu = cu; }   // копия из путей сессии (правит копию не из своего cwd)
+  const workBranch = (gitBranch && !isBaseBranch(gitBranch)) ? gitBranch : (detectBranchFromText(text) || gitBranch);   // кастомная ветка из текста, если cwd на базовой
   const baseBranch = pickBaseBranch(branches) || scope.targetEnv || '';
   const notes = notesFromClarifications(st && st.userClarifications);
   return {
@@ -426,7 +447,7 @@ export function apiSession(relFile) {
     file: relFile,
     title: nameOf(relFile) || title, lastPrompt, cwd,
     project: cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : '',
-    gitBranch, baseBranch,
+    gitBranch: workBranch, baseBranch,
     wo,
     model: prettyModel(model),
     winTokens,
