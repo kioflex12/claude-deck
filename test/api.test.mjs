@@ -118,6 +118,19 @@ test('/api/build?branch=preprod (без wo) → мягко: base-branch builds:[
   assert.ok(ok, 'без TC-токена available:false, либо base-branch пустой список сборок');
 });
 
+test('/api/health → 200, сводка трёх интеграций правильной формы (configured/ok — булевы)', async () => {
+  const { status, body } = await getJson('/api/health');
+  assert.equal(status, 200);
+  assert.ok(body.services && typeof body.services === 'object', 'есть объект services');
+  for (const k of ['teamcity', 'gitlab', 'jira']) {
+    assert.ok(body.services[k], 'сервис ' + k + ' присутствует');
+    assert.equal(typeof body.services[k].configured, 'boolean', k + '.configured — булев');
+    assert.equal(typeof body.services[k].ok, 'boolean', k + '.ok — булев');
+    // На старте (до первого запроса к интеграции) ничто не помечено упавшим: свежий сервис ok:true.
+    if (!body.services[k].configured) assert.equal(body.services[k].ok, true, k + ' не настроен → не «упал»');
+  }
+});
+
 test('/api/answer резолвит зарегистрированный pendingQuestions-id ответом пользователя', async () => {
   let got = null;
   const id = 'aq_test1';

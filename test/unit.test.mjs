@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectClientCuFromText, detectBranchFromText } from '../sessions.mjs';
+import { fetchRetry, isTransientStatus } from '../core.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
@@ -19,6 +20,46 @@ test('detectBranchFromText: только ветка WO самой сессии (
   assert.equal(detectBranchFromText(txt, ''), '', 'без WO сессии не угадываем');
   assert.equal(detectBranchFromText('нет веток', 'WO-1'), '');
 });
+test('isTransientStatus: 429/5xx транзиентны (повтор имеет шанс), 2xx/4xx — нет', () => {
+  for (const s of [429, 500, 502, 503, 599]) assert.equal(isTransientStatus(s), true, String(s));
+  for (const s of [200, 301, 400, 404, 409]) assert.equal(isTransientStatus(s), false, String(s));
+});
+
+test('fetchRetry: повторяет транзиентные до первого успеха; 4xx не повторяет; исчерпание отдаёт последний ответ', async () => {
+  const orig = globalThis.fetch;
+  // сценарный фейк fetch: отдаёт элементы seq по очереди (последний — залипает), Error → throw. Считает вызовы.
+  const scripted = (seq) => { const f = async () => { const v = seq[Math.min(f.calls, seq.length - 1)]; f.calls++; if (v instanceof Error) throw v; return v; }; f.calls = 0; return f; };
+  try {
+    let f = scripted([{ ok: false, status: 503 }, { ok: false, status: 503 }, { ok: true, status: 200 }]);
+    globalThis.fetch = f;
+    let r = await fetchRetry('x', {}, { retries: 2, baseDelay: 1 });
+    assert.equal(r.status, 200, '503,503,200 → вернул успех');
+    assert.equal(f.calls, 3, 'ровно 3 попытки (initial + 2 ретрая)');
+
+    f = scripted([{ ok: false, status: 503 }]);
+    globalThis.fetch = f;
+    r = await fetchRetry('x', {}, { retries: 2, baseDelay: 1 });
+    assert.equal(r.status, 503, 'всегда 503 → отдаёт последний ответ, не бросает');
+    assert.equal(f.calls, 3, 'попытки исчерпаны на 3');
+
+    f = scripted([{ ok: false, status: 404 }, { ok: true, status: 200 }]);
+    globalThis.fetch = f;
+    r = await fetchRetry('x', {}, { retries: 2, baseDelay: 1 });
+    assert.equal(r.status, 404, '4xx не повторяем');
+    assert.equal(f.calls, 1, 'ровно одна попытка на 404');
+
+    f = scripted([new Error('network'), { ok: true, status: 200 }]);
+    globalThis.fetch = f;
+    r = await fetchRetry('x', {}, { retries: 2, baseDelay: 1 });
+    assert.equal(r.status, 200, 'сетевая ошибка → ретрай → успех');
+    assert.equal(f.calls, 2);
+
+    f = scripted([new Error('down')]);
+    globalThis.fetch = f;
+    await assert.rejects(fetchRetry('x', {}, { retries: 1, baseDelay: 1 }), /down/, 'сеть падает всегда → бросает после исчерпания');
+  } finally { globalThis.fetch = orig; }
+});
+
 const {
   isBaseBranch, pickWorkingBranch, pickBaseBranch,
   classifyUserBlock, buildSessionBlocks, wfInfo, scopeInfo,

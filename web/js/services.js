@@ -8,6 +8,10 @@ import { aReal, isBaseBranch } from './app.js';
 import { renderBoard } from './board.js';
 import { mrKey } from './columns.js';
 
+// TECH-4: локальный запрос к Deck-серверу оборвался (редко: перезагрузка) — не оставляем плейсхолдер «проверяю…»
+// висеть вечно, заменяем его на нейтральную пометку. Идемпотентно (перезаписываем текст того же узла).
+function probeFailed(boxId, note){ const box = document.getElementById(boxId); if (!box) return; const h = box.querySelector('.rail-hint'); if (h) h.textContent = note; }
+
 function buildDot(b){
   const state = String(b.state||'').toLowerCase(), status = String(b.status||'').toUpperCase();
   if (state==='queued')  return { cls:'run',  label:'в очереди', run:true };
@@ -24,7 +28,7 @@ export async function loadBuilds(t){
   if (isBaseBranch(t.gitBranch) && !t.wo){ box0.innerHTML = `<div class="rail-empty">— сборок нет —</div>`; return; }
   const url = '/api/build?branch=' + encodeURIComponent(t.gitBranch) + '&wo=' + encodeURIComponent(t.wo||'');
   const render = async () => {
-    let d; try { const r = await fetch(url, { cache:'no-store' }); d = await r.json(); } catch { return false; }
+    let d; try { const r = await fetch(url, { cache:'no-store' }); d = await r.json(); } catch { probeFailed('buildBox', 'проверка сборок недоступна'); return false; }
     const box = document.getElementById('buildBox'); if (!box) return false;
     if (!d.available){ box.insertAdjacentHTML('beforeend', `<div class="rail-hint">TeamCity недоступен: ${esc(d.reason||'нет доступа')}</div>`); return false; }
     if (!d.builds || !d.builds.length){ box.innerHTML = `<div class="rail-empty">— сборок для ветки нет —</div>`; return false; }
@@ -51,7 +55,7 @@ function mrPillHTML(m){
 
 export async function loadMrs(t){
   const box = document.getElementById('mrBox'); if (!box) return;
-  let d; try { const r = await fetch('/api/mrs?branch=' + encodeURIComponent(t.gitBranch||'') + '&wo=' + encodeURIComponent(t.wo||''), { cache:'no-store' }); d = await r.json(); } catch { return; }
+  let d; try { const r = await fetch('/api/mrs?branch=' + encodeURIComponent(t.gitBranch||'') + '&wo=' + encodeURIComponent(t.wo||''), { cache:'no-store' }); d = await r.json(); } catch { probeFailed('mrBox', 'проверка MR недоступна'); return; }
   const box2 = document.getElementById('mrBox'); if (!box2) return;
   if (!d.available){ box2.insertAdjacentHTML('beforeend', `<div class="rail-hint">GitLab недоступен: ${esc(d.reason||'нет доступа')}</div>`); return; }
   if (t.gitBranch) MR_CACHE[mrKey(t)] = { ts: Date.now(), mrs: d.mrs||[] };
@@ -98,6 +102,21 @@ export function MR_TTL_RESET(){   // сброс клиентских кэшей 
   for (const k of Object.keys(JIRA_CACHE)) delete JIRA_CACHE[k];
 }
 
+// TECH-4: индикатор деградации интеграций в топбаре. Показываем ТОЛЬКО настроенные (configured) сервисы,
+// у которых последний запрос упал — чтобы падение TeamCity/GitLab/Jira было видно, а не проглочено (пустая колонка/секция).
+const SVC_LABEL = { teamcity: 'TeamCity', gitlab: 'GitLab', jira: 'Jira' };
+export async function refreshHealth(){
+  const el = document.getElementById('svcHealth'); if (!el) return;
+  let d; try { d = await (await fetch('/api/health', { cache:'no-store' })).json(); } catch { return; }   // локальный сервер недоступен — индикатор не трогаем
+  const svc = (d && d.services) || {};
+  const down = Object.keys(svc).filter(k => svc[k] && svc[k].configured && !svc[k].ok);
+  if (!down.length){ el.hidden = true; el.removeAttribute('title'); el.textContent = ''; return; }
+  el.hidden = false;
+  el.textContent = '⚠ ' + down.map(k => SVC_LABEL[k] || k).join(', ');
+  el.title = down.map(k => (SVC_LABEL[k]||k) + ': ' + (svc[k].reason || 'сбой')).join('\n') + '\n\nНажмите — открыть настройки (проверить хост/токен).';
+}
+export function startHealthPoll(){ if (S.healthTimer) return; refreshHealth(); S.healthTimer = setInterval(refreshHealth, 20000); }
+
 function jiraChipHTML(j){
   if (!j || !j.status) return '';
   const cat = j.category || '';
@@ -106,7 +125,7 @@ function jiraChipHTML(j){
 
 export async function loadJira(t){
   const box = document.getElementById('jiraBox'); if (!box || !t.wo) return;
-  let d; try { const r = await fetch('/api/jira?wo=' + encodeURIComponent(t.wo), { cache:'no-store' }); d = await r.json(); } catch { return; }
+  let d; try { const r = await fetch('/api/jira?wo=' + encodeURIComponent(t.wo), { cache:'no-store' }); d = await r.json(); } catch { probeFailed('jiraBox', 'проверка Jira недоступна'); return; }
   const box2 = document.getElementById('jiraBox'); if (!box2) return;
   if (!d.available){ box2.innerHTML = `<div class="rail-hint">Jira недоступна: ${esc(d.reason||'нет токена')} — стадия из локального состояния</div>`; return; }
   JIRA_CACHE[t.wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary };

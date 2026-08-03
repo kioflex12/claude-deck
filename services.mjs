@@ -1,8 +1,11 @@
 // Deck — интеграции с внешними сервисами: live-статус клиентских сборок TeamCity, MR по ветке из GitLab
 // и статус задачи в Jira. Хосты/токены резолвятся в applyConfig (core); нет токена → мягкая деградация.
 
-import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON } from './core.mjs';
+import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, fetchRetry, markHealth, svcHealth } from './core.mjs';
 import { isBaseBranch } from './text.mjs';
+
+// TECH-4: /api/health — сводка здоровья интеграций для топбар-индикатора (какой сервис деградирует и почему).
+export function apiHealth(res) { sendJSON(res, { services: svcHealth }); }
 
 // -------- TeamCity: live-статус клиентских сборок по ветке (секция «Сборки» в рейле) --------
 // Хост дефолтный, токен из env (TEAMCITY_TOKEN). Нет токена → { available:false } и клиент
@@ -18,10 +21,7 @@ export const _tcCache = new Map();   // branch -> { ts, data }
 const TC_TTL = 8000;
 
 async function tcJson(pathq) {
-  const r = await fetch(TC_HOST + pathq, {
-    headers: { Authorization: 'Bearer ' + TC_TOKEN, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15000),
-  });
+  const r = await fetchRetry(TC_HOST + pathq, { headers: { Authorization: 'Bearer ' + TC_TOKEN, Accept: 'application/json' } });
   if (!r.ok) throw new Error('TeamCity HTTP ' + r.status);
   return r.json();
 }
@@ -56,7 +56,8 @@ export async function buildActiveFor(branch, wo) {
       const state = b && String(b.state || '').toLowerCase();
       if (state === 'running' || state === 'queued') { active = true; break; }   // finished/none → не активен
     }
-  } catch { active = false; }
+    markHealth('teamcity', { ok: true, reason: '' });
+  } catch (e) { active = false; markHealth('teamcity', { ok: false, reason: (e && e.message) || String(e) }); }
   _buildActiveCache.set(key, { ts: Date.now(), v: active });
   return active;
 }
@@ -77,9 +78,12 @@ export async function apiBuild(res, u) {
     }
     const data = { available: true, host: TC_HOST, branch, builds };
     _tcCache.set(branch, { ts: Date.now(), data });
+    markHealth('teamcity', { ok: true, reason: '' });
     sendJSON(res, data);
   } catch (e) {
-    sendJSON(res, { available: false, reason: (e && e.message) || String(e), host: TC_HOST });
+    const reason = (e && e.message) || String(e);
+    markHealth('teamcity', { ok: false, reason });
+    sendJSON(res, { available: false, reason, host: TC_HOST });
   }
 }
 
@@ -91,7 +95,7 @@ export const _mrCache = new Map();   // branch|wo -> { ts, data }
 const MR_TTL = 30000;
 
 async function glJson(pathq) {
-  const r = await fetch(GL_HOST + pathq, { headers: { 'PRIVATE-TOKEN': GL_TOKEN }, signal: AbortSignal.timeout(15000) });
+  const r = await fetchRetry(GL_HOST + pathq, { headers: { 'PRIVATE-TOKEN': GL_TOKEN } });
   if (!r.ok) throw new Error('GitLab HTTP ' + r.status);
   return r.json();
 }
@@ -121,9 +125,12 @@ export async function apiMrs(res, u) {
     const mrs = (Array.isArray(list) ? list : []).map(mapMr).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
     const data = { available: true, host: GL_HOST, branch, mrs };
     _mrCache.set(key, { ts: Date.now(), data });
+    markHealth('gitlab', { ok: true, reason: '' });
     sendJSON(res, data);
   } catch (e) {
-    sendJSON(res, { available: false, reason: (e && e.message) || String(e), host: GL_HOST });
+    const reason = (e && e.message) || String(e);
+    markHealth('gitlab', { ok: false, reason });
+    sendJSON(res, { available: false, reason, host: GL_HOST });
   }
 }
 
@@ -142,19 +149,21 @@ export async function jiraStatus(wo, fresh) {
   if (!fresh && cached && Date.now() - cached.ts < JIRA_TTL) return cached.data;   // refresh=1 (рефреш дашборда) обходит кэш
   try {
     const auth = Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');
-    const r = await fetch('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '?fields=status,summary', {
+    const r = await fetchRetry('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '?fields=status,summary', {
       headers: { Authorization: 'Basic ' + auth, Accept: 'application/json' },
-      signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) throw new Error('Jira HTTP ' + r.status);
     const j = await r.json();
     const st = j.fields && j.fields.status;
     const data = { available: true, configured: true, status: st ? st.name : null, category: st && st.statusCategory ? st.statusCategory.key : '', summary: (j.fields && j.fields.summary) || '' };
     _jiraCache.set(wo, { ts: Date.now(), data });
+    markHealth('jira', { ok: true, reason: '' });
     return data;
   } catch (e) {
-    const data = { available: false, configured: true, reason: (e && e.message) || String(e) };   // configured:true — Jira настроена, но ход/сеть сбойнули (503/timeout): клиент НЕ должен ронять весь Jira
+    const reason = (e && e.message) || String(e);
+    const data = { available: false, configured: true, reason };   // configured:true — Jira настроена, но ход/сеть сбойнули (503/timeout): клиент НЕ должен ронять весь Jira
     _jiraCache.set(wo, { ts: Date.now(), data });   // кэшируем и неудачу — не долбим на каждый поллинг
+    markHealth('jira', { ok: false, reason });
     return data;
   }
 }

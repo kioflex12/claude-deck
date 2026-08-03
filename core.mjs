@@ -86,6 +86,15 @@ export function writeTokenSecure(service, tok) {
 }
 
 export let PROJECTS_DIR, WO_STATES_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED, TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN;
+// TECH-4: здоровье интеграций для ВИДИМОЙ деградации (не проглатывать падения TeamCity/GitLab/Jira).
+// configured — заданы host+token; ok — прошёл ли последний реальный запрос; reason — текст сбоя.
+// Обновляется markHealth'ом из services.mjs, читается /api/health → топбар-индикатор.
+export const svcHealth = {
+  teamcity: { configured: false, ok: true, reason: '' },
+  gitlab: { configured: false, ok: true, reason: '' },
+  jira: { configured: false, ok: true, reason: '' },
+};
+export function markHealth(svc, patch) { const h = svcHealth[svc]; if (h) Object.assign(h, patch, { ts: Date.now() }); }
 export function applyConfig() {
   const c = loadConfig();
   PROJECTS_DIR = c.claudeProjectsDir || process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
@@ -100,6 +109,11 @@ export function applyConfig() {
   TC_TOKEN = readTokenSecure('teamcity') || process.env.TEAMCITY_TOKEN || '';
   GL_HOST = String(c.gitlabHost || process.env.GITLAB_HOST || '').replace(/\/$/, '');
   GL_TOKEN = readTokenSecure('gitlab') || process.env.GITLAB_TOKEN || '';
+  // «configured» = сервис вообще можно дёргать (есть host+token). Не настроен → индикатор его не показывает
+  // как «упавший» (это не сбой, а осознанно выключенная интеграция).
+  svcHealth.teamcity.configured = !!(TC_TOKEN && TC_HOST);
+  svcHealth.gitlab.configured = !!(GL_TOKEN && GL_HOST);
+  svcHealth.jira.configured = JIRA_ENABLED;
 }
 applyConfig();
 
@@ -153,6 +167,22 @@ export function readJsonBody(req, maxBytes) {
     req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch { reject(new Error('bad json')); } });
     req.on('error', reject);
   });
+}
+// TECH-4: fetch с ретраями/экспоненциальным бэкоффом на ТРАНЗИЕНТНЫХ сбоях. Транзиентное — сеть/timeout/abort
+// либо 429/5xx (перегруз/временный сбой сервиса): повтор имеет шанс. 4xx (кроме 429) повтор не чинит — отдаём как есть.
+// Именно транзиентный 503 Jira обнулял колонку «Заблокировано» — ретрай гасит такие блипы в корне.
+const _delay = (ms) => new Promise((r) => setTimeout(r, ms));
+export function isTransientStatus(s) { return s === 429 || (s >= 500 && s <= 599); }
+export async function fetchRetry(url, opts = {}, { retries = 2, baseDelay = 400, timeout = 15000 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(timeout) });
+      if (r.ok || !isTransientStatus(r.status) || attempt >= retries) return r;   // успех / «плохой запрос» / попытки исчерпаны — отдаём ответ, вызывающий решит по r.ok
+    } catch (e) {
+      if (attempt >= retries) throw e;      // сеть/timeout/abort — тоже транзиентно, но попытки исчерпаны
+    }
+    await _delay(baseDelay * 2 ** attempt);   // экспоненциальный бэкофф: 400мс, 800мс
+  }
 }
 // Перенос пути; renameSync не умеет через диски (projects на C:, deck-trash на D: → EXDEV) — фолбэк copy+remove.
 export function movePath(src, dest) {

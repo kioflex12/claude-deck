@@ -6,7 +6,7 @@ import { renderBoard, renderNow, renderFilters } from './board.js';
 import { loadMcpCatalog } from './mcp.js';
 import { loadSkillsCatalog } from './skills.js';
 import { loadUsage, openUsageModal } from './usage.js';
-import { hydrateMrs, hydrateJira } from './services.js';
+import { hydrateMrs, hydrateJira, startHealthPoll } from './services.js';
 import { openSession } from './session.js';
 import { setView, ensureStatusTab, openPal } from './nav.js';
 import { workingSet, seedJiraFromSessions, startPolling, initNotifyToggle } from './notify.js';
@@ -18,7 +18,7 @@ S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = localStorage.getItem('deckMode') || 'default';   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.41';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.42';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -80,6 +80,7 @@ export async function load(){
   startPolling();
   hydrateMrs(true);    // рефреш страницы (F5) → live-MR СРАЗУ, мимо кэшей (не ждать цикл поллинга)
   hydrateJira(true);   // рефреш страницы (F5) → live-статусы Jira СРАЗУ, мимо кэшей
+  startHealthPoll();   // TECH-4: индикатор деградации интеграций (какой сервис упал) — раз в 20с
   loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
   // Тяжёлые SDK-пробы (spawn claude) — ПОСЛЕ подъёма борда, чтобы не конкурировать за старт и не морозить UI.
   setTimeout(() => {
@@ -93,6 +94,7 @@ function wireTopbar(){
   const a = document.getElementById('authChip'); if (a) a.addEventListener('click', onAuthChip);
   const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);
   const s = document.getElementById('settingsBtn'); if (s) s.addEventListener('click', openSettingsModal);
+  const sh = document.getElementById('svcHealth'); if (sh) sh.addEventListener('click', openSettingsModal);   // клик по индикатору деградации → настройки (проверить хост/токен)
   const sg = document.getElementById('svcGateBtn'); if (sg) sg.addEventListener('click', openSettingsModal);
   const pb = document.getElementById('projBtn'); if (pb) pb.addEventListener('click', (e) => { e.stopPropagation(); toggleProjMenu(); });
 }

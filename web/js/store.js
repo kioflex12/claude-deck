@@ -57,7 +57,7 @@ export const S = {
   agentsTimer: null,
   mrHydrating: false, jiraHydrating: false,
   tailCountTimer: null, railTimer: null,
-  _lastHeavy: 0, usageTimer: null,
+  _lastHeavy: 0, usageTimer: null, healthTimer: null,
 
   // палитра / usage / auth / services / login / обновления
   palItems: [], palSel: 0,
