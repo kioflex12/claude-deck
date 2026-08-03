@@ -8,7 +8,7 @@ import { setView } from './nav.js';
 import { launchUnity } from './unity.js';
 import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira } from './services.js';
 import { wireSideActions } from './dialogs.js';
-import { sideHTML, wireRailTabs } from './rail.js';
+import { sideHTML, wireRailTabs, scopeChipsHTML } from './rail.js';
 import { renderThread, appendHTML } from './transcript.js';
 import { renderComposer, loadSkills } from './composer.js';
 import { stopStream, startRailRefresh, questionCardHTML, wireQuestion, approvalCardHTML, wireApproval } from './stream.js';
@@ -50,11 +50,7 @@ export async function openSession(file){
   bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
-  document.getElementById('sessionSide').innerHTML = sideHTML(t);
-  document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));   // cu-тег в рейле → Unity (фокус/запуск)
-  wireTags();          // секция «Теги»: add/edit/delete
-  wireSideActions(t);  // кнопки «Форкнуть» / «Удалить»
-  wireRailTabs();      // переключатель «Контекст | Артефакты» + клики по артефактам
+  renderRail(t);       // правый рейл: разметка + привязки + live-секции (MR/сборки/Jira)
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
@@ -62,10 +58,31 @@ export async function openSession(file){
   S.sessionMode = localStorage.getItem('deckMode') || 'default';   // сохранённый режим (как модель/effort) — перезаход больше не сбрасывает выбор на default
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
-  loadBuilds(t);       // live-статус сборок TeamCity в рейл
-  loadMrs(t);          // live-MR из GitLab в рейл
-  loadJira(t);         // live-статус Jira в рейл
-  if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → ветка/MR/сборки/Jira обновляются по ходу работы
+  if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → описание/скоуп/ветка/MR/сборки/Jira обновляются по ходу работы
+}
+
+// Полный рендер правого рейла (без консоли/tail): разметка + привязки + live-секции. Зовётся при открытии сессии и при
+// обретении файла новой сессией (событие session). Пропускает перерисовку, если юзер печатает тег (не затираем ввод).
+export function renderRail(t){
+  const side = document.getElementById('sessionSide'); if (!side) return;
+  if (document.activeElement && document.activeElement.id === 'tagsInput') return;
+  side.innerHTML = sideHTML(t);
+  side.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
+  wireTags(); wireSideActions(t); wireRailTabs();
+  loadBuilds(t); loadMrs(t); loadJira(t);
+}
+
+// Surgical-обновление статичных полей рейла по ходу сессии (описание=последний промт, чипы скоупа/clientCu появляются по
+// мере накопления контекста) — без перерисовки live-секций (MR/сборки/Jira обновляются сами, без мигания).
+export function refreshRailFields(t){
+  const side = document.getElementById('sessionSide'); if (!side) return;
+  if (document.activeElement && document.activeElement.id === 'tagsInput') return;
+  const desc = side.querySelector('.desc'); if (desc) desc.textContent = t.lastPrompt || t.title || '—';
+  const chips = side.querySelector('.chips');
+  if (chips){
+    chips.innerHTML = scopeChipsHTML(t);
+    chips.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
+  }
 }
 
 // Ре-сёрфейс висящих вопросов при перезаходе: пока ход в фоне ждёт ответа человека, карточку надо дорисовать в ленту

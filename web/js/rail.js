@@ -7,6 +7,13 @@ import { runningAgents, agentBoxHTML } from './services.js';
 import { openFileViewer } from './ui.js';
 import { S } from './store.js';
 
+// Чипы скоупа (clientCu/backend/статика/базовая ветка) — общий рендер для рейла и его surgical-обновления по ходу сессии.
+export function scopeChipsHTML(t){
+  return (t.clientCu?`<span class="chip sc-cu sc-cu-run" data-cu="${esc(t.clientCu)}" data-cwd="${esc(t.cwd||'')}" title="Открыть/запустить Unity (${esc(t.clientCu)})">${esc(t.clientCu)}</span>`:'')
+    + (t.backend?`<span class="chip sc-be">backend</span>`:'')
+    + (t.statics?`<span class="chip sc-st">статика</span>`:'')
+    + (t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:'');
+}
 export function sideHTML(t){
   const p = Math.round((t.ctxPct||0)*100);
   const stateColor = t.active ? 'var(--good)' : 'var(--text-faint)';
@@ -71,12 +78,7 @@ export function sideHTML(t){
     </div>
     ${t.wo?`<div class="sec"><div class="sec-label">Статус Jira</div><div id="jiraBox"><div class="rail-hint">проверяю Jira…</div></div></div>`:''}
     <div class="sec"><div class="sec-label">Скоуп</div>
-      <div class="chips">
-        ${t.clientCu?`<span class="chip sc-cu sc-cu-run" data-cu="${esc(t.clientCu)}" data-cwd="${esc(t.cwd||'')}" title="Открыть/запустить Unity (${esc(t.clientCu)})">${esc(t.clientCu)}</span>`:''}
-        ${t.backend?`<span class="chip sc-be">backend</span>`:''}
-        ${t.statics?`<span class="chip sc-st">статика</span>`:''}
-        ${t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:''}
-      </div>
+      <div class="chips">${scopeChipsHTML(t)}</div>
       ${(t.backend && Array.isArray(t.changedServices) && t.changedServices.length)?`<div class="rail-hint">сервисы: ${t.changedServices.map(esc).join(', ')}</div>`:''}
     </div>
     <div class="sec" id="agentsSec"${runningAgents(t.agents).length?'':' hidden'}><div class="sec-label">Фоновые агенты</div><div id="agentsBox">${agentBoxHTML(t.agents||[])}</div></div>

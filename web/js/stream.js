@@ -9,7 +9,7 @@ import { ensureNotifyPermission, titleOf, notifyDone } from './notify.js';
 import { sideHTML, wireRailTabs } from './rail.js';
 import { launchUnity } from './unity.js';
 import { wireSideActions } from './dialogs.js';
-import { openSession } from './session.js';
+import { openSession, renderRail, refreshRailFields } from './session.js';
 
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 export function userStop(){
@@ -334,6 +334,9 @@ export async function runPrompt(payload){
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = nm || 'Новая сессия';
       if (nm){ fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: d.file, name: nm }) }).catch(()=>{}); }  // закрепляем имя как заголовок карточки
       S.pendingNewSession = null;   // сессия создана — pending снят
+      // новая/форкнутая сессия обрела файл → сразу показать РЕАЛЬНЫЙ рейл (clientCu из cwd, описание=промт) вместо заглушки и обновлять по ходу
+      fetch('/api/session?file=' + encodeURIComponent(d.file), { cache:'no-store' }).then(r => r.json())
+        .then(t => { if (t && !t.error && S.currentFile === d.file){ SESSION_CACHE[d.file] = t; renderRail(t); startRailRefresh(d.file); } }).catch(()=>{});
     } else if (d.type === 'start'){
       if (d.streamId) S.currentStreamId = d.streamId;   // для гарантированного /api/stop
     } else if (d.type === 'error'){
@@ -380,9 +383,10 @@ export function startRailRefresh(file){
     try { const r = await fetch('/api/session?file=' + encodeURIComponent(file), { cache:'no-store' }); t2 = await r.json(); } catch {}
     if (!t2 || t2.error || S.currentFile !== file) return;
     SESSION_CACHE[file] = t2;
-    loadMrs(t2); loadJira(t2); loadBuilds(t2);     // секции сами обновляют свои боксы (+ #branchVal/#sc-base из MR)
-    if (!t2.active && !S.streaming){ stopRailRefresh(); }   // сессия затихла и Deck не стримит → рефреш больше не нужен
-  }, 25000);
+    refreshRailFields(t2);                          // описание=последний промт + чипы скоупа/clientCu — появляются/меняются по мере накопления контекста
+    loadMrs(t2); loadJira(t2); loadBuilds(t2);      // live-секции обновляют свои боксы на месте (без мигания)
+    if (!t2.active && !t2.serverActive && !S.streaming){ stopRailRefresh(); }   // затихла, хода на сервере нет, Deck не стримит → рефреш не нужен
+  }, 15000);
 }
 
 // Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
