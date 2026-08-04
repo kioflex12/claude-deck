@@ -96,3 +96,43 @@ test('stream.js: questionCardHTML рендерит варианты; wireQuestio
   assert.deepEqual(posted.body.answers, { 'Куда идём?': 'Влево' }, 'answers = { текст: выбранный лейбл }');
   assert.ok(card.classList.contains('q-resolved'), 'карточка помечена отвеченной');
 });
+
+test('stream.js: fake EventSource — done чистит стрим (teardownLive); steered → фоновый tail + serverBusy (A2/R3/T1)', async () => {
+  const w = watchBrokenRefs();
+  let lastES = null;
+  const prevES = globalThis.EventSource;
+  globalThis.EventSource = class { constructor(url){ this.url = url; this.onmessage = null; this.onerror = null; this.readyState = 1; lastES = this; } close(){ this.readyState = 2; } };
+  setFetch(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, count: 0, serverActive: false, blocks: [], questions: [], approvals: [] }), text: async () => '', headers: { get(){ return null; } } }));
+
+  // 1) done → стрим чисто завершён (teardownLive): currentES/currentStreamId сброшены, streaming=false
+  S.currentFile = 'f1'; S.serverBusy = false;
+  runPrompt({ text: 'hi', mode: 'default' });   // sync-setup (GET-путь): создаёт EventSource и вешает onmessage
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(lastES, 'EventSource создан');
+  assert.equal(S.streaming, true, 'старт → setComposerBusy(true)');
+  lastES.onmessage({ data: JSON.stringify({ type: 'start', streamId: 'sx1' }) });
+  assert.equal(S.currentStreamId, 'sx1', 'start → currentStreamId');
+  lastES.onmessage({ data: JSON.stringify({ type: 'done', subtype: 'success', isError: false }) });
+  assert.equal(S.currentES, null, 'done → teardownLive очистил currentES');
+  assert.equal(S.currentStreamId, null, 'done → currentStreamId сброшен');
+  assert.equal(S.streaming, false, 'done → setComposerBusy(false)');
+
+  // 2) steered → НЕ «завершено»: currentStreamId сброшен (Стоп по файлу), serverBusy=true (composer будет steer-ить)
+  const es1 = lastES;
+  S.currentFile = 'f2'; S.serverBusy = false;
+  runPrompt({ text: 'ещё', mode: 'default' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.notEqual(lastES, es1, 'второй ход → новый EventSource');
+  lastES.onmessage({ data: JSON.stringify({ type: 'steered' }) });
+  assert.equal(S.currentES, null, 'steered → ES закрыт');
+  assert.equal(S.currentStreamId, null, 'steered → currentStreamId сброшен');
+  assert.equal(S.serverBusy, true, 'steered → serverBusy=true держится после startTail (гейт R3)');
+
+  globalThis.EventSource = prevES;
+  if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; }
+  if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+  S.currentFile = null; S.serverBusy = false;
+  await new Promise((r) => setTimeout(r, 20));
+  w.stop();
+  assert.deepEqual(w.errors, [], 'нет сломанных ссылок: ' + w.errors.join(' | '));
+});

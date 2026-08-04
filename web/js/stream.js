@@ -282,12 +282,18 @@ export async function runPrompt(payload){
   const es = new EventSource(streamUrl);
   S.currentES = es;
   let finished = false;
+  // A2: единый разбор состояния живого стрима — общий для finish (штатный done), onerror (обрыв канала) и steered
+  // (single-writer). keepStreamId=true оставляет currentStreamId, чтобы Стоп мог оборвать фоновый ход по id (onerror).
+  const teardownLive = ({ keepStreamId } = {}) => {
+    if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+    try { es.close(); } catch {} S.currentES = null; S.liveFinish = null;
+    if (!keepStreamId) S.currentStreamId = null;
+    clearLive(); finalizeThink();
+    if (runEl && runEl.parentElement) runEl.remove();
+  };
   const finish = (note, opts) => {
     if (finished) return; finished = true;
-    if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
-    try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.currentStreamId = null;
-    clearLive(); finalizeThink();
-    runEl.remove();                      // снять индикатор «работает» из чата
+    teardownLive();                      // снять индикатор «работает» из чата + погасить таймер/ES/live-блоки
     if (opts && typeof opts.ctxPct === 'number') updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
     if (opts && opts.maxTurns){   // упёрлись в лимит шагов → кнопка продолжить ход (resume той же сессии)
@@ -398,12 +404,10 @@ export async function runPrompt(payload){
       // R3: сервер подкинул наш промт в УЖЕ живой ход этой сессии (2-й resume не запускаем). Не «завершено» — переходим
       // на фоновый tail: продолжение (включая ответ на наш промт) прилетит через него. Бабл промта уже в консоли.
       finished = true;
-      if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
-      try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.currentStreamId = null; S.streaming = false;   // currentStreamId сбрасываем: Стоп теперь оборвёт живой фоновый ход по файлу сессии, а не по устаревшему id
-      clearLive(); finalizeThink();
-      if (runEl && runEl.parentElement) runEl.remove();
+      teardownLive();   // currentStreamId сброшен: Стоп оборвёт живой фоновый ход по файлу сессии, а не по устаревшему id
+      S.streaming = false;
       const f = S.streamingFile || S.currentFile; S.streamingFile = null; setComposerBusy(false);
-      if (f && S.currentFile === f){ S.serverBusy = true; startTail(f); }
+      if (f && S.currentFile === f){ startTail(f); S.serverBusy = true; }   // serverBusy ПОСЛЕ startTail (startTail→stopTail его сбрасывает) — гейт для composer держится до первого tailTick
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
@@ -422,10 +426,8 @@ export async function runPrompt(payload){
     // встаёт и ждёт. Не объявляем «завершено» (иначе спиннер гаснет, а агент висит незаметно): переходим на фоновое
     // слежение — live-tail показывает дальнейший вывод, tailTick опрашивает висящие вопросы/аппрувы (surfacePending).
     finished = true;
-    if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
-    try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.streaming = false;   // currentStreamId НЕ сбрасываем — Стоп сможет оборвать фоновый ход (/api/stop)
-    clearLive(); finalizeThink();
-    if (runEl && runEl.parentElement) runEl.remove();
+    teardownLive({ keepStreamId: true });   // currentStreamId НЕ сбрасываем — Стоп сможет оборвать фоновый ход (/api/stop)
+    S.streaming = false;
     const f = S.streamingFile || S.currentFile;
     S.streamingFile = null; setComposerBusy(false);
     if (!(f && S.currentFile === f)) return;

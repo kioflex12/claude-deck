@@ -45,6 +45,9 @@ function resolveClaudeCli() {
   return _claudeCli;
 }
 let _sdkQuery = null;
+// T1: тест-seam. apiChat вызывает getSdkQuery() → впрыснутая фейк-функция query позволяет прогнать весь event-цикл и
+// canUseTool-гейтинг БЕЗ спавна реального claude (ESM-синглтон: тест и apiChat делят один _sdkQuery). Только для тестов.
+export function setSdkQueryForTests(fn) { _sdkQuery = fn; }
 export async function getSdkQuery() {
   if (_sdkQuery) return _sdkQuery;
   const mod = await import('@anthropic-ai/claude-agent-sdk');
