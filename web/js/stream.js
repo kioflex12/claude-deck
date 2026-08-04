@@ -267,6 +267,11 @@ export async function runPrompt(payload){
     runEl.remove();                      // снять индикатор «работает» из чата
     if (opts && typeof opts.ctxPct === 'number') updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
+    if (opts && opts.maxTurns){   // упёрлись в лимит шагов → кнопка продолжить ход (resume той же сессии)
+      const cbEl = appendHTML(cons, '<div class="cx-note"><button class="q-submit" type="button" id="continueBtn">▶ Продолжить</button></div>');
+      const cb = cbEl && cbEl.querySelector('#continueBtn');
+      if (cb) cb.addEventListener('click', () => { cb.disabled = true; runPrompt({ text: 'Продолжай с того места, где остановился.', mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments: [] }); });
+    }
     const doneFile = S.streamingFile || S.currentFile;
     const doneTitle = (SESSION_CACHE[S.currentFile] && SESSION_CACHE[S.currentFile].title) || titleOf(S.currentFile) || '';
     S.streamingFile = null;                // сессия больше не «работает» от Deck
@@ -370,7 +375,12 @@ export async function runPrompt(payload){
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
-      finish(d.isError ? 'Завершено с ошибкой' : null, { done:true, ctxPct:d.ctxPct, winTokens:d.winTokens });
+      // Терминальное состояние хода ВСЕГДА видимо (не пустота): лимит шагов → причина + «Продолжить»; ошибка; иначе «завершено».
+      const maxTurns = d.subtype === 'error_max_turns';
+      const note = maxTurns ? 'Достигнут лимит шагов Claude — нажмите «Продолжить», чтобы он продолжил с того же места.'
+        : d.isError ? '⚠ Ход завершился с ошибкой.'
+        : '✓ Claude завершил ход.';
+      finish(note, { done:true, ctxPct:d.ctxPct, winTokens:d.winTokens, maxTurns });
     }
     // 'system' — в UI не показываем
   };

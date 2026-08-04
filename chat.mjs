@@ -243,7 +243,9 @@ export async function apiChat(req, res, u) {
       managedSettings: { permissions: { ask: MANAGED_ASK } },   // страж поверх project-allow (см. MANAGED_ASK)
       includePartialMessages: true,   // дельты текста ассистента
       abortController: ac,
-      maxTurns: 24,
+      maxTurns: 200,   // автономность: дефолт 24 обрывал длинные ходы (bugfix с Read/Grep/Bash легко >24 шагов) — SDK молча
+                       // отдавал result subtype=error_max_turns, и сессия «просто останавливалась». 200 покрывает реальные
+                       // задачи; если всё же упрётся — клиент покажет причину и кнопку «Продолжить» (resume).
     };
     if (model) options.model = model;          // выбор модели из футера ('' = дефолт сессии/аккаунта)
     if (effort) options.effort = effort;       // выбор reasoning-effort из футера
