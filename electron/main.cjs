@@ -310,8 +310,12 @@ function wireUpdater() {
   if (updaterWired) return; updaterWired = true;
   autoUpdater.autoDownload = false;            // НЕ качаем сами: загрузка только по кнопке «Обновить» (deck:downloadUpdate)
   autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
-  autoUpdater.disableDifferentialDownload = true;   // качаем ВЕСЬ инсталлятор, не блочный diff: у неподписанной сборки
-                                                    // block-diff давал побитый asar (часть файлов новая, часть старая)
+  autoUpdater.disableDifferentialDownload = false;   // delta-обновление: качаем ТОЛЬКО изменившиеся блоки. Бандл-бинарь
+                                                    // SDK (~250МБ, claude CLI) между нашими релизами НЕ меняется →
+                                                    // переиспользуется из установленной версии, вместо 154МБ инсталлятора
+                                                    // тянется КБ-МБ изменённого кода. Прошлый «побитый asar» был багом
+                                                    // build.files whitelist (исправлен *.mjs), не diff'а. Целостность —
+                                                    // sha512 из latest.yml: плохой diff → hash-mismatch → авто-фолбэк на full.
   // Подпись убрана (self-signed сертификата больше нет) → штатная проверка Authenticode отклоняла бы неподписанную
   // сборку («not signed by the application owner»). Отключаем её: целостность обеспечивает sha512 из latest.yml
   // (HTTPS + хэш из GitHub-релиза). Только Windows — verifyUpdateCodeSignature есть лишь у NsisUpdater.
