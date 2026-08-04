@@ -364,12 +364,17 @@ export async function apiSessions() {
 // -------- Фаза-4: незакоммиченное в рабочих копиях (для ленты «Требует внимания») --------
 // Считаем ПО РАБОЧЕЙ КОПИИ (cwd сессий), а не по сессии: копии client-unity-N делят несколько сессий, поэтому
 // «N незакоммиченных файлов» — свойство каталога, не одной задачи. Уникальные существующие cwd → git status.
-export const _gitCache = new Map();   // dir -> { ts, data:{count,branch}|null }
+export const _gitCache = new Map();   // normKey(dir) -> { ts, data:{count,branch}|null }
 const GIT_TTL = 45 * 1000;
+// C2: нормализуем ключ каталога — на Windows d:\ и D:\ (регистр буквы диска) и разные разделители иначе давали ДВА
+// git-прохода и ДВЕ строки одного репо в ленте «Требует внимания».
+const normDir = (d) => { let s = path.normalize(String(d || '')); if (process.platform === 'win32') s = s.toLowerCase(); return s; };
 function gitDirty(dir) {
   return new Promise((resolve) => {
     // --porcelain=v1 -b: первая строка «## <branch>...<upstream>», далее по строке на изменённый/неотслеживаемый файл (XY + путь).
-    execFile('git', ['-C', dir, 'status', '--porcelain=v1', '-b'], { timeout: 4000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    // C1: maxBuffer 64МБ (было 4) — репо с большим untracked (артефакты сборки и т.п.) переполнял 4МБ → ENOBUFS →
+    // resolve(null) → репо ТИХО пропадал из ленты «Требует внимания». 64МБ ≈ сотни тысяч строк — с запасом.
+    execFile('git', ['-C', dir, 'status', '--porcelain=v1', '-b'], { timeout: 4000, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
       if (err) { resolve(null); return; }   // не git-репо / git недоступен / таймаут → тихо пропускаем
       let branch = '', count = 0; const files = [];
       for (const ln of String(stdout).split('\n')) {
@@ -384,18 +389,19 @@ function gitDirty(dir) {
 }
 function sessionCwds() {
   const files = listSessionFiles().sort((a, b) => b.mtime - a.mtime).slice(0, LIST_CAP);
-  const set = new Set();
-  for (const f of files) { const cwd = textSummary(f).cwd; if (cwd) set.add(cwd); }   // textSummary кэширован (уже прогрет apiSessions)
-  return [...set];
+  const map = new Map();   // normKey → оригинальный cwd (первый по свежести) — дедуп регистро/разделителе-вариантов (C2)
+  for (const f of files) { const cwd = textSummary(f).cwd; if (cwd) { const k = normDir(cwd); if (!map.has(k)) map.set(k, cwd); } }   // textSummary кэширован (уже прогрет apiSessions)
+  return [...map.values()];
 }
 export async function apiGitDirty() {
   const dirs = sessionCwds().filter((d) => { try { return statSync(d).isDirectory(); } catch { return false; } }).slice(0, 16);
   const repos = [];
   await Promise.all(dirs.map(async (dir) => {
-    const c = _gitCache.get(dir);
+    const key = normDir(dir);
+    const c = _gitCache.get(key);
     let data;
     if (c && Date.now() - c.ts < GIT_TTL) data = c.data;
-    else { data = await gitDirty(dir); _gitCache.set(dir, { ts: Date.now(), data }); }
+    else { data = await gitDirty(dir); _gitCache.set(key, { ts: Date.now(), data }); }
     if (data && data.count > 0) repos.push({ dir, name: path.basename(dir.replace(/[\\/]+$/, '')), branch: data.branch, count: data.count, files: data.files || [] });
   }));
   repos.sort((a, b) => b.count - a.count);
@@ -636,6 +642,7 @@ export async function apiDeleteSession(req, res) {
     if (existsSync(subs)) { try { movePath(subs, path.join(trashDir, ts + '-' + sessionId)); subsMoved = true; } catch {} }
     delete loadTags()[body.file];                                 // теги удалённой сессии тоже чистим
     try { writeJsonAtomic(tagsFile(), loadTags()); } catch {}     // best-effort (удаление уже прошло) — но атомарно, чтобы не побить стор тегов
+    try { setName(body.file, ''); } catch {}                      // C9: и имя удалённой сессии — иначе оставалась висячая запись в deck-names
     sendJSON(res, { ok: true, trash: dest, subsMoved });
   } catch (e) {
     sendJSON(res, { error: (e && e.message) || String(e) }, 500);

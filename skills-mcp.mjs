@@ -11,7 +11,8 @@ import { getSdkQuery, awaitControlReady } from './sdk.mjs';
 
 // -------- скиллы/команды по cwd сессии (для «/» в композере) --------
 
-const SKILLS_CACHE = new Map();
+const SKILLS_CACHE = new Map();   // cwd -> { ts, list } (C4: с TTL — новый скилл иначе невидим до рестарта Deck)
+const SKILLS_TTL = 60 * 1000;
 export function safeDirents(dir) { try { return readdirSync(dir, { withFileTypes: true }); } catch { return []; } }
 function readFrontmatter(file) {
   let text = '';
@@ -48,7 +49,8 @@ function readFrontmatter(file) {
   return { name, description, cat, trig };
 }
 export function collectSkills(cwd) {
-  if (SKILLS_CACHE.has(cwd)) return SKILLS_CACHE.get(cwd);
+  const hit = SKILLS_CACHE.get(cwd);
+  if (hit && Date.now() - hit.ts < SKILLS_TTL) return hit.list;
   const found = [], seen = new Set();
   const add = (name, description, source) => {
     name = (name || '').trim();
@@ -63,7 +65,7 @@ export function collectSkills(cwd) {
   for (const d of safeDirents(userSkills)) if (d.isDirectory()) { const fm = readFrontmatter(path.join(userSkills, d.name, 'SKILL.md')); if (fm) add(fm.name || d.name, fm.description, 'user'); }
   if (projCmds) for (const d of safeDirents(projCmds)) if (d.isFile() && d.name.endsWith('.md')) { const fm = readFrontmatter(path.join(projCmds, d.name)); add((fm && fm.name) || d.name.replace(/\.md$/, ''), fm && fm.description, 'command'); }
   found.sort((a, b) => a.name.localeCompare(b.name));
-  SKILLS_CACHE.set(cwd, found);
+  SKILLS_CACHE.set(cwd, { ts: Date.now(), list: found });
   return found;
 }
 

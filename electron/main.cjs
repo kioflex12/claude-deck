@@ -192,6 +192,9 @@ ipcMain.handle('deck:openPath', async (_e, opts) => {
   let p = String(opts.path || '').trim(); const cwd = String(opts.cwd || '');
   if (!p) return { ok: false, error: 'empty' };
   p = p.replace(/:\d+(?::\d+)?$/, '');                                   // file.md:42[:col] → file.md
+  // C8: не отдаём в shell.openPath исполняемые/скриптовые расширения — иначе крафтнутая в транскрипте ссылка на .exe/.bat
+  // открылась бы = запустилась дефолтным приложением ОС. Ссылки в выводе — это доки (.md/.json/…), не бинарники.
+  if (/\.(exe|bat|cmd|com|scr|msi|ps1|vbs|vbe|js|jse|wsf|wsh|sh|command|app|jar|reg|lnk|hta|cpl|msc|pif|gadget)$/i.test(p)) return { ok: false, error: 'исполняемые файлы через Deck не открываются' };
   const isAbs = /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(p);
   let full = isAbs ? p : (cwd ? path.join(cwd, p) : p);
   try { if (!fs.existsSync(full)) return { ok: false, error: 'not found: ' + full }; } catch {}

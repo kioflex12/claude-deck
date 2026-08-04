@@ -16,11 +16,14 @@ test('jiraColumn: Jira-статус → колонка/blocked (build решае
   assert.deepEqual(jiraColumn('Странный статус', ''), { col: null, blocked: false });
 });
 
-test('effectiveColumn: build-исключение важнее Jira, дальше — статус Jira', () => {
+test('effectiveColumn: терминальные состояния важнее живого билда (C7), билд важнее нетерминальных', () => {
   assert.deepEqual(effectiveColumn({ wo: 'WO-1' }, { 'WO-1': { available: true, status: 'Blocked' } }), { col: 'blocked', blocked: true });
   assert.deepEqual(effectiveColumn({ buildActive: true, wfColumn: 'active' }, {}), { col: 'build', blocked: false }, 'живой билд → Build In Progress');
-  // build-исключение перекрывает Jira-статус (даже Done)
-  assert.equal(effectiveColumn({ wo: 'WO-1b', buildActive: true }, { 'WO-1b': { available: true, status: 'Done' } }).col, 'build', 'живой билд важнее любого Jira-статуса');
+  // C7: Done/Blocked НЕ маскируются живым билдом (re-deploy закрытой/заблокированной задачи не прыгает в «Build In Progress»)
+  assert.equal(effectiveColumn({ wo: 'WO-1b', buildActive: true }, { 'WO-1b': { available: true, status: 'Done' } }).col, 'done', 'Done важнее живого билда');
+  assert.deepEqual(effectiveColumn({ wo: 'WO-1c', buildActive: true }, { 'WO-1c': { available: true, status: 'Blocked' } }), { col: 'blocked', blocked: true }, 'Blocked важнее живого билда');
+  // но нетерминальный Jira-статус живой билд перекрывает (билд реально идёт)
+  assert.equal(effectiveColumn({ wo: 'WO-1d', buildActive: true }, { 'WO-1d': { available: true, status: 'In Progress' } }).col, 'build', 'билд важнее нетерминального In Progress');
   assert.equal(effectiveColumn({ wfColumn: 'build', buildActive: false }, {}).col, 'qa', 'stale build-стадия без живого билда → На QA');
   assert.equal(effectiveColumn({ wo: 'WO-2', wfColumn: 'active' }, { 'WO-2': { available: true, status: 'Ready to Merge' } }).col, 'qa', 'ready-to-merge по Jira → На QA');
 });

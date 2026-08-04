@@ -32,13 +32,18 @@ export function jiraSubLabel(status){
 // Колонка = статус задачи в Jira (source of truth). ЕДИНСТВЕННОЕ исключение — Build In Progress: живой билд TeamCity
 // (собирается ИЛИ в очереди) важнее любого Jira-статуса. Нет данных Jira → фолбэк на стадию dev-workflow (или свежесть).
 export function effectiveColumn(s, jiraCache){
-  if (s.buildActive === true) return { col:'build', blocked:false };       // исключение: живой билд (running/queued)
   const j = s.wo ? jiraCache[s.wo] : null;
+  let jiraCol = null, jiraBlocked = false;
   if (j && j.available && j.status){
     const m = jiraColumn(j.status, j.category);
-    if (m.blocked) return { col:'blocked', blocked:true };
-    if (m.col) return { col:m.col, blocked:false };                        // Jira ведёт: To Do/In Progress/On QA/Done
+    if (m.blocked) jiraBlocked = true; else if (m.col) jiraCol = m.col;    // Jira ведёт: To Do/In Progress/On QA/Done
   }
+  // C7: терминальные/блокирующие состояния приоритетнее живого билда — иначе re-deploy маскировал бы Done/Blocked
+  // (карточка прыгала в «Build In Progress», хотя задача закрыта или заблокирована).
+  if (jiraBlocked) return { col:'blocked', blocked:true };
+  if (jiraCol === 'done') return { col:'done', blocked:false };
+  if (s.buildActive === true) return { col:'build', blocked:false };       // живой билд (running/queued) — если не заблокировано и не Done
+  if (jiraCol) return { col: jiraCol, blocked:false };
   let wfCol = s.wfColumn || (s.active ? 'active' : 'todo');                // Jira недоступна → стадия dev-workflow
   if (wfCol === 'build' || wfCol === 'readymerge') wfCol = 'qa';           // билд-стадия без живого билда / ex-«ждёт мерджа» → На QA
   return { col: wfCol, blocked:false };

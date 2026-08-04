@@ -166,7 +166,11 @@ function watchLoginSuccess(loginId, rec) {
   const t0 = Date.now();
   rec.watcher = setInterval(() => {
     if (rec.finalized || !logins.has(loginId)) { clearInterval(rec.watcher); rec.watcher = null; return; }
-    if (Date.now() - t0 > 180000) { clearInterval(rec.watcher); rec.watcher = null; return; }   // таймаут ~3мин
+    if (Date.now() - t0 > 180000) {   // C3: таймаут ~3мин — не просто гасим watcher, а СНИМАЕМ мёртвый логин целиком,
+      clearInterval(rec.watcher); rec.watcher = null;   // иначе activeLoginId залипал на нём и все будущие логины реюзали дохлую запись
+      rec.done = true; try { rec.child.kill(); } catch {} clearActiveLogin(loginId); logins.delete(loginId);
+      return;
+    }
     rec.ticks = (rec.ticks || 0) + 1;
     // дешёвый сигнал каждые 1.5с (creds-файл обновился) + дорогой `claude auth status` раз в ~4.5с (creds могут быть в keychain)
     if (credsMtime() > rec.credsMtime0 || rec.ticks % 3 === 0) finalizeLoginIfLoggedIn(loginId, rec);

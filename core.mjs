@@ -1,7 +1,7 @@
 // Deck — общий kernel сервера: .env/конфиг, живые конфиг-привязки (applyConfig), секретные токены,
 // проекты-workspaces, словари/константы времени, рантайм-Map'ы разрешений и утилиты ответа/ввода.
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync, cpSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, cpSync, rmSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +50,13 @@ export function getElectron() {
 export function userDataDir() { const e = getElectron(); if (e && e.app) { try { return e.app.getPath('userData'); } catch {} } return HERE; }
 export function configFile() { return path.join(userDataDir(), 'deck-config.json'); }
 // Диагностический лог (почему рвётся SSE-канал чата). Пишем в userData/deck-debug.log — читается снаружи, чинится удалением.
-export function dbgLog(line) { try { writeFileSync(path.join(userDataDir(), 'deck-debug.log'), new Date().toISOString() + ' ' + line + '\n', { flag: 'a' }); } catch {} }
+export function dbgLog(line) {
+  try {
+    const f = path.join(userDataDir(), 'deck-debug.log');
+    try { if (statSync(f).size > 2 * 1024 * 1024) writeFileSync(f, ''); } catch {}   // C9: ротация — не растим лог бесконечно (обнуляем при >2МБ)
+    writeFileSync(f, new Date().toISOString() + ' ' + line + '\n', { flag: 'a' });
+  } catch {}
+}
 export function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 export function saveConfig(patch) {
   const c = loadConfig();
