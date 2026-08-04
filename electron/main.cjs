@@ -311,7 +311,10 @@ let downloadCancel = null;       // CancellationToken текущей загру�
 function wireUpdater() {
   if (updaterWired) return; updaterWired = true;
   autoUpdater.autoDownload = false;            // НЕ качаем сами: загрузка только по кнопке «Обновить» (deck:downloadUpdate)
-  autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
+  // S2: НЕ ставим молча при выходе. Сборка не подписана (нет сертификата) — установку разрешаем ТОЛЬКО явной кнопкой
+  // «Перезапустить и установить» (deck:quitAndInstall), чтобы неподписанный апдейт не применялся без согласия. Скачанное
+  // ждёт кнопки; повторный запуск заново предложит установку. Целостность — sha512 из latest.yml по HTTPS (см. SECURITY.md).
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.disableDifferentialDownload = true;   // ОДНА полная загрузка. Delta давала ДВЕ загрузки на глазах у юзера:
                                                     // быстрый delta-проход по блокам, а когда diff не сходится (bundle-asar
                                                     // меняется каждый билд — timestamps и т.п.) — медленный полный fallback.
@@ -341,14 +344,6 @@ function notifyUpdate(info) {
   if (!Notification.isSupported()) return;
   const n = new Notification({ title: 'Доступно обновление Deck', body: 'Версия ' + ((info && info.version) || '') + ' — откройте Deck и нажмите «Обновить».' });
   n.on('click', showWindow); n.show();
-}
-async function promptInstall(info) {
-  const r = await dialog.showMessageBox(mainWindow, {
-    type: 'info', buttons: ['Перезапустить и обновить', 'Позже'], defaultId: 0, cancelId: 1,
-    title: 'Обновление готово', message: 'Deck ' + ((info && info.version) || '') + ' загружено',
-    detail: 'Установить сейчас? Приложение перезапустится.',
-  });
-  if (r.response === 0) { app.isQuitting = true; autoUpdater.quitAndInstall(); }
 }
 function showAbout() {
   dialog.showMessageBox(mainWindow, {

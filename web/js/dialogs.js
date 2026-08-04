@@ -341,7 +341,7 @@ export function renderUpdateStatus(s){
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
     available:'Доступна версия '+(s.version||'')+'. Нажмите «Обновить».',
     downloading:'Загрузка… '+(s.percent||0)+'%',
-    downloaded:'Обновление '+(s.version||'')+' загружено — нажмите «Перезапустить и установить».',
+    downloaded:'Обновление '+(s.version||'')+' загружено (проверено по sha512). Нажмите «Перезапустить и установить» — само по себе не установится.',
     error:'Ошибка обновления: '+(s.message||''), dev:'Обновления доступны только в установленном приложении.',
   };
   S.UPDATE_STATUS_EL.textContent = m[s.state] || s.state || '';
@@ -354,7 +354,7 @@ export async function openUpdatesModal(){
     <div class="dm-body">
       <div class="dm-text">Текущая версия: <b>${esc(info.version||'?')}</b> · UI build: <b>${esc(UI_BUILD)}</b></div>
       ${String(info.version||'')!==UI_BUILD?'<div class="um-note" style="color:var(--warn)">⚠ Версия приложения и UI не совпали — нажмите «Проверить» и обновитесь до последней.</div>':''}
-      <div class="um-note">«Проверить» → если есть новая версия, появится «Обновить»: скачает с прогрессом и тихо установит с перезапуском (без окна установщика). Пока не нажмёте — ничего не качается.</div>
+      <div class="um-note">«Проверить» → если есть новая версия, появится «Обновить»: скачает с прогрессом. Установка — только по кнопке «Перезапустить и установить» (сама при выходе не ставится). Сборка не подписана; целостность — sha512 из GitHub-релиза по HTTPS.</div>
       <div class="ns-actions" style="justify-content:flex-end"><button class="ns-start" id="updCheck" type="button">Проверить</button></div>
       <button class="ns-start" id="updDownload" type="button" style="display:none;width:100%;margin-top:10px">↓ Обновить</button>
       <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
