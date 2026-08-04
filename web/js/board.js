@@ -9,7 +9,6 @@ import { openWoJira, toast } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
 import { openNewSessionDialog, openRenameDialog, openDeleteDialog, openForkDialog, openQuickJiraDialog, openCreateMrDialog, openDeployDialog } from './dialogs.js';
-import { hydrateMrs, hydrateJira } from './services.js';
 import { openSession } from './session.js';
 import { isBaseBranch } from './app.js';
 
@@ -170,12 +169,21 @@ export function openCardMenu(e, file){
   setTimeout(()=>wire('addEventListener'), 0);   // не ловим текущий contextmenu-евент, что открыл меню
   _cardMenu = { el: menu, cleanup: ()=>wire('removeEventListener') };
 }
-export function refreshCard(file){
+export async function refreshCard(file){
   const s = S.SESSIONS.find(x=>x.file===file);
-  delete SESSION_CACHE[file];
-  if (s && s.gitBranch) delete MR_CACHE[mrKey(s)];
-  if (s && s.wo) delete JIRA_CACHE[s.wo];
-  hydrateMrs(true); hydrateJira(true); renderBoard(false);
+  delete SESSION_CACHE[file];   // транскрипт перечитается при следующем открытии — на колонку не влияет
+  // Рефрешим live-данные ИМЕННО этой карточки в кэше НА МЕСТЕ. НЕ удаляем записи Jira/MR до ре-фетча: колонка
+  // «Заблокировано» (и др. Jira-колонки) вычисляется из JIRA_CACHE[wo] — удалив его, карточка мгновенно выпадала
+  // из своей колонки и «исчезала» до асинхронного re-hydrate (а тот ещё и no-op, если общий цикл уже идёт).
+  if (s){
+    const tasks = [];
+    if (s.wo) tasks.push(fetch('/api/jira?wo=' + encodeURIComponent(s.wo) + '&refresh=1', { cache:'no-store' }).then(r=>r.json())
+      .then(d=>{ if (d && d.available && d.status) JIRA_CACHE[s.wo] = { ts: Date.now(), available:true, status:d.status, category:d.category, summary:d.summary }; }).catch(()=>{}));
+    if (s.gitBranch) tasks.push(fetch('/api/mrs?branch=' + encodeURIComponent(s.gitBranch) + '&wo=' + encodeURIComponent(s.wo||'') + '&refresh=1', { cache:'no-store' }).then(r=>r.json())
+      .then(d=>{ if (d && d.available) MR_CACHE[mrKey(s)] = { ts: Date.now(), mrs: d.mrs || [] }; }).catch(()=>{}));
+    await Promise.all(tasks);
+  }
+  renderBoard(false);
   toast('Обновлено');
 }
 
