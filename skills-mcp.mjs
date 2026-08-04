@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, openSync, readSync, closeSync } from 'node:f
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
-import { sendJSON, CLAUDE_BIN } from './core.mjs';
+import { sendJSON, getClaudeBin } from './core.mjs';
 import { listSessionFiles } from './sessions.mjs';
 import { getSdkQuery, awaitControlReady } from './sdk.mjs';
 
@@ -212,7 +212,7 @@ export function apiMcpLogin(res, u) {
   const name = u.searchParams.get('name') || '';
   if (!MCP_NAME_RE.test(name)) { sendJSON(res, { ok: false, error: 'bad name' }, 400); return; }
   let child;
-  try { child = spawn(CLAUDE_BIN, ['mcp', 'login', name], { windowsHide: true, shell: process.platform === 'win32' }); }
+  try { child = spawn(getClaudeBin(), ['mcp', 'login', name], { windowsHide: true, shell: process.platform === 'win32' }); }
   catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); return; }
   _mcpLoginChildren.add(child);
   let buf = '', replied = false;
@@ -230,7 +230,7 @@ export function apiMcpRemove(res, u) {
   if (!MCP_NAME_RE.test(name)) { sendJSON(res, { ok: false, error: 'bad name' }, 400); return; }   // S3: см. MCP_NAME_RE
   const args = ['mcp', 'remove', name];
   if (['user', 'project', 'local'].includes(scope)) args.push('-s', scope);
-  execFile(CLAUDE_BIN, args, { timeout: 15000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout, stderr) => {
+  execFile(getClaudeBin(), args, { timeout: 15000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout, stderr) => {
     _mcpStatus = { ts: 0, data: null };
     if (err) sendJSON(res, { ok: false, error: String(stderr || (err && err.message) || err).trim().slice(0, 300) });
     else sendJSON(res, { ok: true, output: String(stdout || '').trim().slice(0, 300) });

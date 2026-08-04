@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 import {
-  HERE, CLAUDE_BIN, sendJSON, readJsonBody,
+  HERE, getClaudeBin, sendJSON, readJsonBody, writeJsonAtomic,
   loadConfig, saveConfig, configFile, loadProjects, tokenFile, writeTokenSecure, applyConfig, getElectron, parseEnvFile,
   WO_STATES_DIR, PROJECTS_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED, TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN,
 } from './core.mjs';
@@ -91,7 +91,7 @@ export async function apiImportTokens(req, res) {
   const overwrite = !!(body && body.overwrite);
   const cur = loadConfig();
   // путь к .env из поля настроек — сохраняем ДО скана (scanSecretSources читает config.secretsEnvPath)
-  if (typeof body.secretsEnvPath === 'string') { cur.secretsEnvPath = body.secretsEnvPath.trim(); try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(cur, null, 2)); } catch {} }
+  if (typeof body.secretsEnvPath === 'string') { cur.secretsEnvPath = body.secretsEnvPath.trim(); try { writeJsonAtomic(configFile(), cur); } catch {} }   // D1: атомарно
   const found = scanSecretSources();
   const result = {}, sources = {};
   // Хосты/пути → deck-config.json. Не перетираем заполненное (если не overwrite).
@@ -105,7 +105,7 @@ export async function apiImportTokens(req, res) {
   setCfg('jiraHost', 'JIRA_HOST'); setCfg('jiraEmail', 'JIRA_EMAIL');
   setCfg('teamcityHost', 'TEAMCITY_HOST'); setCfg('gitlabHost', 'GITLAB_HOST');
   setCfg('woStatesDir', 'WO_STATES_DIR'); setCfg('claudeProjectsDir', 'CLAUDE_PROJECTS_DIR');
-  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(cur, null, 2)); } catch {}
+  try { writeJsonAtomic(configFile(), cur); } catch {}   // D1: атомарно
   // Токены → safeStorage. Не перетираем уже сохранённый (если не overwrite). Значения не логируем/не отдаём.
   const setTok = (svc, srcKey) => {
     const f = found[srcKey];
@@ -126,7 +126,7 @@ let _authCache = { ts: 0, data: null };
 const AUTH_TTL = 8000;
 function claudeAuthStatus() {
   return new Promise((resolve) => {
-    execFile(CLAUDE_BIN, ['auth', 'status', '--json'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
+    execFile(getClaudeBin(), ['auth', 'status', '--json'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
       let j = null; try { j = JSON.parse(String(stdout || '').trim()); } catch {}
       if (j && typeof j.loggedIn === 'boolean') resolve({ loggedIn: j.loggedIn, email: j.email || null, orgName: j.orgName || null, subscriptionType: j.subscriptionType || null, authMethod: j.authMethod || null });
       else resolve({ loggedIn: false, reason: (err && err.message) || 'no status', raw: String(stdout || '').slice(0, 200) });
@@ -188,7 +188,7 @@ export function apiAuthLogin(res) {
   }
   const loginId = 'lg_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   let child;
-  try { child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], { windowsHide: true, shell: process.platform === 'win32' }); }
+  try { child = spawn(getClaudeBin(), ['auth', 'login', '--claudeai'], { windowsHide: true, shell: process.platform === 'win32' }); }
   catch (e) { sendJSON(res, { error: 'spawn failed: ' + (e && e.message) }, 500); return; }
   const rec = { child, buf: '', url: '', done: false, ok: false, finalized: false, watcher: null, credsMtime0: credsMtime() };
   logins.set(loginId, rec);
@@ -240,7 +240,7 @@ export function apiAuthCancel(req, res, u) {
   sendJSON(res, { ok: true });
 }
 export function apiAuthLogout(res) {
-  execFile(CLAUDE_BIN, ['auth', 'logout'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, () => {
+  execFile(getClaudeBin(), ['auth', 'logout'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, () => {
     _authCache = { ts: 0, data: null };
     sendJSON(res, { ok: true });
   });

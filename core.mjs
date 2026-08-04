@@ -1,12 +1,13 @@
 // Deck — общий kernel сервера: .env/конфиг, живые конфиг-привязки (applyConfig), секретные токены,
 // проекты-workspaces, словари/константы времени, рантайм-Map'ы разрешений и утилиты ответа/ввода.
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync, cpSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, cpSync, rmSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+import { execSync } from 'node:child_process';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -152,8 +153,29 @@ export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 // POST-телом, храним в памяти по одноразовому токену, поток /api/chat?token=... поднимает подготовленный запрос. --------
 export const stagedRequests = new Map();   // token -> { sessionFile, prompt, mode, attachments, ts }
 
-// Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
-export const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+// X1: единый резолвер бинаря claude для ВСЕХ спавнов (auth, mcp). GUI-запущенный Electron на macOS наследует куцый PATH
+// (Finder не даёт /opt/homebrew/bin, /usr/local/bin) → голый `claude` спавнится с ENOENT. На posix резолвим через PATH,
+// дополненный типовыми локациями, плюс прямые кандидаты. Windows не трогаем (там PATH+shell:true уже работает —
+// не рискуем рабочей настройкой). Ленивый + мемоизированный: execSync НЕ на импорте (тесты/CI не платят и не висят).
+let _claudeBin;
+export function getClaudeBin() {
+  if (_claudeBin !== undefined) return _claudeBin;
+  const override = process.env.CLAUDE_BIN;
+  if (override) return (_claudeBin = override);
+  if (process.platform === 'win32') return (_claudeBin = 'claude');
+  const home = os.homedir();
+  const extra = ['/opt/homebrew/bin', '/usr/local/bin', path.join(home, '.local', 'bin'), path.join(home, '.claude', 'local'), '/usr/bin', '/bin'];
+  const env = { ...process.env, PATH: [process.env.PATH || '', ...extra].filter(Boolean).join(path.delimiter) };
+  try {
+    const out = String(execSync('command -v claude 2>/dev/null || which claude', { encoding: 'utf8', timeout: 6000, env, shell: '/bin/sh' }) || '').trim();
+    const pick = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
+    if (pick && existsSync(pick)) return (_claudeBin = pick);
+  } catch {}
+  for (const c of [path.join(home, '.claude', 'local', 'claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude', path.join(home, '.local', 'bin', 'claude')]) {
+    try { if (existsSync(c)) return (_claudeBin = c); } catch {}
+  }
+  return (_claudeBin = 'claude');   // не нашли — как раньше (пусть spawn попробует PATH)
+}
 
 // S1: секрет процесса для гейта /api/. Сервер инжектит его в <meta> index.html — кросс-ориджин вкладка/встраивание
 // прочитать HTML не может (SOP), поэтому токен добудет только наша страница. Закрывает no-Origin CSRF (напр.
