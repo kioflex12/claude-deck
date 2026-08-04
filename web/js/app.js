@@ -14,12 +14,37 @@ import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
 import { openSettingsModal, openUpdatesModal, renderUpdateStatus } from './dialogs.js';
 import { startAttentionPoll, updateAttentionBadge } from './attention.js';
+
+// S1: единый токен-гейт для /api/. Токен сервер инжектит в <meta name="deck-token"> index.html (кросс-ориджин HTML не
+// прочитать → вредоносная вкладка/встраивание токен не добудет). Патчим fetch/EventSource ОДНИМ местом, чтобы дописывать
+// tk ко всем same-origin /api/-запросам — без правки десятков call-site. Статика (/js,/css) и '/' токена не требуют.
+(function installApiToken(){
+  const meta = typeof document !== 'undefined' && document.querySelector ? document.querySelector('meta[name="deck-token"]') : null;
+  const tok = meta ? (meta.getAttribute('content') || '') : '';
+  if (!tok || typeof window === 'undefined') return;
+  const withTok = (url) => {
+    try {
+      const uu = new URL(url, location.origin);
+      if (uu.origin === location.origin && uu.pathname.startsWith('/api/')) { if (!uu.searchParams.has('tk')) uu.searchParams.set('tk', tok); return uu.pathname + uu.search + uu.hash; }
+    } catch {}
+    return url;
+  };
+  const of = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (typeof input === 'string') return of(withTok(input), init);
+    if (input && input.url) return of(new Request(withTok(input.url), input), init);
+    return of(input, init);
+  };
+  const OES = window.EventSource;
+  if (OES){ const Patched = function(url, cfg){ return new OES(withTok(url), cfg); }; Patched.prototype = OES.prototype; window.EventSource = Patched; }
+})();
+
 S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.61';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.62';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";

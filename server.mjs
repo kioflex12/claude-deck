@@ -15,7 +15,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { HERE, PROJECTS_DIR, WO_STATES_DIR, sendJSON, initRuns } from './core.mjs';
+import { HERE, PROJECTS_DIR, WO_STATES_DIR, sendJSON, initRuns, SESSION_TOKEN } from './core.mjs';
 import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, apiTags, apiSessionName, apiProjects, apiFile, apiDeleteSession, apiGitDirty } from './sessions.mjs';
 import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, apiMcpRemove } from './skills-mcp.mjs';
 import { apiUnityInstances } from './unity.mjs';
@@ -36,8 +36,27 @@ function serveWeb(pathname, res) {
   res.end(buf);
 }
 
+// S1: Deck слушает только loopback (см. startServer). Дополнительно гейтим по Host/Origin — защита от DNS-rebinding
+// (Host не loopback) и кросс-ориджин браузерной вкладки (Origin не наш). Мутирующее/спавнящее /api/ дополнительно
+// требует токен процесса (no-Origin CSRF вроде <img src=/api/chat?...> закрыт только им — Host там наш, Origin нет).
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+function hostnameOf(hostHeader) {
+  let h = String(hostHeader || '').trim().toLowerCase();
+  if (h.startsWith('[')) { const i = h.indexOf(']'); return i >= 0 ? h.slice(1, i) : h; }   // [::1]:port
+  const c = h.indexOf(':'); return c >= 0 ? h.slice(0, c) : h;                                // host:port (у IPv4/hostname двоеточий нет, кроме порта)
+}
+function requestIsLocal(req) {
+  if (!LOCAL_HOSTS.has(hostnameOf(req.headers.host))) return false;   // Host не loopback → DNS-rebinding
+  const origin = req.headers.origin;
+  if (origin) { try { if (!LOCAL_HOSTS.has(new URL(origin).hostname.toLowerCase())) return false; } catch { return false; } }   // кросс-ориджин вкладка
+  return true;
+}
+function tokenOk(req, u) { return (u.searchParams.get('tk') || req.headers['x-deck-token'] || '') === SESSION_TOKEN; }
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || '/', 'http://localhost');
+  if (!requestIsLocal(req)) { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('forbidden'); return; }
+  if (u.pathname.startsWith('/api/') && !tokenOk(req, u)) { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('forbidden: token'); return; }
   if (u.pathname === '/api/sessions') { apiSessions().then((d) => sendJSON(res, d)).catch((e) => sendJSON(res, { error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/session') {
     const out = apiSession(u.searchParams.get('file') || '');
@@ -104,7 +123,8 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/auth/logout') { apiAuthLogout(res); return; }
   if (u.pathname.startsWith('/js/') || u.pathname.startsWith('/css/')) { serveWeb(u.pathname, res); return; }
   try {
-    const html = readFileSync(path.join(HERE, 'index.html'));
+    // S1: инжектим токен процесса в <meta> — читаема только нашей (same-origin) страницей, кросс-ориджин прочитать HTML не может.
+    const html = '<meta name="deck-token" content="' + SESSION_TOKEN + '">\n' + readFileSync(path.join(HERE, 'index.html'), 'utf8');
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(html);
   } catch {
@@ -133,12 +153,13 @@ export function startServer(preferredPort) {
       console.log('');
       resolve({ port, url, close: () => new Promise((r) => server.close(() => r())) });
     };
-    // Предпочтительный порт (стабильный origin → localStorage переживает перезапуск) занят → падаем на свободный listen(0).
+    // S1: слушаем ТОЛЬКО loopback (127.0.0.1) — не 0.0.0.0/::. Машина из LAN до Deck не достучится (RCE-поверхность закрыта).
+    // URL остаётся http://localhost:port (Chromium резолвит localhost в loopback) — origin не меняется, localStorage жив.
     server.once('error', (e) => {
-      if (e && e.code === 'EADDRINUSE' && listenPort !== 0) server.listen(0, done);
+      if (e && e.code === 'EADDRINUSE' && listenPort !== 0) server.listen(0, '127.0.0.1', done);
       else console.error('Deck server listen error:', (e && e.message) || e);
     });
-    server.listen(listenPort, done);
+    server.listen(listenPort, '127.0.0.1', done);
   });
 }
 
@@ -150,4 +171,4 @@ if (_isMain) startServer(Number(process.env.PORT) || 4317);
 export { isBaseBranch, pickWorkingBranch, pickBaseBranch, classifyUserBlock, buildSessionBlocks, briefArg, woOf, columnByAge } from './text.mjs';
 export { wfInfo, scopeInfo } from './sessions.mjs';
 export { isReadOnlyTool, buildUserMessage, makeInputChannel } from './chat.mjs';
-export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop
+export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams, SESSION_TOKEN } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop, токен-гейта

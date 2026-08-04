@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { randomBytes } from 'node:crypto';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -153,6 +154,11 @@ export const stagedRequests = new Map();   // token -> { sessionFile, prompt, mo
 
 // Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
 export const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+
+// S1: секрет процесса для гейта /api/. Сервер инжектит его в <meta> index.html — кросс-ориджин вкладка/встраивание
+// прочитать HTML не может (SOP), поэтому токен добудет только наша страница. Закрывает no-Origin CSRF (напр.
+// <img src="http://localhost:PORT/api/chat?...&prompt=...">), который Host/Origin-гейт пропустил бы (Host=localhost, Origin нет).
+export const SESSION_TOKEN = randomBytes(24).toString('hex');
 
 // -------- Статус ходов (наблюдаемость фона) --------
 // Ход, запущенный Deck'ом, помечается running, а по завершении — терминальным состоянием (done | max_turns | error |

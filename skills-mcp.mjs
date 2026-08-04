@@ -202,9 +202,11 @@ export async function apiMcpStatus(res, u) {
 // Authenticate: `claude mcp login <name>` — OAuth-логин к серверу (HTTP/SSE/claude.ai-коннектор), открывает браузер и
 // самозавершается через колбэк (как claude auth login). Отвечаем сразу (браузер открыт), клиент поллит статус до connected.
 const _mcpLoginChildren = new Set();
+// S3: имя MCP уходит в spawn с shell:true (Windows) → без валидации `& | " %..%` вырвались бы в cmd.exe (RCE).
+const MCP_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 export function apiMcpLogin(res, u) {
   const name = u.searchParams.get('name') || '';
-  if (!name) { sendJSON(res, { ok: false, error: 'no name' }, 400); return; }
+  if (!MCP_NAME_RE.test(name)) { sendJSON(res, { ok: false, error: 'bad name' }, 400); return; }
   let child;
   try { child = spawn(CLAUDE_BIN, ['mcp', 'login', name], { windowsHide: true, shell: process.platform === 'win32' }); }
   catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); return; }
@@ -221,7 +223,7 @@ export function apiMcpLogin(res, u) {
 export function apiMcpRemove(res, u) {
   const name = u.searchParams.get('name') || '';
   const scope = u.searchParams.get('scope') || '';
-  if (!name) { sendJSON(res, { ok: false, error: 'no name' }, 400); return; }
+  if (!MCP_NAME_RE.test(name)) { sendJSON(res, { ok: false, error: 'bad name' }, 400); return; }   // S3: см. MCP_NAME_RE
   const args = ['mcp', 'remove', name];
   if (['user', 'project', 'local'].includes(scope)) args.push('-s', scope);
   execFile(CLAUDE_BIN, args, { timeout: 15000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout, stderr) => {

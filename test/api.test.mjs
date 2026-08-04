@@ -2,6 +2,7 @@
 // папкой проектов (фикстур-сессии). Проверяем ФОРМУ ответов и мягкую деградацию — без реального Jira/TC/claude.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,7 +46,10 @@ before(async () => {
 });
 after(async () => { if (srv) await srv.close(); try { rmSync(tmp, { recursive: true, force: true }); } catch {} });
 
-const getJson = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.json() }; };
+// S1: /api/ теперь за токен-гейтом. Тест шлёт его как настоящая страница (сервер отдаёт токен в <meta> index.html).
+const addTk = (p) => p + (p.includes('?') ? '&' : '?') + 'tk=' + encodeURIComponent(mod.SESSION_TOKEN || '');
+const getJson = async (p) => { const r = await fetch(base + addTk(p)); return { status: r.status, body: await r.json() }; };
+const postJson = async (p, b) => { const r = await fetch(base + addTk(p), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
 
 test('/api/sessions → 200, массив с ожидаемыми полями', async () => {
   const { status, body } = await getJson('/api/sessions');
@@ -58,6 +62,24 @@ test('/api/sessions → 200, массив с ожидаемыми полями',
   for (const k of ['id', 'file', 'title', 'wfColumn', 'mtime', 'wo', 'gitBranch']) assert.ok(k in s, 'поле ' + k);
   assert.equal(s.wo, 'WO-777', 'WO из рабочей ветки');
   assert.equal(s.gitBranch, 'WO-777-test');
+});
+
+test('S1: /api/ без токена → 403; чужой Origin → 403; чужой Host → 403; index отдаёт <meta> с токеном', async () => {
+  const noTk = await fetch(base + '/api/sessions');
+  assert.equal(noTk.status, 403, 'без токена /api/ закрыт (no-Origin CSRF отсечён)');
+  const xorigin = await fetch(base + addTk('/api/sessions'), { headers: { Origin: 'https://evil.example' } });
+  assert.equal(xorigin.status, 403, 'кросс-ориджин вкладка отбита даже с токеном');
+  // Host свободно ставим только сырым http-запросом (undici блокирует forbidden-заголовок Host).
+  const port = new URL(base).port;
+  const rawStatus = (headers) => new Promise((resolve) => {
+    const r = http.request({ host: '127.0.0.1', port, path: addTk('/api/sessions'), method: 'GET', headers }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    r.on('error', () => resolve(0)); r.end();
+  });
+  assert.equal(await rawStatus({ Host: 'evil.example' }), 403, 'чужой Host (DNS-rebinding) отбит');
+  assert.equal(await rawStatus({ Host: '127.0.0.1:' + port }), 200, 'loopback Host + токен → ок');
+  const idx = await fetch(base + '/');
+  assert.equal(idx.status, 200, 'index без токена доступен (bootstrap)');
+  assert.match(await idx.text(), /meta name="deck-token"/, 'токен инжектится в HTML для same-origin страницы');
 });
 
 test('/api/session?file=<fixture> → 200 blocks; traversal и не-.jsonl → 400', async () => {
@@ -143,7 +165,7 @@ test('/api/git-dirty → 200, {repos:[]} (фикстур-cwd не git-репо �
 });
 
 test('быстрые действия без настроенных интеграций → мягкий ok:false с причиной (не падение)', async () => {
-  const post = async (p, b) => { const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
+  const post = postJson;
   const jc = await post('/api/jira-comment', { wo: 'WO-1', body: 'тест' });
   assert.equal(jc.status, 200); assert.equal(jc.body.ok, false); assert.match(jc.body.error, /Jira/);
   const mr = await post('/api/create-mr', { sourceBranch: 'WO-1-x', targetBranch: 'preprod', repoHint: 'client-unity' });
@@ -163,14 +185,14 @@ test('/api/env-status → 200, без настроенных окружений 
 });
 
 test('/api/config/test → 200, {ok, message}; неизвестный svc → ok:false', async () => {
-  const r = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
+  const r = await fetch(base + addTk('/api/config/test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
   const body = await r.json();
   assert.equal(r.status, 200);
   assert.equal(typeof body.ok, 'boolean');
   assert.equal(typeof body.message, 'string');
   assert.equal(body.ok, false, 'без host/email/token — не ок');
 
-  const bad = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'nope' }) });
+  const bad = await fetch(base + addTk('/api/config/test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'nope' }) });
   const badBody = await bad.json();
   assert.equal(badBody.ok, false, 'неизвестный сервис → ok:false');
 });
@@ -179,14 +201,14 @@ test('/api/answer резолвит зарегистрированный pendingQ
   let got = null;
   const id = 'aq_test1';
   mod.pendingQuestions.set(id, { questions: [{ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }], sessionKey: 'sess-aaa', resolve: (answers) => { got = answers; mod.pendingQuestions.delete(id); } });
-  const r = await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, answers: { 'Q?': 'A' } }) });
+  const r = await fetch(base + addTk('/api/answer'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, answers: { 'Q?': 'A' } }) });
   const body = await r.json();
   assert.equal(r.status, 200);
   assert.equal(body.ok, true, 'известный id → ok:true');
   assert.deepEqual(got, { 'Q?': 'A' }, 'resolve вызван с ответом пользователя');
   assert.equal(mod.pendingQuestions.has(id), false, 'id снят после ответа');
 
-  const bad = await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'aq_unknown', answers: {} }) });
+  const bad = await fetch(base + addTk('/api/answer'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'aq_unknown', answers: {} }) });
   const badBody = await bad.json();
   assert.equal(badBody.ok, false, 'неизвестный id → ok:false');
 });
@@ -221,14 +243,14 @@ test('/api/pending-approvals возвращает висящие аппрувы 
 test('/api/chat-input докидывает промт в живой ход по ключу сессии; нет живого → ok:false', async () => {
   let got = null;
   mod.activeStreams.set('sx_steer', { ac: { abort() {} }, key: 'sess-steer', push: (m) => { got = m; return true; } });
-  const r = await fetch(base + '/api/chat-input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', prompt: 'дальше' }) });
+  const r = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', prompt: 'дальше' }) });
   const b = await r.json();
   assert.equal(r.status, 200);
   assert.equal(b.ok, true, 'нашёл живой ход по ключу → запушено');
   assert.ok(got && got.message && Array.isArray(got.message.content), 'push получил SDKUserMessage');
   mod.activeStreams.delete('sx_steer');
 
-  const r2 = await fetch(base + '/api/chat-input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/no-such.jsonl', prompt: 'x' }) });
+  const r2 = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/no-such.jsonl', prompt: 'x' }) });
   const b2 = await r2.json();
   assert.equal(b2.ok, false, 'нет живого хода → ok:false (клиент фолбэкнется на новый ход)');
 });
