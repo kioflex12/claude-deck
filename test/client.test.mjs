@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { esc, kTok, fmtTok, pctOf, ctxColor, timeAgo, mdToHtml } from '../web/js/util.js';
-import { jiraColumn, effectiveColumn, cardStatus, searchableText, WF_COLUMNS, WF_LABEL, mrKey } from '../web/js/columns.js';
+import { jiraColumn, effectiveColumn, cardStatus, searchableText, attentionReasons, WF_COLUMNS, WF_LABEL, mrKey } from '../web/js/columns.js';
 
 test('jiraColumn: Jira-статус → колонка/blocked (build решается отдельно, readymerge→qa)', () => {
   assert.deepEqual(jiraColumn('Blocked', ''), { col: null, blocked: true });
@@ -47,6 +47,25 @@ test('searchableText: находит wo/cu/backend/ветку/теги/стат�
   for (const needle of ['wo-777', 'cu2', 'backend', 'chat-service', 'preupdate', 'urgent', 'работает', 'на qa']) assert.ok(t.includes(needle), 'ищется: ' + needle);
   const t2 = searchableText(s, {}, {}, false);
   assert.ok(!t2.includes('работает'), 'working=false → без «работает»');
+});
+
+test('attentionReasons: блокер/упавшая сборка/ожидание проверки; done и «чистые» — пусто', () => {
+  // блокер (по Jira-статусу) — severity 3, деталь = статус
+  const blk = attentionReasons({ wo: 'WO-A' }, { 'WO-A': { available: true, status: 'Blocked' } });
+  assert.equal(blk.length, 1); assert.equal(blk[0].kind, 'blocked'); assert.equal(blk[0].sev, 3); assert.equal(blk[0].detail, 'Blocked');
+  // упавшая сборка
+  const bf = attentionReasons({ buildFailed: true, wfColumn: 'build' }, {});
+  assert.deepEqual(bf.map((r) => r.kind), ['build']);
+  // ожидание локальной проверки (билд готов, не отдан в QA)
+  const lc = attentionReasons({ wfColumn: 'qa', wfQa: 'localcheck' }, {});
+  assert.deepEqual(lc.map((r) => r.kind), ['verify']);
+  // несколько причин сразу — по убыванию срочности
+  const multi = attentionReasons({ wo: 'WO-B', buildFailed: true }, { 'WO-B': { available: true, status: 'Blocked' } });
+  assert.deepEqual(multi.map((r) => r.kind), ['blocked', 'build']);
+  // завершённая задача — не «требует внимания», даже с мигнувшим сигналом
+  assert.deepEqual(attentionReasons({ wo: 'WO-C', buildFailed: true }, { 'WO-C': { available: true, status: 'Done' } }), []);
+  // ничего не горит
+  assert.deepEqual(attentionReasons({ wfColumn: 'active', active: true }, {}), []);
 });
 
 test('WF_COLUMNS/WF_LABEL: словари колонок (без «Ждёт мерджа»)', () => {

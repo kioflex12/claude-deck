@@ -134,6 +134,14 @@ test('/api/health → 200, сводка трёх интеграций прави
   }
 });
 
+test('/api/git-dirty → 200, {repos:[]} (фикстур-cwd не git-репо → пусто, без падения)', async () => {
+  const { status, body } = await getJson('/api/git-dirty');
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(body.repos), 'repos — массив');
+  // Фикстур-cwd — несуществующий путь либо не-git временный каталог: git тихо отсеивается → пустой список.
+  assert.equal(body.repos.length, 0, 'нет git-репо среди фикстур → ничего не требует внимания');
+});
+
 test('/api/config/test → 200, {ok, message}; неизвестный svc → ok:false', async () => {
   const r = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
   const body = await r.json();

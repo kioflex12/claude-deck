@@ -6,6 +6,7 @@ import { openSession } from './session.js';
 import { setStreamStatus } from './stream.js';
 import { hydrateMrs, hydrateJira } from './services.js';
 import { renderUsageBar } from './usage.js';
+import { updateAttentionBadge, renderAttention } from './attention.js';
 
 export function workingSet(){ const set = new Set(); for (const s of S.SESSIONS) if (isWorking(s)) set.add(s.file); return set; }
 export function titleOf(file){ const s = S.SESSIONS.find(x=>x.file===file); return s ? s.title : ''; }
@@ -105,6 +106,8 @@ export async function pollSessions(force){
   } catch { S.polling = false; return; }
   if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(!!force); hydrateJira(!!force); } }   // renderBoard(false) сохраняет colScroll; force → гидрация мимо кэшей (свежий MR/Jira сразу)
   renderUsageBar();
+  updateAttentionBadge();                                  // счётчик «Требует внимания» — из свежих SESSIONS (блокеры/упавшие сборки/проверка)
+  if (S.activeView === 'attention') renderAttention();
   S.polling = false;
 }
 export function startPolling(){ if (S.pollTimer) clearInterval(S.pollTimer); S.pollTimer = setInterval(pollSessions, 7000); }

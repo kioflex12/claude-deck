@@ -54,6 +54,21 @@ export function cardStatus(s, jiraCache){
   }
   return { col:e.col, blocked:e.blocked, sub };
 }
+// Фаза-4: причины «требует внимания» для сессии (убыв. срочности: блокер > упавшая сборка > ожидание проверки).
+// Пусто, если задача завершена (done) или сигналов нет. buildFailed — из /api/sessions (live TeamCity), wfQa='localcheck'
+// — билд готов, но задача ещё не отдана в QA (ждёт локальной проверки / проверки на устройстве).
+export function attentionReasons(s, jiraCache){
+  const st = cardStatus(s, jiraCache);
+  if (st.col === 'done') return [];
+  const out = [];
+  if (st.blocked){
+    const j = s.wo && jiraCache[s.wo];
+    out.push({ kind:'blocked', sev:3, label:'Заблокирована', detail:(j && j.available && j.status) ? j.status : '' });
+  }
+  if (s.buildFailed) out.push({ kind:'build', sev:2, label:'Сборка упала', detail:'клиентская сборка TeamCity' });
+  if (s.wfQa === 'localcheck') out.push({ kind:'verify', sev:1, label:'Ждёт проверки', detail:'билд готов — проверьте локально / на устройстве' });
+  return out;
+}
 export function searchableText(s, jiraCache, mrCache, working){
   const parts = [s.wo, s.title, s.lastPrompt, s.project, s.gitBranch, s.model];
   if (s.clientCu) parts.push(s.clientCu);

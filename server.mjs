@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HERE, PROJECTS_DIR, WO_STATES_DIR, sendJSON } from './core.mjs';
-import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, apiTags, apiSessionName, apiProjects, apiFile, apiDeleteSession } from './sessions.mjs';
+import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, apiTags, apiSessionName, apiProjects, apiFile, apiDeleteSession, apiGitDirty } from './sessions.mjs';
 import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, apiMcpRemove } from './skills-mcp.mjs';
 import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
@@ -52,6 +52,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/api/session-artifacts') { sendJSON(res, sessionArtifacts(u.searchParams.get('file') || '')); return; }
+  if (u.pathname === '/api/git-dirty') { apiGitDirty().then((d) => sendJSON(res, d)).catch((e) => sendJSON(res, { repos: [], error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/skills') {
     const cwd = u.searchParams.get('cwd') || '';
     if (cwd) { const skills = collectSkills(cwd); sendJSON(res, { cwd, count: skills.length, skills }); return; }

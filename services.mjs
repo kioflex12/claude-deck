@@ -90,28 +90,33 @@ async function tcLatestBuild(btId, branch, wo) {
   }
   return null;
 }
-// ЖИВОЙ признак «билд реально идёт» (running/queued в TeamCity). Кэш по branch|wo с АДАПТИВНЫМ TTL:
-// активный билд — короткий TTL (~15с), чтобы быстро поймать завершение; неактивный — обычный (~60с).
-export const _buildActiveCache = new Map();
+// ЖИВОЕ состояние клиентских сборок ветки. Кэш по branch|wo с АДАПТИВНЫМ TTL: активный билд — короткий TTL (~15с),
+// чтобы быстро поймать завершение; неактивный — обычный (~60с). Отдаём ОБА признака: active (running/queued) → колонка
+// «Build In Progress»; failed (последняя ЗАВЕРШЁННАЯ сборка не SUCCESS) → лента «Требует внимания» (красная сборка).
+export const _buildActiveCache = new Map();   // branch|wo -> { ts, v:{active,failed} }
 const BUILD_TTL_ACTIVE = 15 * 1000;
 const BUILD_TTL_IDLE = 60 * 1000;
-export async function buildActiveFor(branch, wo) {
-  if (!TC_TOKEN || !TC_HOST) return false;
+export async function buildStateFor(branch, wo) {
+  if (!TC_TOKEN || !TC_HOST) return { active: false, failed: false };
   const key = (branch || '') + '|' + (wo || '');
   const c = _buildActiveCache.get(key);
-  if (c && Date.now() - c.ts < (c.v ? BUILD_TTL_ACTIVE : BUILD_TTL_IDLE)) return c.v;
-  let active = false;
+  if (c && Date.now() - c.ts < (c.v.active ? BUILD_TTL_ACTIVE : BUILD_TTL_IDLE)) return c.v;
+  let active = false, failed = false;
   try {
     for (const bt of TC_BUILD_TYPES) {
       const b = await tcLatestBuild(bt.id, branch, wo);
-      const state = b && String(b.state || '').toLowerCase();
-      if (state === 'running' || state === 'queued') { active = true; break; }   // finished/none → не активен
+      if (!b) continue;
+      const state = String(b.state || '').toLowerCase();
+      if (state === 'running' || state === 'queued') active = true;             // идёт/в очереди
+      else if (state === 'finished' && b.status && String(b.status).toUpperCase() !== 'SUCCESS') failed = true;   // FAILURE/ERROR — упала
     }
     markHealth('teamcity', { ok: true, reason: '' });
-  } catch (e) { active = false; markHealth('teamcity', { ok: false, reason: (e && e.message) || String(e) }); }
-  _buildActiveCache.set(key, { ts: Date.now(), v: active });
-  return active;
+  } catch (e) { active = false; failed = false; markHealth('teamcity', { ok: false, reason: (e && e.message) || String(e) }); }
+  const v = { active, failed };
+  _buildActiveCache.set(key, { ts: Date.now(), v });
+  return v;
 }
+export async function buildActiveFor(branch, wo) { return (await buildStateFor(branch, wo)).active; }
 export async function apiBuild(res, u) {
   const branch = u.searchParams.get('branch') || '';
   const wo = u.searchParams.get('wo') || '';

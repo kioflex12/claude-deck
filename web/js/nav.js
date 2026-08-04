@@ -10,11 +10,13 @@ import { pollSessions } from './notify.js';
 import { renderSkills } from './skills.js';
 import { renderMcp } from './mcp.js';
 import { loadUnityInstances } from './unity.js';
+import { renderAttention } from './attention.js';
 
 function palIndex(){
   const idx = [];
   idx.push({type:'Вид', label:'Статусы', sub:'по стадии workflow', act:()=>setView('status')});
   idx.push({type:'Вид', label:'Доска сессий', sub:'по свежести', act:()=>setView('board')});
+  idx.push({type:'Вид', label:'Требует внимания', sub:'блокеры · упавшие сборки · проверка · незакоммиченное', act:()=>setView('attention')});
   idx.push({type:'Вид', label:'Скиллы', sub:'каталог', act:()=>setView('skills')});
   idx.push({type:'Вид', label:'MCP-инструменты', sub:'серверы', act:()=>setView('mcp')});
   S.SESSIONS.forEach(s=>idx.push({type:'Сессия', label:s.title, sub:s.project+(s.wo?' · '+s.wo:''), key:(s.title+' '+s.project+' '+(s.gitBranch||'')+' '+(s.lastPrompt||'')).toLowerCase(), act:()=>openSession(s.file)}));
@@ -44,10 +46,11 @@ export function setView(v){
   document.getElementById('viewBoard').style.display = boardish ? 'flex' : 'none';
   document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
   document.getElementById('viewMcp').style.display = v==='mcp' ? 'flex' : 'none';
+  document.getElementById('viewAttention').style.display = v==='attention' ? 'block' : 'none';
   document.getElementById('viewSession').style.display = 'none';
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
-  if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else renderBoard(true);
+  if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else if (v==='attention') renderAttention(); else renderBoard(true);
   if (boardish && leavingSession) pollSessions(true);   // форс-рефреш: свежий список сессий + live MR/Jira сразу после выхода из контекста (не ждём 7с-поллинг)
 }
 

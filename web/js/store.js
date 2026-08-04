@@ -59,6 +59,10 @@ export const S = {
   tailCountTimer: null, railTimer: null,
   _lastHeavy: 0, usageTimer: null, healthTimer: null,
 
+  // лента «Требует внимания» (Фаза-4)
+  ATTENTION_GIT: [],          // незакоммиченные рабочие копии из /api/git-dirty (сессионные сигналы считаются из SESSIONS)
+  attnGitTimer: null,
+
   // палитра / usage / auth / services / login / обновления
   palItems: [], palSel: 0,
   USAGE: null,

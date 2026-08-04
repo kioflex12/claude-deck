@@ -14,7 +14,8 @@ import {
   prettyModel, lastRealModel, lastUsageWindow, countMessages, firstUserWo, columnByAge, isBaseBranch, briefArg,
   buildSessionBlocks,
 } from './text.mjs';
-import { buildActiveFor, jiraStatus } from './services.mjs';
+import { buildStateFor, jiraStatus } from './services.mjs';
+import { execFile } from 'node:child_process';
 import { safeDirents } from './skills-mcp.mjs';
 
 // -------- пользовательские теги на сессию (Deck-side, сессии read-only). Ключ = rel-путь файла. --------
@@ -336,8 +337,8 @@ export async function apiSessions() {
   // dev-workflow). Так ловим реальные ручные/безфлаговые билды по фича-ветке, но НЕ долбим TC по базовым/no-branch/
   // старым todo (80 сессий). Всё параллельно + адаптивный кэш buildActiveFor.
   const buildCands = sessions.filter((s) => s.gitBranch && !isBaseBranch(s.gitBranch) && (s.active || s.wfBuildState === 'running'));
-  await Promise.all(buildCands.map(async (s) => { s.buildActive = await buildActiveFor(s.gitBranch, s.wo); }));
-  for (const s of sessions) if (s.buildActive === undefined) s.buildActive = false;
+  await Promise.all(buildCands.map(async (s) => { const bs = await buildStateFor(s.gitBranch, s.wo); s.buildActive = bs.active; s.buildFailed = bs.failed; }));
+  for (const s of sessions) { if (s.buildActive === undefined) s.buildActive = false; if (s.buildFailed === undefined) s.buildFailed = false; }
 
   // Резолв Jira на сервере (параллельно, кэш 30с) — чтобы колонки были верны уже на ПЕРВОМ рендере (без прыжков).
   if (JIRA_ENABLED) {
@@ -353,6 +354,45 @@ export async function apiSessions() {
   }
 
   return { dir: PROJECTS_DIR, statesDir: WO_STATES_DIR, total: all.length, shown: sessions.length, sessions, activeProject: ap ? { id: ap.id, name: ap.name, path: ap.path } : null };
+}
+
+// -------- Фаза-4: незакоммиченное в рабочих копиях (для ленты «Требует внимания») --------
+// Считаем ПО РАБОЧЕЙ КОПИИ (cwd сессий), а не по сессии: копии client-unity-N делят несколько сессий, поэтому
+// «N незакоммиченных файлов» — свойство каталога, не одной задачи. Уникальные существующие cwd → git status.
+export const _gitCache = new Map();   // dir -> { ts, data:{count,branch}|null }
+const GIT_TTL = 45 * 1000;
+function gitDirty(dir) {
+  return new Promise((resolve) => {
+    // --porcelain=v1 -b: первая строка «## <branch>...<upstream>», далее по строке на изменённый/неотслеживаемый файл.
+    execFile('git', ['-C', dir, 'status', '--porcelain=v1', '-b'], { timeout: 4000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (err) { resolve(null); return; }   // не git-репо / git недоступен / таймаут → тихо пропускаем
+      let branch = '', count = 0;
+      for (const ln of String(stdout).split('\n')) {
+        if (ln.startsWith('## ')) { branch = ln.slice(3).split('...')[0].split(' ')[0]; continue; }
+        if (ln.trim()) count++;
+      }
+      resolve({ count, branch });
+    });
+  });
+}
+function sessionCwds() {
+  const files = listSessionFiles().sort((a, b) => b.mtime - a.mtime).slice(0, LIST_CAP);
+  const set = new Set();
+  for (const f of files) { const cwd = textSummary(f).cwd; if (cwd) set.add(cwd); }   // textSummary кэширован (уже прогрет apiSessions)
+  return [...set];
+}
+export async function apiGitDirty() {
+  const dirs = sessionCwds().filter((d) => { try { return statSync(d).isDirectory(); } catch { return false; } }).slice(0, 16);
+  const repos = [];
+  await Promise.all(dirs.map(async (dir) => {
+    const c = _gitCache.get(dir);
+    let data;
+    if (c && Date.now() - c.ts < GIT_TTL) data = c.data;
+    else { data = await gitDirty(dir); _gitCache.set(dir, { ts: Date.now(), data }); }
+    if (data && data.count > 0) repos.push({ dir, name: path.basename(dir.replace(/[\\/]+$/, '')), branch: data.branch, count: data.count });
+  }));
+  repos.sort((a, b) => b.count - a.count);
+  return { repos };
 }
 
 // -------- транскрипт одной сессии: массив блоков --------

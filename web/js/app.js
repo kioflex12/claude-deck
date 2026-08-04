@@ -13,12 +13,13 @@ import { workingSet, seedJiraFromSessions, startPolling, initNotifyToggle } from
 import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
 import { openSettingsModal, openUpdatesModal, renderUpdateStatus } from './dialogs.js';
+import { startAttentionPoll, updateAttentionBadge } from './attention.js';
 S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.49';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.50';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -81,6 +82,8 @@ export async function load(){
   hydrateMrs(true);    // рефреш страницы (F5) → live-MR СРАЗУ, мимо кэшей (не ждать цикл поллинга)
   hydrateJira(true);   // рефреш страницы (F5) → live-статусы Jira СРАЗУ, мимо кэшей
   startHealthPoll();   // TECH-4: индикатор деградации интеграций (какой сервис упал) — раз в 20с
+  updateAttentionBadge();   // Фаза-4: счётчик «Требует внимания» из уже загруженных сессий (до первого поллинга)
+  startAttentionPoll();     // Фаза-4: git-скан незакоммиченных копий + периодический refresh счётчика
   loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
   // Тяжёлые SDK-пробы (spawn claude) — ПОСЛЕ подъёма борда, чтобы не конкурировать за старт и не морозить UI.
   setTimeout(() => {
