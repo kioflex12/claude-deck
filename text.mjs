@@ -133,6 +133,21 @@ export function briefArg(input) {
   for (const k of Object.keys(input)) { if (typeof input[k] === 'string') return oneLine(input[k], 64); }
   return '';
 }
+// Референс-стиль ленты: у инструмента показываем ОПИСАНИЕ (subtitle) + IN(команда/цель). toolDesc — человекочитаемое
+// описание (у Bash есть input.description); toolCmd — основная команда/цель (полнее briefArg: до CMD_CAP, с переносами
+// для многострочных команд), контент-тяжёлые поля (Write.content) не тянем.
+export function toolDesc(input) {
+  return (input && typeof input.description === 'string' && input.description.trim()) ? oneLine(input.description, 140) : '';
+}
+const CMD_CAP = 1600;
+export function toolCmd(input) {
+  if (!input || typeof input !== 'object') return '';
+  for (const k of ['command', 'file_path', 'path', 'notebook_path', 'pattern', 'query', 'url', 'glob', 'skill', 'subagent_type', 'prompt']) {
+    const v = input[k];
+    if (typeof v === 'string' && v.trim()) return v.length > CMD_CAP ? v.slice(0, CMD_CAP) + '\n…' : v;
+  }
+  try { const s = JSON.stringify(input); return s.length > CMD_CAP ? s.slice(0, CMD_CAP) + '…' : s; } catch { return ''; }
+}
 // Почти полный текст tool-результата (в UI свёрнут, разворачивается по клику; переносы строк сохраняем).
 export function briefResult(content) {
   let s = '';
@@ -203,7 +218,7 @@ export function buildSessionBlocks(text) {
           else blocks.push({ kind: role, text: cap(b.text.trim()) });
         }
         else if (b.type === 'thinking' && b.thinking && b.thinking.trim()) blocks.push({ kind: 'thinking', text: cap(b.thinking.trim()) });
-        else if (b.type === 'tool_use') { const blk = { kind: 'tool', name: b.name || 'tool', arg: briefArg(b.input), result: '' }; if (b.id) toolById[b.id] = blk; blocks.push(blk); }
+        else if (b.type === 'tool_use') { const blk = { kind: 'tool', name: b.name || 'tool', arg: briefArg(b.input), desc: toolDesc(b.input), cmd: toolCmd(b.input), result: '' }; if (b.id) toolById[b.id] = blk; blocks.push(blk); }
         else if (b.type === 'tool_result') { const blk = b.tool_use_id && toolById[b.tool_use_id]; if (blk) blk.result = briefResult(b.content); }
         // image — скрываем
       }

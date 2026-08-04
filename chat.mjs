@@ -9,7 +9,7 @@ import {
   pendingApprovals, pendingApprovalsByKey, pendingQuestions, pendingQuestionsByKey, activeStreams, sessionAllow, stagedRequests,
   setRunStatus,
 } from './core.mjs';
-import { firstString } from './text.mjs';
+import { firstString, toolCmd, toolDesc } from './text.mjs';
 import { getSdkQuery } from './sdk.mjs';
 import { setName } from './sessions.mjs';
 
@@ -279,6 +279,7 @@ export async function apiChat(req, res, u) {
     options.systemPrompt = { type: 'preset', preset: 'claude_code' };   // CLAUDE.md грузится нативно через settingSources('project')
     const q = query({ prompt: channel.gen(), options });
     let lastWin, lastCtx, lastSub, lastErr = false;
+    const toolBufs = {};   // индекс content-блока → { name, buf } для сборки tool-input из input_json_delta (показ команды live)
     for await (const m of q) {
       if (m.type === 'result') {   // конец ОДНОГО хода — обрабатываем ВСЕГДА (в т.ч. при closed), иначе канал не закроется и query зависнет
         const u = m.usage || {};
@@ -306,7 +307,14 @@ export async function apiChat(req, res, u) {
         } else if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'thinking_delta') {
           send({ type: 'thinking', delta: ev.delta.thinking });   // живое размышление (в сохранённом транскрипте оно пустое)
         } else if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') {
+          toolBufs[ev.index] = { name: ev.content_block.name, buf: '' };   // начало tool-блока — копим его input по дельтам ниже
           send({ type: 'tool', name: ev.content_block.name });
+        } else if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'input_json_delta') {
+          const tb = toolBufs[ev.index]; if (tb) tb.buf += (ev.delta.partial_json || '');   // аргументы инструмента приходят кусками JSON
+        } else if (ev.type === 'content_block_stop' && toolBufs[ev.index]) {
+          const tb = toolBufs[ev.index]; delete toolBufs[ev.index];
+          let input = {}; try { input = JSON.parse(tb.buf || '{}'); } catch {}
+          send({ type: 'tool_input', name: tb.name, cmd: toolCmd(input), desc: toolDesc(input) });   // команда/описание — в live-ленту (IN)
         }
       } else if (m.type === 'assistant' && m.error) {
         send({ type: 'error', message: String(m.error) });

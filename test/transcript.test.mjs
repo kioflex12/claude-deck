@@ -27,6 +27,14 @@ test('transcript.js: blockHTML всех видов + renderThread + appendHTML �
   assert.equal(blockHTML({ kind:'thinking', text:'' }), '');
   assert.equal(blockHTML({ kind:'unknown' }), '');
 
+  // Референс-стиль: у ассистента больше НЕТ шапки-карточки «Claude»; инструмент рисует IN(команда)/OUT(результат).
+  assert.ok(!/cx-role[^>]*>Claude/.test(blockHTML({ kind:'assistant', text:'ответ' })), 'ассистент без шапки «Claude»');
+  const toolHtml = blockHTML({ kind:'tool', name:'Bash', desc:'сделать X', cmd:'git status', result:'clean' });
+  assert.ok(toolHtml.includes('cx-tool-h') && toolHtml.includes('сделать X'), 'заголовок инструмента + описание');
+  assert.ok(toolHtml.includes('>IN<') && toolHtml.includes('git status'), 'IN = команда');
+  assert.ok(toolHtml.includes('>OUT<') && toolHtml.includes('clean'), 'OUT = результат');
+  assert.ok(!blockHTML({ kind:'tool', name:'Read' }).includes('cx-io'), 'без cmd/result — без IN/OUT-боксов');
+
   renderThread({ file:'f1', active:false, blocks });             // active:false → без live-tail
   assert.equal(S.tailCount, blocks.length);                     // курсор = число показанных блоков
 

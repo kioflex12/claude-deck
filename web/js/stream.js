@@ -235,10 +235,10 @@ export async function runPrompt(payload){
 
   let liveMd = null, liveAccum = '';           // текущий текстовый блок ассистента (дельты text)
   let liveThink = null, liveThinkAccum = '';   // текущий блок размышления (дельты thinking)
+  let liveToolEl = null;                       // последний живой tool-блок — чтобы событие tool_input дописало в него IN/описание
   const addBlock = (html) => { const el = appendHTML(cons, html); if (el) cons.insertBefore(el, runEl); return el; };  // новый блок — перед индикатором
   const startNewMd = () => {
-    const wrap = document.createElement('div'); wrap.className = 'cx-msg cx-asst cx-live';
-    wrap.innerHTML = '<div class="cx-role">Claude</div>';
+    const wrap = document.createElement('div'); wrap.className = 'cx-msg cx-asst cx-live';   // референс-стиль: без шапки «Claude» — плоский текст с точкой-маркером
     const md = document.createElement('div'); md.className = 'cx-md';
     wrap.appendChild(md); cons.insertBefore(wrap, runEl);
     liveMd = md; liveAccum = '';
@@ -366,8 +366,15 @@ export async function runPrompt(payload){
     } else if (d.type === 'tool'){
       waiting = false; t0 = Date.now(); activity = '⚙ ' + d.name; paintRun();   // новый инструмент = новый шаг → таймер сбрасывается + показываем что за инструмент
       clearLive(); finalizeThink();   // следующий текст пойдёт в новый блок
-      addBlock('<div class="cx-msg cx-twrap"><div class="cx-tool"><span class="cx-tw">·</span><span class="cx-mk">⏺</span><span class="cx-name">' + esc(d.name) + '</span></div></div>');
+      liveToolEl = addBlock('<div class="cx-msg cx-twrap"><div class="cx-tool-h"><span class="cx-name">' + esc(d.name) + '</span><span class="cx-tdesc"></span></div></div>');
       if (stick) scrollBottom();
+    } else if (d.type === 'tool_input'){   // команда/описание инструмента дозагрузились (server дособрал input_json_delta) → дорисуем IN + описание в live-блок
+      const el = liveToolEl;
+      if (el){
+        if (d.desc){ const ds = el.querySelector('.cx-tdesc'); if (ds) ds.textContent = d.desc; }
+        if (d.cmd) el.insertAdjacentHTML('beforeend', '<div class="cx-io"><span class="cx-io-l">IN</span><pre class="cx-io-b">' + esc(d.cmd) + '</pre></div>');
+        if (stick) scrollBottom();
+      }
     } else if (d.type === 'approval'){
       waiting = true; paintRun();     // ждём решения пользователя — не «работает»
       clearLive(); finalizeThink();   // карточка аппрува — новый элемент ленты

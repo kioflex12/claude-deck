@@ -41,6 +41,8 @@ function metaLine(m){
   return `<div class="cx-meta">↑ ${fmtTok(m.in)} · ↓ ${fmtTok(m.out)} · ctx ${Math.round((m.ctxPct||0)*100)}%</div>`;
 }
 
+// Референс-стиль: таймлайн с точкой-маркером слева, содержимое плоское. Текст ассистента — без карточки/шапки «CLAUDE»
+// (была коробка на каждый кусок → полотно). Инструмент — заголовок (имя + описание) + IN(команда) + OUT(результат виден).
 export function blockHTML(b){
   if (b.kind==='user') return `<div class="cx-msg cx-user"><div class="cx-role">Ты</div><div class="cx-md">${mdToHtml(b.text)}</div></div>`;
   if (b.kind==='assistant') {
@@ -48,19 +50,18 @@ export function blockHTML(b){
     const body = full.length > 1200
       ? `<div class="cx-md cx-short">${mdToHtml(full.slice(0,1200)+'…')}</div><div class="cx-md cx-fulltext" hidden>${mdToHtml(full)}</div><button class="cx-more" type="button">показать полностью</button>`
       : `<div class="cx-md">${mdToHtml(full)}</div>`;
-    return `<div class="cx-msg cx-asst"><div class="cx-role">Claude</div>${body}${metaLine(b.meta)}</div>`;
+    return `<div class="cx-msg cx-asst">${body}${metaLine(b.meta)}</div>`;
   }
   if (b.kind==='thinking') {
     if (!b.text || !b.text.trim()) return '';   // пустое размышление (в истории thinking без текста) — не рендерим
     return `<div class="cx-msg cx-think"><button class="cx-think-h" type="button"><span class="cx-tw">▸</span>✻ Размышление</button><div class="cx-think-body cx-md" hidden>${mdToHtml(b.text)}</div>${metaLine(b.meta)}</div>`;
   }
   if (b.kind==='tool') {
-    const arg = b.arg ? `<span class="cx-arg">(${esc(b.arg)})</span>` : '';
-    const hasRes = !!b.result;
-    const caret = `<span class="cx-tw">${hasRes ? '▸' : '·'}</span>`;
-    const row = `<div class="cx-tool${hasRes?' cx-clk':''}">${caret}<span class="cx-mk">⏺</span><span class="cx-name">${esc(b.name)}</span>${arg}</div>`;
-    const pre = hasRes ? `<pre class="cx-res" hidden>${esc(b.result)}</pre>` : '';
-    return `<div class="cx-msg cx-twrap">${row}${pre}</div>`;
+    const desc = b.desc ? `<span class="cx-tdesc">${esc(b.desc)}</span>` : '';
+    const head = `<div class="cx-tool-h"><span class="cx-name">${esc(b.name)}</span>${desc}</div>`;
+    const inBox = b.cmd ? `<div class="cx-io"><span class="cx-io-l">IN</span><pre class="cx-io-b">${esc(b.cmd)}</pre></div>` : '';
+    const outBox = b.result ? `<div class="cx-io"><span class="cx-io-l">OUT</span><pre class="cx-io-b cx-io-out">${esc(b.result)}</pre></div>` : '';
+    return `<div class="cx-msg cx-twrap">${head}${inBox}${outBox}</div>`;
   }
   if (b.kind==='system') return `<div class="cx-msg cx-sys">${esc(b.text||'')}</div>`;         // служебное — приглушённо, не «Ты»
   if (b.kind==='command') return `<div class="cx-msg cx-cmd"><span class="cx-cmd-ico">⌘</span>${esc(b.text||'')}</div>`;   // вызов команды человеком
