@@ -3,24 +3,47 @@
 
 import { SYSREM, BASE_BRANCHES, CTX_LIMIT, oneLine, cap } from './core.mjs';
 
-// -------- дешёвые экстракторы по сырому тексту (без JSON.parse каждой строки) --------
-
-export function lastString(text, key) {
-  const re = new RegExp('"' + key + '":"((?:[^"\\\\]|\\\\.)*)"', 'g');
-  let m, last = null;
-  while ((m = re.exec(text)) !== null) last = m[1];
-  if (last === null) return null;
-  try { return JSON.parse('"' + last + '"'); } catch { return last; }
+// -------- per-line-JSON экстракторы значений полей транскрипта (D5) --------
+// Раньше — глобальный regex по всему тексту; он совпадал с ключом, процитированным ВНУТРИ строкового/структурного
+// tool_result (напр. когда сессия читает чужой .jsonl), и путал aiTitle/lastPrompt/model/gitBranch/cwd. cwd особенно
+// критичен: питает git-dirty и base для /api/file. Разбираем построчно и читаем РЕАЛЬНОЕ поле объекта (top-level либо
+// message.<key> — так покрываем и model, который лежит в message.model), а не подстроку внутри значения.
+function lineFieldValue(ev, key) {
+  if (!ev || typeof ev !== 'object') return undefined;
+  if (typeof ev[key] === 'string') return ev[key];
+  if (ev.message && typeof ev.message === 'object' && typeof ev.message[key] === 'string') return ev.message[key];
+  return undefined;
 }
 export function firstString(text, key) {
-  const m = text.match(new RegExp('"' + key + '":"((?:[^"\\\\]|\\\\.)*)"'));
-  if (!m) return null;
-  try { return JSON.parse('"' + m[1] + '"'); } catch { return m[1]; }
+  const needle = '"' + key + '"';
+  for (const line of String(text).split('\n')) {
+    if (line.indexOf(needle) < 0) continue;   // дешёвый пре-фильтр перед JSON.parse
+    let ev; try { ev = JSON.parse(line); } catch { continue; }
+    const v = lineFieldValue(ev, key);
+    if (v != null) return v;
+  }
+  return null;
+}
+export function lastString(text, key) {
+  const needle = '"' + key + '"';
+  let last = null;
+  for (const line of String(text).split('\n')) {
+    if (line.indexOf(needle) < 0) continue;
+    let ev; try { ev = JSON.parse(line); } catch { continue; }
+    const v = lineFieldValue(ev, key);
+    if (v != null) last = v;
+  }
+  return last;
 }
 export function allStrings(text, key) {
-  const re = new RegExp('"' + key + '":"((?:[^"\\\\]|\\\\.)*)"', 'g');
-  const out = []; let m;
-  while ((m = re.exec(text)) !== null) { let v; try { v = JSON.parse('"' + m[1] + '"'); } catch { v = m[1]; } out.push(v); }
+  const needle = '"' + key + '"';
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    if (line.indexOf(needle) < 0) continue;
+    let ev; try { ev = JSON.parse(line); } catch { continue; }
+    const v = lineFieldValue(ev, key);
+    if (v != null) out.push(v);
+  }
   return out;
 }
 // Рабочая ветка сессии: в файле gitBranch часто скачет (старт/после cleanup — базовая preprod/preupdate).

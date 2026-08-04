@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../core.mjs';
+import { firstString, lastString } from '../text.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
@@ -65,6 +66,17 @@ test('terminalFor: serverActive гасит; run-store и disk-маркер но�
   assert.equal(terminalFor(key, 1000, 8000, false).state, 'max_turns', 'disk maxTurnsTs новее промпта → max_turns');
   assert.equal(terminalFor(key, 9000, 8000, false), null, 'disk-маркер старее промпта → null');
   cleanup();
+});
+
+test('D5: per-line экстракторы читают top-level поле, игнорируя ключ внутри tool_result', () => {
+  // l1 — реальное событие (top-level cwd/aiTitle/lastPrompt). l2 — tool_result со СТРУКТУРНЫМ (не экранированным)
+  // ключом aiTitle/cwd внутри контента: старый глобальный regex взял бы их как «последние», per-line JSON — нет.
+  const l1 = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] }, cwd: '/real', aiTitle: 'REAL', lastPrompt: 'do it' });
+  const l2 = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'x' }], meta: { aiTitle: 'FAKE', cwd: '/evil' } }] } });
+  const text = l1 + '\n' + l2;
+  assert.equal(lastString(text, 'aiTitle'), 'REAL', 'вложенный FAKE не перебивает реальный top-level aiTitle');
+  assert.equal(firstString(text, 'cwd'), '/real', 'вложенный /evil игнорируется — берём top-level cwd');
+  assert.equal(firstString('{"type":"user","message":{"role":"user","content":"нет cwd"}}', 'cwd'), null, 'нет поля → null');
 });
 
 test('writeJsonAtomic: пишет полный JSON и не оставляет .tmp (temp+rename) — D1', () => {

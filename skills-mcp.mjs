@@ -6,7 +6,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 import { sendJSON, CLAUDE_BIN } from './core.mjs';
-import { firstString } from './text.mjs';
 import { listSessionFiles } from './sessions.mjs';
 import { getSdkQuery, awaitControlReady } from './sdk.mjs';
 
@@ -71,13 +70,18 @@ export function collectSkills(cwd) {
 // -------- TECH-2: агрегат реальных скиллов и MCP-серверов (из файлов, БЕЗ хардкода) --------
 // Уникальные cwd проектов из транскриптов сессий (читаем только начало файла — cwd в первой строке).
 let _cwdsCache = { ts: 0, list: [] };
+// cwd из ГОЛОВЫ файла (16КБ): первая строка-событие может быть длиннее буфера (в неё инжектится CLAUDE.md), поэтому
+// per-line JSON тут не применим — читаем cwd целевым regex. Безопасно: top-level "cwd" в первой строке идёт до message,
+// а первое совпадение = оно (экранированные \"cwd\" внутри контента этот шаблон не ловит).
 function firstCwdOfFile(full) {
   let fd;
   try {
     fd = openSync(full, 'r');
     const buf = Buffer.alloc(16384);
     const n = readSync(fd, buf, 0, buf.length, 0);
-    return firstString(buf.toString('utf8', 0, n), 'cwd') || '';
+    const m = buf.toString('utf8', 0, n).match(/"cwd":"((?:[^"\\]|\\.)*)"/);
+    if (!m) return '';
+    try { return JSON.parse('"' + m[1] + '"'); } catch { return m[1]; }
   } catch { return ''; } finally { if (fd !== undefined) { try { closeSync(fd); } catch {} } }
 }
 export function uniqueSessionCwds() {

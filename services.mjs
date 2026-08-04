@@ -85,7 +85,7 @@ async function tcLatestBuild(btId, branch, wo) {
   }
   if (wo) {
     const j = await tcJson('/app/rest/builds?locator=buildType:(id:' + btId + '),branch:(default:any),state:any,count:40&' + TC_FIELDS);
-    const hit = (j.build || []).find((b) => b.branchName && b.branchName.indexOf(wo) === 0);
+    const hit = (j.build || []).find((b) => { const bn = b.branchName || ''; return bn.indexOf(wo) === 0 && !/[0-9]/.test(bn.charAt(wo.length)); });   // D3: WO-123 не должен цепляться к WO-1234-* (за номером не цифра = граница)
     if (hit) return hit;
   }
   return null;
@@ -177,7 +177,10 @@ export async function apiMrs(res, u) {
     const useBranch = branch && !BASE_BRANCHES.has(String(branch).toLowerCase());
     if (useBranch) list = await glJson('/api/v4/merge_requests?scope=all&source_branch=' + encodeURIComponent(branch) + '&state=all&per_page=20');
     // Фолбэк: по WO в ЗАГОЛОВКЕ MR (точнее, чем полнотекст) — ловит MR сессий-уборок (ветка preprod, WO в промпте).
-    if ((!Array.isArray(list) || !list.length) && wo) list = await glJson('/api/v4/merge_requests?scope=all&search=' + encodeURIComponent(wo) + '&in=title&state=all&per_page=20');
+    if ((!Array.isArray(list) || !list.length) && wo) {
+      const found = await glJson('/api/v4/merge_requests?scope=all&search=' + encodeURIComponent(wo) + '&in=title&state=all&per_page=20');
+      list = (Array.isArray(found) ? found : []).filter((m) => { const t = String(m.title || ''); const i = t.indexOf(wo); return i >= 0 && !/[0-9]/.test(t.charAt(i + wo.length)); });   // D3: search=WO-123 полнотекстом ловит и WO-1234 — оставляем только точное совпадение по границе
+    }
     const mrs = (Array.isArray(list) ? list : []).map(mapMr).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
     const data = { available: true, host: GL_HOST, branch, mrs };
     _mrCache.set(key, { ts: Date.now(), data });
@@ -242,7 +245,7 @@ export async function apiJiraComment(req, res) {
     const auth = Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');
     const r = await fetchRetry('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '/comment', {
       method: 'POST', headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ body: adfFromText(text) }),
-    }, { retries: 1 });
+    }, { retries: 0 });   // D4: неидемпотентно — ретрай после «прошло, но шлюз отдал 502» создал бы ДУБЛЬ комментария
     if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
     const j = await r.json().catch(() => ({}));
     sendJSON(res, { ok: true, id: j.id, url: 'https://' + JIRA_HOST + '/browse/' + wo });
@@ -256,7 +259,7 @@ async function glFindProject(repoHint) {
   const list = await glJson('/api/v4/projects?search=' + encodeURIComponent(repoHint) + '&membership=true&per_page=20&order_by=last_activity_at');
   if (!Array.isArray(list) || !list.length) return null;
   const hint = repoHint.toLowerCase();
-  return list.find((p) => String(p.path || '').toLowerCase() === hint || String(p.name || '').toLowerCase() === hint) || list[0];
+  return list.find((p) => String(p.path || '').toLowerCase() === hint || String(p.name || '').toLowerCase() === hint) || null;   // D2: НЕ падаем на list[0] — иначе client-unity зацепил бы зеркало/форк и MR ушёл бы в чужой репо (необратимо)
 }
 export async function apiCreateMr(req, res) {
   let body = {}; try { body = await readJsonBody(req, 64 * 1024); } catch {}
@@ -269,7 +272,7 @@ export async function apiCreateMr(req, res) {
     if (!project) { sendJSON(res, { ok: false, error: 'проект GitLab по «' + repoHint + '» не найден — создайте MR вручную' }); return; }
     const r = await fetchRetry(GL_HOST + '/api/v4/projects/' + encodeURIComponent(project.id) + '/merge_requests', {
       method: 'POST', headers: { 'PRIVATE-TOKEN': GL_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify({ source_branch: source, target_branch: target, title: title || source, remove_source_branch: false }),
-    }, { retries: 1 });
+    }, { retries: 0 });   // D4: неидемпотентно — ретрай мог бы создать второй MR
     if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
     const j = await r.json();
     sendJSON(res, { ok: true, iid: j.iid, web_url: j.web_url, project: project.path_with_namespace || project.path });
@@ -287,7 +290,7 @@ export async function apiTriggerBuild(req, res) {
     if (branch) payload.branchName = branch;
     const r = await fetchRetry(TC_HOST + '/app/rest/buildQueue', {
       method: 'POST', headers: { Authorization: 'Bearer ' + TC_TOKEN, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload),
-    }, { retries: 1 });
+    }, { retries: 0 });   // D4: неидемпотентно — ретрай мог бы поставить второй билд в очередь
     if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
     const j = await r.json().catch(() => ({}));
     sendJSON(res, { ok: true, id: j.id, webUrl: j.webUrl });
