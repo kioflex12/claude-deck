@@ -324,11 +324,12 @@ export function renderUpdateStatus(s){
     if (s.state === 'available'){ S.UPDATE_DOWNLOAD_EL.textContent = '↓ Обновить до ' + (s.version||''); S.UPDATE_DOWNLOAD_EL.disabled = false; }
   }
   if (S.UPDATE_INSTALL_EL) S.UPDATE_INSTALL_EL.style.display = (s.state === 'downloaded') ? '' : 'none';   // «Перезапустить» — только когда загружено
+  const dl = s.state === 'downloading';
   if (S.UPDATE_PROGRESS_EL){
-    const dl = s.state === 'downloading';
     S.UPDATE_PROGRESS_EL.hidden = !dl;
     if (dl){ const f = S.UPDATE_PROGRESS_EL.firstElementChild; if (f) f.style.width = (s.percent||0) + '%'; }
   }
+  if (S.UPDATE_CANCEL_EL) S.UPDATE_CANCEL_EL.style.display = dl ? '' : 'none';   // крестик отмены — только пока идёт загрузка
   if (!S.UPDATE_STATUS_EL) return;
   const m = {
     checking:'Проверяю обновления…', 'not-available':'У вас последняя версия.',
@@ -353,11 +354,13 @@ export async function openUpdatesModal(){
       <button class="ns-start" id="updInstall" type="button" style="display:none;width:100%;margin-top:10px">↻ Перезапустить и установить</button>
       <div class="um-note" id="updStatus" style="margin-top:8px"></div>
       <div class="upd-progress" id="updProgress" hidden><i></i></div>
+      <button class="btn-ghost" id="updCancel" type="button" style="display:none;width:100%;margin-top:8px">✕ Отменить загрузку</button>
       ${info.packaged?'':'<div class="um-note">Проверка обновлений работает только в установленном приложении (не в dev-режиме).</div>'}
     </div></div>`;
-  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); S.UPDATE_STATUS_EL=null; S.UPDATE_INSTALL_EL=null; S.UPDATE_DOWNLOAD_EL=null; S.UPDATE_PROGRESS_EL=null; });
+  back.querySelector('.dm-x').addEventListener('click', ()=>{ back.classList.remove('open'); S.UPDATE_STATUS_EL=null; S.UPDATE_INSTALL_EL=null; S.UPDATE_DOWNLOAD_EL=null; S.UPDATE_PROGRESS_EL=null; S.UPDATE_CANCEL_EL=null; });
   back.classList.add('open');
-  S.UPDATE_STATUS_EL = back.querySelector('#updStatus'); S.UPDATE_INSTALL_EL = back.querySelector('#updInstall'); S.UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload'); S.UPDATE_PROGRESS_EL = back.querySelector('#updProgress');
+  S.UPDATE_STATUS_EL = back.querySelector('#updStatus'); S.UPDATE_INSTALL_EL = back.querySelector('#updInstall'); S.UPDATE_DOWNLOAD_EL = back.querySelector('#updDownload'); S.UPDATE_PROGRESS_EL = back.querySelector('#updProgress'); S.UPDATE_CANCEL_EL = back.querySelector('#updCancel');
+  S.UPDATE_CANCEL_EL.addEventListener('click', async ()=>{ S.UPDATE_STATUS_EL.textContent='Отменяю загрузку…'; try { await window.deckNative.cancelUpdate(); } catch {} });
   async function doUpdCheck(){
     S.UPDATE_STATUS_EL.textContent='Проверяю…';
     const r = await window.deckNative.checkForUpdates();

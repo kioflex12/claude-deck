@@ -71,7 +71,7 @@ export const S = {
   AUTH: { loggedIn: false },  // дефолт совпадает с прежним инлайном — renderAuth/requireAuth читают .loggedIn до резолва loadAuth()
   SVC_CFG: null,
   loginInProgress: false,
-  UPDATE_STATUS_EL: null, UPDATE_INSTALL_EL: null, UPDATE_DOWNLOAD_EL: null, UPDATE_PROGRESS_EL: null,
+  UPDATE_STATUS_EL: null, UPDATE_INSTALL_EL: null, UPDATE_DOWNLOAD_EL: null, UPDATE_PROGRESS_EL: null, UPDATE_CANCEL_EL: null,
 };
 
 // Неизменяемые контейнеры рантайма — мутируются по месту (x[k]=…, .add/.push), не переприсваиваются.

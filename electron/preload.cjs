@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('deckNative', {
   updateInfo: () => ipcRenderer.invoke('deck:updateInfo'),
   checkForUpdates: () => ipcRenderer.invoke('deck:checkForUpdates'),
   downloadUpdate: () => ipcRenderer.invoke('deck:downloadUpdate'),   // скачать обновление (кнопка «Обновить»)
+  cancelUpdate: () => ipcRenderer.invoke('deck:cancelUpdate'),       // отменить текущую загрузку (крестик)
   quitAndInstall: () => ipcRenderer.invoke('deck:quitAndInstall'),   // установить загруженное обновление + перезапуск
 
   onOpenUpdates: (cb) => ipcRenderer.on('open-updates', () => { try { cb(); } catch {} }),

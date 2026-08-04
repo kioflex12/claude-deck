@@ -2,7 +2,7 @@
 // и грузит его в BrowserWindow. Весь UI/логика — переиспользованный server.mjs + index.html.
 'use strict';
 const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, Notification, screen, dialog } = require('electron');
-const { autoUpdater } = require('electron-updater');
+const { autoUpdater, CancellationToken } = require('electron-updater');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -306,22 +306,24 @@ function sendUpdateStatus(state, extra) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', { state, ...(extra || {}) });
 }
 let updaterWired = false;
+let lastAvailableVersion = '';   // версия найденного апдейта — чтобы после отмены загрузки вернуть кнопку «Обновить»
+let downloadCancel = null;       // CancellationToken текущей загрузки (для крестика «отменить»)
 function wireUpdater() {
   if (updaterWired) return; updaterWired = true;
   autoUpdater.autoDownload = false;            // НЕ качаем сами: загрузка только по кнопке «Обновить» (deck:downloadUpdate)
   autoUpdater.autoInstallOnAppQuit = true;     // если уже загружено — доустановить при выходе
-  autoUpdater.disableDifferentialDownload = false;   // delta-обновление: качаем ТОЛЬКО изменившиеся блоки. Бандл-бинарь
-                                                    // SDK (~250МБ, claude CLI) между нашими релизами НЕ меняется →
-                                                    // переиспользуется из установленной версии, вместо 154МБ инсталлятора
-                                                    // тянется КБ-МБ изменённого кода. Прошлый «побитый asar» был багом
-                                                    // build.files whitelist (исправлен *.mjs), не diff'а. Целостность —
-                                                    // sha512 из latest.yml: плохой diff → hash-mismatch → авто-фолбэк на full.
+  autoUpdater.disableDifferentialDownload = true;   // ОДНА полная загрузка. Delta давала ДВЕ загрузки на глазах у юзера:
+                                                    // быстрый delta-проход по блокам, а когда diff не сходится (bundle-asar
+                                                    // меняется каждый билд — timestamps и т.п.) — медленный полный fallback.
+                                                    // Это путало и по итогу медленнее чистого full. Реальное ускорение —
+                                                    // урезать пакет (154МБ, из них ~248МБ распакованного неиспользуемого
+                                                    // claude-бинаря SDK), а не delta поверх толстого инсталлятора.
   // Подпись убрана (self-signed сертификата больше нет) → штатная проверка Authenticode отклоняла бы неподписанную
   // сборку («not signed by the application owner»). Отключаем её: целостность обеспечивает sha512 из latest.yml
   // (HTTPS + хэш из GitHub-релиза). Только Windows — verifyUpdateCodeSignature есть лишь у NsisUpdater.
   if (process.platform === 'win32') autoUpdater.verifyUpdateCodeSignature = () => Promise.resolve(null);
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
-  autoUpdater.on('update-available', (i) => { sendUpdateStatus('available', { version: i && i.version }); notifyUpdate(i); });
+  autoUpdater.on('update-available', (i) => { lastAvailableVersion = (i && i.version) || ''; sendUpdateStatus('available', { version: lastAvailableVersion }); notifyUpdate(i); });
   autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
   autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', { percent: Math.round(p && p.percent || 0) }));
   autoUpdater.on('update-downloaded', (i) => sendUpdateStatus('downloaded', { version: i && i.version }));   // без нативного попапа — ставит in-app кнопка «Перезапустить и установить» (тихий oneClick)
@@ -367,8 +369,19 @@ ipcMain.handle('deck:checkForUpdates', async () => await checkForUpdates());
 ipcMain.handle('deck:downloadUpdate', async () => {
   if (!app.isPackaged) return { ok: false, reason: 'dev' };
   wireUpdater();
-  try { await autoUpdater.downloadUpdate(); return { ok: true }; }
-  catch (e) { const reason = String((e && e.message) || e); sendUpdateStatus('error', { message: reason }); return { ok: false, reason }; }
+  const token = new CancellationToken();
+  downloadCancel = token;
+  try { await autoUpdater.downloadUpdate(token); return { ok: true }; }
+  catch (e) {
+    const reason = String((e && e.message) || e);
+    if (token.cancelled || /cancel/i.test(reason)) { sendUpdateStatus('available', { version: lastAvailableVersion }); return { ok: false, cancelled: true }; }   // отмена — не ошибка: вернуть кнопку «Обновить»
+    sendUpdateStatus('error', { message: reason }); return { ok: false, reason };
+  } finally { if (downloadCancel === token) downloadCancel = null; }
+});
+// Отмена текущей загрузки (крестик). Токен рвёт скачивание → downloadUpdate реджектится cancellation → статус 'available'.
+ipcMain.handle('deck:cancelUpdate', () => {
+  if (downloadCancel) { try { downloadCancel.cancel(); } catch {} downloadCancel = null; sendUpdateStatus('available', { version: lastAvailableVersion }); return { ok: true }; }
+  return { ok: false };
 });
 // Нативный выбор папки/файла для полей путей в Настройках (opts.file=true → файл, иначе папка).
 // Все ЗАПУЩЕННЫЕ Unity-редакторы из списка процессов (надёжнее pidfile'ов MCP-for-Unity: их пишет не каждый проект).
