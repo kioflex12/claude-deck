@@ -151,6 +151,22 @@ export async function apiChat(req, res, u) {
   }
   let sessionKey = sessionId;                                       // для новой сессии станет известен на init
 
+  // R3 single-writer: если для этой сессии УЖЕ жив ход (фоновый resume), второй --resume в тот же .jsonl недопустим —
+  // два писателя задваивают/портят транскрипт. Вместо нового хода докидываем промт в живой канал (steering) и закрываем
+  // этот SSE событием 'steered' — клиент перейдёт на tail и увидит продолжение. Push не прошёл (канал закрывается) →
+  // падаем на обычный новый ход ниже. Клиентский гейт (S.serverBusy при перезаходе) закрывает окно до первого tailTick,
+  // это — серверная страховка на остаточную гонку.
+  if (!isNew && sessionId) {
+    for (const e of activeStreams.values()) {
+      if (e && e.key === sessionId && typeof e.push === 'function') {
+        const steered = e.push(buildUserMessage(prompt, attachments)) === true;
+        dbgLog('chat SINGLE-WRITER session=' + sessionId + ' steered=' + steered);
+        if (steered) { clearInterval(heartbeat); send({ type: 'steered' }); try { res.end(); } catch {} return; }
+        break;   // нашли живой поток, но канал закрывается — обычный новый ход
+      }
+    }
+  }
+
   const channel = makeInputChannel(buildUserMessage(prompt, attachments));   // steering: первый промт + канал для подкидываемых
   const ac = new AbortController();
   let closed = false;

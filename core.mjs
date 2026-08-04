@@ -53,7 +53,7 @@ export function loadConfig() { try { const c = JSON.parse(readFileSync(configFil
 export function saveConfig(patch) {
   const c = loadConfig();
   for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'secretsEnvPath', 'envHosts']) if (k in patch) c[k] = String(patch[k] || '');
-  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
+  try { writeJsonAtomic(configFile(), c); return true; } catch { return false; }   // D1: temp+rename — краш/гонка в момент записи не оставит усечённый конфиг (иначе loadConfig catch→{} потерял бы всё)
 }
 // Проекты (workspaces): список открытых папок + активная. Доска скоупится на активный проект (сессии по cwd-префиксу),
 // новая сессия стартует в его папке. Так Deck не привязан к одной машине — любой открывает свою папку («как в VS Code»).
@@ -63,7 +63,7 @@ export function saveProjects(list, activeId) {
   const c = loadConfig();
   c.projects = Array.isArray(list) ? list : (c.projects || []);
   if (activeId !== undefined) c.activeProjectId = activeId || '';
-  try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
+  try { writeJsonAtomic(configFile(), c); return true; } catch { return false; }   // D1: атомарно (temp+rename) — не потерять список проектов при крахе записи
 }
 export function activeProject() { const { projects, activeId } = loadProjects(); return projects.find((p) => p.id === activeId) || null; }
 // Секретные токены (Jira/TeamCity/GitLab): в Electron шифруем safeStorage'ом (как update-token в D3) в userData/<svc>-token.bin;

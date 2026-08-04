@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../sessions.mjs';
-import { fetchRetry, isTransientStatus, runStatus } from '../core.mjs';
+import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../core.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
@@ -63,6 +65,17 @@ test('terminalFor: serverActive гасит; run-store и disk-маркер но�
   assert.equal(terminalFor(key, 1000, 8000, false).state, 'max_turns', 'disk maxTurnsTs новее промпта → max_turns');
   assert.equal(terminalFor(key, 9000, 8000, false), null, 'disk-маркер старее промпта → null');
   cleanup();
+});
+
+test('writeJsonAtomic: пишет полный JSON и не оставляет .tmp (temp+rename) — D1', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-atomic-'));
+  const f = path.join(dir, 'store.json');
+  writeJsonAtomic(f, { a: 1, b: 'два', arr: [1, 2, 3] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), { a: 1, b: 'два', arr: [1, 2, 3] });
+  assert.equal(fs.readdirSync(dir).filter((n) => n.includes('.tmp')).length, 0, 'временный файл не остаётся после rename');
+  writeJsonAtomic(f, { a: 2 });   // перезапись поверх — атомарно
+  assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), { a: 2 });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('isTransientStatus: 429/5xx транзиентны (повтор имеет шанс), 2xx/4xx — нет', () => {

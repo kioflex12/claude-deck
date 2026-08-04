@@ -1,13 +1,13 @@
 // Deck — домен сессий: пользовательские теги/имена, dev-workflow стадии и скоуп, сбор списка карточек и их сводок,
 // транскрипт/агенты/артефакты одной сессии, встроенный просмотрщик файлов, удаление и проекты-workspaces.
 
-import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   userDataDir, PROJECTS_DIR, WO_STATES_DIR, NON_ENVS, JIRA_ENABLED,
   ACTIVE_MS, WORKING_MS, BG_ACTIVE_MS, LIST_CAP, CTX_LIMIT, SYSREM,
   sendJSON, readJsonBody, movePath, oneLine, activeStreams,
-  loadProjects, saveProjects, slugForPath, activeProject, getRunStatus,
+  loadProjects, saveProjects, slugForPath, activeProject, getRunStatus, writeJsonAtomic,
 } from './core.mjs';
 import {
   woOf, firstString, allStrings, lastString, pickWorkingBranch, pickBaseBranch,
@@ -33,7 +33,7 @@ function setTags(file, tags) {
   const map = loadTags();
   const clean = [...new Set((Array.isArray(tags) ? tags : []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
   if (clean.length) map[file] = clean; else delete map[file];
-  try { mkdirSync(path.dirname(tagsFile()), { recursive: true }); writeFileSync(tagsFile(), JSON.stringify(map, null, 2)); } catch {}
+  writeJsonAtomic(tagsFile(), map);   // D1: атомарно + БРОСАЕМ при сбое записи — вызывающий (apiTags) вернёт ошибку, а не «успех» поверх молчаливой потери тегов
   return clean;
 }
 // Имя сессии, заданное пользователем при создании (переопределяет производный из транскрипта title). Стор — как теги.
@@ -55,7 +55,7 @@ export function setName(file, name) {
   if (file !== key && map[file] !== undefined) delete map[file];   // подчистить возможный старый разно-регистровый ключ
   const clean = String(name || '').trim().slice(0, 120);
   if (clean) map[key] = clean; else delete map[key];
-  try { mkdirSync(path.dirname(namesFile()), { recursive: true }); writeFileSync(namesFile(), JSON.stringify(map, null, 2)); } catch {}
+  writeJsonAtomic(namesFile(), map);   // D1: атомарно + БРОСАЕМ при сбое (apiSessionName вернёт ошибку; серверный вызов из chat.mjs уже под try/catch)
   return clean;
 }
 
@@ -635,7 +635,7 @@ export async function apiDeleteSession(req, res) {
     let subsMoved = false;
     if (existsSync(subs)) { try { movePath(subs, path.join(trashDir, ts + '-' + sessionId)); subsMoved = true; } catch {} }
     delete loadTags()[body.file];                                 // теги удалённой сессии тоже чистим
-    try { writeFileSync(tagsFile(), JSON.stringify(loadTags(), null, 2)); } catch {}
+    try { writeJsonAtomic(tagsFile(), loadTags()); } catch {}     // best-effort (удаление уже прошло) — но атомарно, чтобы не побить стор тегов
     sendJSON(res, { ok: true, trash: dest, subsMoved });
   } catch (e) {
     sendJSON(res, { error: (e && e.message) || String(e) }, 500);
@@ -647,8 +647,8 @@ export async function apiTags(req, res) {   // POST {file, tags:[...]} — пе�
   catch (e) { sendJSON(res, { error: (e && e.message) || 'read error' }, 400); return; }
   const file = String(body.file || '');
   if (!file) { sendJSON(res, { error: 'no file' }, 400); return; }
-  const tags = setTags(file, body.tags);
-  sendJSON(res, { file, tags });
+  try { const tags = setTags(file, body.tags); sendJSON(res, { file, tags }); }   // D1: сбой записи → 500, клиент не считает теги сохранёнными
+  catch (e) { sendJSON(res, { error: 'save failed: ' + ((e && e.message) || e) }, 500); }
 }
 export async function apiSessionName(req, res) {   // POST {file, name} — заданное пользователем имя сессии (override title)
   let body;
@@ -656,8 +656,8 @@ export async function apiSessionName(req, res) {   // POST {file, name} — за
   catch (e) { sendJSON(res, { error: (e && e.message) || 'read error' }, 400); return; }
   const file = String(body.file || '');
   if (!file) { sendJSON(res, { error: 'no file' }, 400); return; }
-  const name = setName(file, body.name);   // nameOf() применяется при сборке сессии → override виден сразу
-  sendJSON(res, { file, name });
+  try { const name = setName(file, body.name); sendJSON(res, { file, name }); }   // D1: сбой записи → 500 (nameOf применяется при сборке сессии → override виден сразу)
+  catch (e) { sendJSON(res, { error: 'save failed: ' + ((e && e.message) || e) }, 500); }
 }
 
 // Проекты: GET — список + активный; POST {action:add|remove|select, path?|id?} — правит список/активный.

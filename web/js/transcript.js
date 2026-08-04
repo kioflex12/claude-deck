@@ -88,6 +88,7 @@ export function renderThread(t){
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();
+  S.serverBusy = !!t.serverActive;                              // R3: до первого tailTick composer уже знает о живом ходе → send steer'ит, не плодит 2-й resume в тот же .jsonl
   if (t.serverActive) startTail(t.file);                        // на сервере жив ход (может стоять на вопросе/долгом инструменте — файл не пишется) → tail; когда завершится, tailTick покажет причину
   else if (t.terminal) appendTerminalNote(document.querySelector('.cx-console'), t.terminal.state, t.terminal.reason);   // R5: ход уже завершился лимитом/ошибкой/осиротел — сразу видимый маркер + «Продолжить»
   else if (t.active) startTail(t.file);                         // свежая сессия (недавний mtime) — тянем tail (чисто завершённые terminal=null → ноты не будет)

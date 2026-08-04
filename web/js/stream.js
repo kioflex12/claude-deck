@@ -394,6 +394,16 @@ export async function runPrompt(payload){
       waiting = false; activity = ''; t0 = Date.now(); paintRun();
       clearLive(); finalizeThink();
       cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });
+    } else if (d.type === 'steered'){
+      // R3: сервер подкинул наш промт в УЖЕ живой ход этой сессии (2-й resume не запускаем). Не «завершено» — переходим
+      // на фоновый tail: продолжение (включая ответ на наш промт) прилетит через него. Бабл промта уже в консоли.
+      finished = true;
+      if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
+      try { es.close(); } catch {} S.currentES = null; S.liveFinish = null; S.currentStreamId = null; S.streaming = false;   // currentStreamId сбрасываем: Стоп теперь оборвёт живой фоновый ход по файлу сессии, а не по устаревшему id
+      clearLive(); finalizeThink();
+      if (runEl && runEl.parentElement) runEl.remove();
+      const f = S.streamingFile || S.currentFile; S.streamingFile = null; setComposerBusy(false);
+      if (f && S.currentFile === f){ S.serverBusy = true; startTail(f); }
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
     } else if (d.type === 'done'){
