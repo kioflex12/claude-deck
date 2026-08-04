@@ -61,6 +61,7 @@ export const S = {
 
   // лента «Требует внимания» (Фаза-4)
   ATTENTION_GIT: [],          // незакоммиченные рабочие копии из /api/git-dirty (сессионные сигналы считаются из SESSIONS)
+  ENV_STATUS: { configured:false, envs:[] },   // health окружений из /api/env-status
   attnGitTimer: null,
 
   // палитра / usage / auth / services / login / обновления

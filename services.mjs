@@ -1,7 +1,7 @@
 // Deck — интеграции с внешними сервисами: live-статус клиентских сборок TeamCity, MR по ветке из GitLab
 // и статус задачи в Jira. Хосты/токены резолвятся в applyConfig (core); нет токена → мягкая деградация.
 
-import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, readJsonBody, fetchRetry, markHealth, svcHealth } from './core.mjs';
+import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, readJsonBody, fetchRetry, markHealth, svcHealth, loadConfig } from './core.mjs';
 import { isBaseBranch } from './text.mjs';
 
 // TECH-4: /api/health — сводка здоровья интеграций для топбар-индикатора (какой сервис деградирует и почему).
@@ -295,3 +295,42 @@ export async function apiTriggerBuild(req, res) {
 }
 // Клиентские build-конфиги dev-сборки — для диалога «Деплой» (совпадают с TC_BUILD_TYPES выше).
 export const TC_DEV_BUILD_TYPES = TC_BUILD_TYPES;
+
+// -------- Фаза-4: статус окружений (health-ping настраиваемых URL) --------
+// На Deck-машине нет kubectl, а публичный бинарник не зашивает адреса инфраструктуры — поэтому окружения
+// мониторим по HTTP: пользователь задаёт в ⚙ строки «имя = URL health-проверки», Deck пингует и показывает up/down.
+function parseEnvHosts(raw) {
+  const out = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s[0] === '#') continue;
+    const eq = s.indexOf('=');
+    let name = '', url = s;
+    if (eq > 0) { name = s.slice(0, eq).trim(); url = s.slice(eq + 1).trim(); }
+    if (!/^https?:\/\//i.test(url)) continue;
+    if (!name) { try { name = new URL(url).host; } catch { name = url; } }
+    out.push({ name, url });
+  }
+  return out.slice(0, 20);
+}
+export const _envCache = new Map();   // url -> { ts, data }
+const ENV_TTL = 20000;
+async function pingEnv(url) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(8000) });
+    return { ok: r.ok, status: r.status, ms: Date.now() - t0 };
+  } catch (e) { return { ok: false, status: 0, ms: Date.now() - t0, reason: (e && e.message) || String(e) }; }
+}
+export async function apiEnvStatus(res) {
+  const list = parseEnvHosts(loadConfig().envHosts);
+  if (!list.length) { sendJSON(res, { configured: false, envs: [] }); return; }
+  const envs = await Promise.all(list.map(async (e) => {
+    const c = _envCache.get(e.url);
+    let d;
+    if (c && Date.now() - c.ts < ENV_TTL) d = c.data;
+    else { d = await pingEnv(e.url); _envCache.set(e.url, { ts: Date.now(), data: d }); }
+    return { name: e.name, url: e.url, ...d };
+  }));
+  sendJSON(res, { configured: true, envs });
+}

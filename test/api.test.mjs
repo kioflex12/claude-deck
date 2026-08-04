@@ -155,6 +155,13 @@ test('быстрые действия без настроенных интегр
   assert.equal(bad.body.ok, false);
 });
 
+test('/api/env-status → 200, без настроенных окружений → configured:false, envs:[]', async () => {
+  const { status, body } = await getJson('/api/env-status');
+  assert.equal(status, 200);
+  assert.equal(body.configured, false, 'envHosts не задан в тест-конфиге → не настроено');
+  assert.ok(Array.isArray(body.envs) && body.envs.length === 0);
+});
+
 test('/api/config/test → 200, {ok, message}; неизвестный svc → ok:false', async () => {
   const r = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
   const body = await r.json();

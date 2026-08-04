@@ -26,6 +26,7 @@ function configView() {
     gitlab: { host: GL_HOST, tokenSet: !!GL_TOKEN },
     unity: (() => { const c = loadConfig(); return { clientUnityParent: c.clientUnityParent || '', editorsDir: c.unityEditorsDir || '', hubPath: c.unityHubPath || '' }; })(),
     secretsEnvPath: loadConfig().secretsEnvPath || '',   // явный .env для «Подтянуть токены» (нужно установленному app — HERE в asar)
+    envHosts: loadConfig().envHosts || '',   // Фаза-4: URL health-проверок окружений для ленты «Требует внимания»
     electron: !!getElectron(),   // можно ли безопасно сохранить токен (safeStorage) или только через .env
     defaults: { claudeProjectsDir: path.join(os.homedir(), '.claude', 'projects'), teamcityHost: 'https://teamcity.example.com', gitlabHost: 'https://gitlab.example.com' },
   };

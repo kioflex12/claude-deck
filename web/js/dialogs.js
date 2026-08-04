@@ -14,6 +14,7 @@ import { activeProjectPath } from './projects.js';
 import { MR_TTL_RESET } from './services.js';
 import { pollSessions } from './notify.js';
 import { loadUsage } from './usage.js';
+import { loadEnvStatus } from './attention.js';
 import { loadModelsCatalog, UI_BUILD } from './app.js';
 
 export function modalBack(id){
@@ -442,6 +443,9 @@ export async function openSettingsModal(){
       ${row('setTh')}${row('setTt')}${testRow('teamcity')}
       <div class="ns-grouphd">GitLab — секция «Merge Requests» (живые MR по ветке)</div>
       ${row('setGh')}${row('setGt')}${testRow('gitlab')}
+      <div class="ns-grouphd">Окружения — мониторинг доступности (лента «Требует внимания»)</div>
+      <div class="ns-row"><label class="ns-lbl" for="setEnvHosts">Health-проверки: по строке «имя = URL»</label>
+        <textarea id="setEnvHosts" class="ns-inp" rows="3" placeholder="preprod = https://preprod-api…/health&#10;preupdate = https://preupdate-api…/health"></textarea></div>
       <div class="ns-grouphd">Unity — запуск инстанса по клику на cu-тег карточки (только в приложении)</div>
       ${row('setCup')}${row('setUed')}${row('setUhub')}
       ${tokHint}
@@ -453,6 +457,7 @@ export async function openSettingsModal(){
   back.querySelector('.dm-x').addEventListener('click', close);
   back.querySelector('.dm-cancel').addEventListener('click', close);
   back.classList.add('open');
+  const ehInit = back.querySelector('#setEnvHosts'); if (ehInit) ehInit.value = cfg.envHosts || '';   // значение через свойство: в атрибуте переносы строк не сохранить
   const upd = back.querySelector('#setUpdates'); if (upd) upd.addEventListener('click', ()=>{ close(); openUpdatesModal(); });
   const status = back.querySelector('#setStatus');
   const rowEl = (id)=> back.querySelector('.ns-row[data-fid="'+id+'"]');
@@ -549,6 +554,7 @@ export async function openSettingsModal(){
       clientUnityParent: st.setCup.value.trim(),
       unityEditorsDir: st.setUed.value.trim(),
       unityHubPath: st.setUhub.value.trim(),
+      envHosts: (back.querySelector('#setEnvHosts') && back.querySelector('#setEnvHosts').value) || '',
     };
     const jt = tokVal('setJt'), tt = tokVal('setTt'), gt = tokVal('setGt');
     if (jt) payload.jiraToken = jt; if (tt) payload.teamcityToken = tt; if (gt) payload.gitlabToken = gt;
@@ -563,6 +569,7 @@ export async function openSettingsModal(){
     if (r.config) renderServicesGate(r.config);   // авторизовали сервис → красная плашка обновится
     if (typeof pollSessions === 'function') await pollSessions();
     if (typeof loadUsage === 'function') loadUsage();
+    if (typeof loadEnvStatus === 'function') loadEnvStatus();   // изменили список окружений → перечитать health
     setTimeout(close, 900);
   });
 }

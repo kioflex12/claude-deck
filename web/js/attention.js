@@ -6,7 +6,7 @@ import { S, JIRA_CACHE } from './store.js';
 import { esc, timeAgo } from './util.js';
 import { attentionReasons } from './columns.js';
 import { openSession } from './session.js';
-import { openWoJira } from './ui.js';
+import { openWoJira, openExternal } from './ui.js';
 
 function attentionSessions(){
   const out = [];
@@ -18,7 +18,8 @@ function attentionSessions(){
   return out;
 }
 
-export function attentionCount(){ return attentionSessions().length + (S.ATTENTION_GIT ? S.ATTENTION_GIT.length : 0); }
+function downEnvs(){ const e = S.ENV_STATUS; return (e && e.configured && Array.isArray(e.envs)) ? e.envs.filter(x=>!x.ok) : []; }
+export function attentionCount(){ return attentionSessions().length + (S.ATTENTION_GIT ? S.ATTENTION_GIT.length : 0) + downEnvs().length; }
 
 // Бейдж-счётчик на вкладке «Внимание» — чтобы сигнал был виден без открытия вкладки.
 export function updateAttentionBadge(){
@@ -54,18 +55,31 @@ function repoCardHTML(r){
   </article>`;
 }
 
+function envSectionHTML(){
+  const envs = S.ENV_STATUS.envs;
+  const chips = envs.map(e=>{
+    const cls = e.ok ? 'up' : 'down';
+    const tail = e.ok ? ` · ${e.ms}мс` : ` · ${e.status ? 'HTTP '+e.status : 'нет связи'}`;
+    return `<button type="button" class="env-chip ${cls}" data-url="${esc(e.url)}" title="${esc(e.url)}${e.reason?' · '+esc(e.reason):''}"><span class="env-dot"></span>${esc(e.name)}${tail}</button>`;
+  }).join('');
+  const down = downEnvs().length;
+  return `<div class="attn-sec-title">Окружения${down?` <span class="attn-sec-n bad">${down} down</span>`:''}</div><div class="env-strip">${chips}</div>`;
+}
 export function renderAttention(){
   const view = document.getElementById('viewAttention'); if (!view) return;
   const sess = attentionSessions();
   const repos = S.ATTENTION_GIT || [];
-  if (!sess.length && !repos.length){
-    view.innerHTML = `<div class="attn-empty"><div class="attn-empty-emoji">✅</div><div>Ничего не требует внимания</div><div class="attn-empty-sub">Нет блокеров, упавших сборок, задач на проверку и незакоммиченных копий.</div></div>`;
-    return;
-  }
+  const envOn = S.ENV_STATUS && S.ENV_STATUS.configured && S.ENV_STATUS.envs.length;
   const sections = [];
+  if (envOn) sections.push(envSectionHTML());
   if (sess.length) sections.push(`<div class="attn-sec-title">Задачи <span class="attn-sec-n">${sess.length}</span></div><div class="attn-grid">${sess.map(sessionCardHTML).join('')}</div>`);
   if (repos.length) sections.push(`<div class="attn-sec-title">Незакоммиченные копии <span class="attn-sec-n">${repos.length}</span></div><div class="attn-grid">${repos.map(repoCardHTML).join('')}</div>`);
+  if (!sections.length){
+    view.innerHTML = `<div class="attn-empty"><div class="attn-empty-emoji">✅</div><div>Ничего не требует внимания</div><div class="attn-empty-sub">Нет блокеров, упавших сборок, задач на проверку и незакоммиченных копий. Окружения можно добавить в ⚙.</div></div>`;
+    return;
+  }
   view.innerHTML = `<div class="attn-wrap">${sections.join('')}</div>`;
+  view.querySelectorAll('.env-chip[data-url]').forEach(el=> el.addEventListener('click', ()=> openExternal(el.dataset.url)));
   view.querySelectorAll('.attn-card[data-file]').forEach(el=>{
     el.addEventListener('click', e=>{ if (e.target.closest('.attn-wo')) return; openSession(el.dataset.file); });
     el.addEventListener('keydown', e=>{ if (e.key==='Enter'||e.key===' '){ e.preventDefault(); openSession(el.dataset.file); } });
@@ -88,8 +102,16 @@ export async function loadGitDirty(){
   updateAttentionBadge();
   if (S.activeView === 'attention') renderAttention();
 }
+export async function loadEnvStatus(){
+  try {
+    const d = await (await fetch('/api/env-status', { cache:'no-store' })).json();
+    S.ENV_STATUS = (d && typeof d === 'object') ? { configured:!!d.configured, envs:Array.isArray(d.envs)?d.envs:[] } : { configured:false, envs:[] };
+  } catch { S.ENV_STATUS = { configured:false, envs:[] }; }
+  updateAttentionBadge();
+  if (S.activeView === 'attention') renderAttention();
+}
 export function startAttentionPoll(){
   if (S.attnGitTimer) clearInterval(S.attnGitTimer);
-  loadGitDirty();
-  S.attnGitTimer = setInterval(loadGitDirty, 45000);   // git-скан рабочих копий — редкий цикл (сервер кэширует 45с)
+  loadGitDirty(); loadEnvStatus();
+  S.attnGitTimer = setInterval(()=>{ loadGitDirty(); loadEnvStatus(); }, 45000);   // git-скан копий + health окружений — редкий цикл (сервер кэширует)
 }

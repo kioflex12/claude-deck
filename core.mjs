@@ -52,7 +52,7 @@ export function dbgLog(line) { try { writeFileSync(path.join(userDataDir(), 'dec
 export function loadConfig() { try { const c = JSON.parse(readFileSync(configFile(), 'utf8')); return (c && typeof c === 'object') ? c : {}; } catch { return {}; } }
 export function saveConfig(patch) {
   const c = loadConfig();
-  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'secretsEnvPath']) if (k in patch) c[k] = String(patch[k] || '');
+  for (const k of ['woStatesDir', 'claudeProjectsDir', 'jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'secretsEnvPath', 'envHosts']) if (k in patch) c[k] = String(patch[k] || '');
   try { mkdirSync(path.dirname(configFile()), { recursive: true }); writeFileSync(configFile(), JSON.stringify(c, null, 2)); return true; } catch { return false; }
 }
 // Проекты (workspaces): список открытых папок + активная. Доска скоупится на активный проект (сессии по cwd-префиксу),
