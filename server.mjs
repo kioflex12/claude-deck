@@ -15,7 +15,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { HERE, PROJECTS_DIR, WO_STATES_DIR, sendJSON } from './core.mjs';
+import { HERE, PROJECTS_DIR, WO_STATES_DIR, sendJSON, initRuns } from './core.mjs';
 import { apiSessions, apiSession, apiSessionTail, sessionArtifacts, apiAgents, apiTags, apiSessionName, apiProjects, apiFile, apiDeleteSession, apiGitDirty } from './sessions.mjs';
 import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, apiMcpRemove } from './skills-mcp.mjs';
 import { apiUnityInstances } from './unity.mjs';
@@ -116,6 +116,7 @@ const server = http.createServer((req, res) => {
 // Экспорт для Electron: поднять сервер на СВОБОДНОМ порту (listen(0)) и вернуть реальные port/url/close.
 // preferredPort: явный порт (напр. standalone 4317); иначе env PORT; иначе 0 → ОС выдаёт свободный.
 export function startServer(preferredPort) {
+  initRuns();   // R2: ход, оставшийся running с прошлого запуска (Deck упал/перезапустился), → orphaned — видимый маркер при перезаходе, а не «просто остановилось»
   const listenPort = preferredPort != null ? preferredPort : (Number(process.env.PORT) || 0);
   server.requestTimeout = 0;      // не убивать долгий SSE-ход дефолтным 5-мин лимитом запроса (иначе closed=true → авто-реджект инструментов)
   server.keepAliveTimeout = 0;    // не закрывать keep-alive соединение по простою

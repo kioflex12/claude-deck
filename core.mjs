@@ -154,6 +154,47 @@ export const stagedRequests = new Map();   // token -> { sessionFile, prompt, mo
 // Резолвим бинарь claude (PATH; на будущее macOS PATH куцый — можно доопределить через CLAUDE_BIN).
 export const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 
+// -------- Статус ходов (наблюдаемость фона) --------
+// Ход, запущенный Deck'ом, помечается running, а по завершении — терминальным состоянием (done | max_turns | error |
+// aborted). Персистим АТОМАРНО в userData/deck-runs.json, чтобы состояние пережило перезапуск: живые на момент падения
+// ходы на старте (initRuns) переводятся в orphaned — видимый маркер вместо «просто остановилось, непонятно что».
+// Ключ = session_id (basename .jsonl без расширения) — тот же, что sessionKey в chat.mjs.
+export const runStatus = new Map();   // sessionId -> { state, subtype, isError, reason, streamId, ts }
+export function runsFile() { return path.join(userDataDir(), 'deck-runs.json'); }
+// Атомарная запись JSON: пишем во временный файл рядом и rename'им поверх. Прямой writeFileSync при крахе/гонке в момент
+// записи оставлял бы усечённый файл → при чтении catch→{} молча терял бы весь стор. rename на одном диске атомарен,
+// tmp кладём в ту же папку (без EXDEV). Возвращает true/бросает — вызывающий сам решает, глотать ли ошибку.
+export function writeJsonAtomic(file, obj) {
+  const tmp = file + '.' + process.pid + '.tmp';
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  renameSync(tmp, file);
+  return true;
+}
+function saveRuns() { const obj = {}; for (const [k, v] of runStatus) obj[k] = v; try { writeJsonAtomic(runsFile(), obj); } catch {} }
+export function setRunStatus(key, patch) {
+  if (!key) return;
+  const cur = runStatus.get(key) || {};
+  runStatus.set(key, { ...cur, ...patch, ts: Date.now() });
+  if (runStatus.size > 200) {   // держим компактно — 200 самых свежих по ts
+    const sorted = [...runStatus.entries()].sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+    runStatus.clear(); for (const [k, v] of sorted.slice(0, 200)) runStatus.set(k, v);
+  }
+  saveRuns();
+}
+export function getRunStatus(key) { return key ? (runStatus.get(key) || null) : null; }
+// Старт сервера: ход, оставшийся running (процесс упал/перезапустился, не дописав терминал), → orphaned (видимый маркер).
+export function initRuns() {
+  let persisted = {};
+  try { persisted = JSON.parse(readFileSync(runsFile(), 'utf8')) || {}; } catch { persisted = {}; }
+  for (const [k, v] of Object.entries(persisted)) {
+    if (!v || typeof v !== 'object') continue;
+    if (v.state === 'running') { v.state = 'orphaned'; v.reason = v.reason || 'Ход прерван перезапуском Deck'; }
+    runStatus.set(k, v);
+  }
+  saveRuns();
+}
+
 // -------- общие утилиты ответа/ввода --------
 
 export function sendJSON(res, obj, code = 200) {

@@ -148,13 +148,16 @@ export function classifyUserBlock(rawText) {
 export function buildSessionBlocks(text) {
   const blocks = [];
   const toolById = {};
-  let model = '', cwd = '', winTokens = 0, msgCount = 0, lastUserTs = 0;
+  let model = '', cwd = '', winTokens = 0, msgCount = 0, lastUserTs = 0, maxTurnsTs = 0;
   const branches = [];
   const tsMs = (s) => { const n = Date.parse(s || ''); return isNaN(n) ? 0 : n; };
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     let ev;
     try { ev = JSON.parse(line); } catch { continue; }
+    // Терминальный маркер на диске: CLI пишет attachment.type=max_turns_reached при упоре в лимит ходов (в т.ч. для
+    // сессий, запущенных не через Deck) — фиксируем время последнего, чтобы показать причину финиша при перезаходе (R5).
+    if (ev.type === 'attachment' && ev.attachment && ev.attachment.type === 'max_turns_reached') { maxTurnsTs = tsMs(ev.timestamp) || maxTurnsTs; continue; }
     if (ev.type !== 'user' && ev.type !== 'assistant') continue;
     const msg = ev.message || {};
     if (!cwd && ev.cwd) cwd = ev.cwd;
@@ -193,5 +196,5 @@ export function buildSessionBlocks(text) {
       }
     }
   }
-  return { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs };
+  return { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs, maxTurnsTs };
 }

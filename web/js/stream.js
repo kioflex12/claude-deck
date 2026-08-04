@@ -149,6 +149,29 @@ export function resumeTailAfterInput(){
   startTail(f);
 }
 
+// Кнопка «Продолжить»: resume той же сессии с места остановки. Общая для живого done (finish) и перезахода/фона
+// (appendTerminalNote) — иначе логика возобновления копировалась бы в двух местах.
+function wireContinueBtn(container){
+  const cb = container && container.querySelector('#continueBtn');
+  if (cb) cb.addEventListener('click', () => { cb.disabled = true; runPrompt({ text: 'Продолжай с того места, где остановился.', mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments: [] }); });
+}
+
+// R5: видимый маркер причины финиша при перезаходе/фоне. Живой SSE-done рисует ноту сам (finish); эта — когда ход
+// завершился в фоне (канал закрыт) или ещё до захода: сервер отдаёт terminal={state,reason} в /api/session(-tail).
+// Идемпотентна (один .cx-term на консоль). continuable-состояния получают кнопку «Продолжить» (resume).
+export function appendTerminalNote(cons, state, reason){
+  if (!cons || cons.querySelector('.cx-term')) return;
+  const continuable = state === 'max_turns' || state === 'orphaned' || state === 'error';
+  const base = reason || (state === 'max_turns' ? 'Достигнут лимит шагов Claude.'
+    : state === 'orphaned' ? 'Ход прерван перезапуском Deck.'
+    : state === 'error' ? 'Ход завершился с ошибкой.' : 'Ход завершён.');
+  const txt = base + (state === 'max_turns' ? ' Нажмите «Продолжить», чтобы он продолжил с того же места.' : '');
+  const btn = continuable ? '<div class="cx-note"><button class="q-submit" type="button" id="continueBtn">▶ Продолжить</button></div>' : '';
+  const box = appendHTML(cons, '<div class="cx-term"><div class="cx-note">' + esc(txt) + '</div>' + btn + '</div>');
+  wireContinueBtn(box);
+  scrollBottom();
+}
+
 async function submitAnswers(el, d){
   if (el.classList.contains('q-resolved')) return;
   const answers = collectAnswers(el);
@@ -269,8 +292,7 @@ export async function runPrompt(payload){
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
     if (opts && opts.maxTurns){   // упёрлись в лимит шагов → кнопка продолжить ход (resume той же сессии)
       const cbEl = appendHTML(cons, '<div class="cx-note"><button class="q-submit" type="button" id="continueBtn">▶ Продолжить</button></div>');
-      const cb = cbEl && cbEl.querySelector('#continueBtn');
-      if (cb) cb.addEventListener('click', () => { cb.disabled = true; runPrompt({ text: 'Продолжай с того места, где остановился.', mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments: [] }); });
+      wireContinueBtn(cbEl);
     }
     const doneFile = S.streamingFile || S.currentFile;
     const doneTitle = (SESSION_CACHE[S.currentFile] && SESSION_CACHE[S.currentFile].title) || titleOf(S.currentFile) || '';
@@ -507,5 +529,8 @@ async function tailTick(file){
   updateTailIndicator(working || pending, d.turnStartTs, pending, d.activity);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает <активность>»; иначе скрыт
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
-  if (!working && !pending) stopTail();    // ход на сервере завершён и ничего не ждём → прекращаем опрос (не крутим по mtime и не показываем ложную занятость)
+  if (!working && !pending){                // ход на сервере завершён и ничего не ждём → прекращаем опрос (не крутим по mtime и не показываем ложную занятость)
+    if (d.terminal) appendTerminalNote(ensureConsole(), d.terminal.state, d.terminal.reason);   // R5: фоновый ход завершился лимитом/ошибкой/осиротел — показать причину + «Продолжить», а не молча исчезнуть
+    stopTail();
+  }
 }

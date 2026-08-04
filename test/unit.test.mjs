@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectClientCuFromText, detectBranchFromText, tailActivity } from '../sessions.mjs';
-import { fetchRetry, isTransientStatus } from '../core.mjs';
+import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../sessions.mjs';
+import { fetchRetry, isTransientStatus, runStatus } from '../core.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
@@ -27,6 +27,42 @@ test('tailActivity: «что делает» из последнего блока
   assert.equal(tailActivity([{ kind: 'assistant', text: 'ответ' }]), '✍ пишет ответ');
   assert.equal(tailActivity([{ kind: 'user', text: 'привет' }]), '', 'человеческий блок → без активности');
   assert.equal(tailActivity([]), '', 'пусто → пусто');
+});
+
+test('buildSessionBlocks: attachment max_turns_reached → maxTurnsTs (disk-маркер лимита ходов)', () => {
+  const jl = [
+    '{"type":"user","message":{"role":"user","content":"привет"},"timestamp":"2026-08-04T10:00:00.000Z"}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ответ"}]},"timestamp":"2026-08-04T10:00:05.000Z"}',
+    '{"type":"attachment","attachment":{"type":"max_turns_reached","maxTurns":200,"turnCount":201},"timestamp":"2026-08-04T10:01:00.000Z"}',
+  ].join('\n');
+  const r = buildSessionBlocks(jl);
+  assert.equal(r.maxTurnsTs, Date.parse('2026-08-04T10:01:00.000Z'), 'фиксируем время терминального attachment');
+  assert.ok(r.maxTurnsTs > r.lastUserTs, 'лимит наступил после последнего промпта человека → незакрытый терминал');
+  assert.equal(buildSessionBlocks('{"type":"user","message":{"role":"user","content":"x"}}').maxTurnsTs, 0, 'нет attachment → 0');
+});
+
+test('terminalFor: serverActive гасит; run-store и disk-маркер новее промпта → маркер; старее / done → null', () => {
+  const key = 'sess-term-test';
+  const cleanup = () => runStatus.delete(key);
+  cleanup();
+  // живой ход на сервере — терминал не показываем даже при записи в run-store
+  runStatus.set(key, { state: 'max_turns', reason: 'лимит', ts: 5000 });
+  assert.equal(terminalFor(key, 1000, 0, true), null, 'serverActive → null (ход ещё жив)');
+  // run-store max_turns новее последнего промпта → показываем
+  assert.deepEqual(terminalFor(key, 1000, 0, false), { state: 'max_turns', reason: 'лимит' });
+  // пользователь уже продолжил (промпт новее терминала) → маркер снят
+  assert.equal(terminalFor(key, 9000, 0, false), null, 'lastUserTs > run.ts → уже продолжено');
+  // успешное завершение не сюрфейсим
+  runStatus.set(key, { state: 'done', ts: 5000 });
+  assert.equal(terminalFor(key, 1000, 0, false), null, 'done → без ноты');
+  // осиротевший перезапуском
+  runStatus.set(key, { state: 'orphaned', reason: 'Ход прерван перезапуском Deck', ts: 5000 });
+  assert.equal(terminalFor(key, 1000, 0, false).state, 'orphaned');
+  // disk-маркер max_turns без записи в run-store (сессия запущена мимо Deck)
+  cleanup();
+  assert.equal(terminalFor(key, 1000, 8000, false).state, 'max_turns', 'disk maxTurnsTs новее промпта → max_turns');
+  assert.equal(terminalFor(key, 9000, 8000, false), null, 'disk-маркер старее промпта → null');
+  cleanup();
 });
 
 test('isTransientStatus: 429/5xx транзиентны (повтор имеет шанс), 2xx/4xx — нет', () => {

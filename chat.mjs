@@ -7,6 +7,7 @@ import {
   sendJSON, readJsonBody, dbgLog, CTX_LIMIT,
   VALID_MODES, VALID_EFFORTS, READ_ONLY_TOOLS, USER_INPUT_TOOLS, EDIT_TOOLS, PROJECTS_DIR,
   pendingApprovals, pendingApprovalsByKey, pendingQuestions, pendingQuestionsByKey, activeStreams, sessionAllow, stagedRequests,
+  setRunStatus,
 } from './core.mjs';
 import { firstString } from './text.mjs';
 import { getSdkQuery } from './sdk.mjs';
@@ -102,7 +103,7 @@ export async function apiChat(req, res, u) {
     'X-Accel-Buffering': 'no',
   });
   const send = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch { /* поток закрыт */ } };
-  const fail = (msg) => { send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };
+  const fail = (msg) => { clearInterval(heartbeat); send({ type: 'error', message: msg }); send({ type: 'done', isError: true }); try { res.end(); } catch {} };   // R6: гасим heartbeat и на ранних отказах (до навешивания req 'close'), иначе интервал жил бы вечно, пишя в закрытый res
   // Keepalive: SSE не должен простаивать и закрываться на долгих ходах/паузах — иначе req 'close' выставит closed=true
   // и мутирующие инструменты начнут авто-реджектиться («Клиент отключён»), хотя пользователь в сессии.
   const heartbeat = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 15000);
@@ -156,6 +157,14 @@ export async function apiChat(req, res, u) {
   const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const streamEntry = { ac, key: sessionKey, push: channel.push };  // key = session_id: Стоп/индикация по файлу; push — /api/chat-input докидывает промт в живой ход
   activeStreams.set(streamId, streamEntry);                         // явный обрыв через /api/stop (не зависит от детекта дисконнекта)
+  // R1/R2: помечаем ход running (для существующей сессии id известен сразу; для новой/форка — на init ниже). Терминальное
+  // состояние пишет markRun на КАЖДОМ выходе (done/ошибка/аборт) независимо от closed — иначе фоновый сбой при закрытом
+  // канале гас бы на доске как «завершено». Персист переживает перезапуск: осиротевший ход на старте станет orphaned.
+  if (sessionKey) setRunStatus(sessionKey, { state: 'running', streamId, subtype: '', isError: false, reason: '' });
+  const markRun = (state, subtype, isError, reason) => {
+    dbgLog('chat END stream=' + streamId + ' state=' + state + ' subtype=' + (subtype || '') + ' isError=' + isError + ' closed=' + closed + (reason ? (' reason=' + reason) : ''));
+    if (sessionKey) setRunStatus(sessionKey, { state, subtype: subtype || '', isError: !!isError, reason: reason || '', streamId });
+  };
   // При закрытии SSE (ушёл с экрана / перезашёл в сессию) НЕ рвём запрос — пусть Claude доработает в фоне и допишет
   // .jsonl (перезаход подхватит live-tail'ом). Останавливать работу — только явной кнопкой Стоп (/api/stop → ac.abort).
   const _t0 = Date.now();
@@ -269,6 +278,7 @@ export async function apiChat(req, res, u) {
         if ((isNew || isFork) && m.session_id) {         // новая/форкнутая сессия → сообщаем клиенту НОВЫЙ файл (переключиться/тейлить)
           sessionKey = m.session_id;
           streamEntry.key = sessionKey;                              // новая/форкнутая сессия узнала id → привязываем активный ход к её файлу
+          setRunStatus(sessionKey, { state: 'running', streamId, subtype: '', isError: false, reason: '' });   // R1/R2: id узнали только сейчас — теперь ход виден в run-store
           const rel = String(cwd).replace(/[^a-zA-Z0-9]/g, '-') + '/' + m.session_id + '.jsonl';
           if (newName) { try { setName(rel, newName); } catch {} }   // закрепляем имя серверно тем же rel — без гонки с клиентским POST и без расхождения ключа/регистра
           send({ type: 'session', id: m.session_id, file: rel });
@@ -287,9 +297,14 @@ export async function apiChat(req, res, u) {
       }
     }
     if (!closed) send({ type: 'done', subtype: lastSub, isError: lastErr, winTokens: lastWin || undefined, ctxPct: lastCtx });   // весь query завершился (канал закрыт и осушен)
+    const state = lastSub === 'error_max_turns' ? 'max_turns' : (lastErr ? 'error' : 'done');
+    markRun(state, lastSub, lastErr, state === 'max_turns' ? 'Достигнут лимит ходов (maxTurns)' : (state === 'error' ? 'Ход завершился ошибкой' : ''));
   } catch (e) {
     channel.end();   // прекратить ожидание ввода на ошибке/аборте
-    if (!closed) send({ type: 'error', message: (e && e.message) ? e.message : String(e) });
+    const aborted = ac.signal.aborted;   // Стоп (/api/stop → ac.abort) — намеренная остановка, не сбой
+    const emsg = (e && e.message) ? e.message : String(e);
+    if (!closed) send({ type: 'error', message: emsg });
+    markRun(aborted ? 'aborted' : 'error', 'exception', !aborted, aborted ? 'Остановлено пользователем' : emsg);
   } finally {
     clearInterval(heartbeat);
     activeStreams.delete(streamId);

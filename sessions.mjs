@@ -7,7 +7,7 @@ import {
   userDataDir, PROJECTS_DIR, WO_STATES_DIR, NON_ENVS, JIRA_ENABLED,
   ACTIVE_MS, WORKING_MS, BG_ACTIVE_MS, LIST_CAP, CTX_LIMIT, SYSREM,
   sendJSON, readJsonBody, movePath, oneLine, activeStreams,
-  loadProjects, saveProjects, slugForPath, activeProject,
+  loadProjects, saveProjects, slugForPath, activeProject, getRunStatus,
 } from './core.mjs';
 import {
   woOf, firstString, allStrings, lastString, pickWorkingBranch, pickBaseBranch,
@@ -470,13 +470,30 @@ export function sessionArtifacts(relFile) {
   return { cwd, wo, artifacts: out.slice(0, 80) };
 }
 
+// Терминальное состояние последнего хода для показа при перезаходе/фоне (R5): незакрытый лимит шагов, ошибка или ход,
+// осиротевший перезапуском Deck. Только когда на сервере НЕТ живого хода и терминал не старше последнего промпта человека
+// (иначе пользователь уже продолжил — маркер снят). Успешное завершение (done) намеренно НЕ сюрфейсим (это не проблема).
+// Источник: run-store (ходы, запущенные Deck'ом, в т.ч. упавшие при закрытом канале и осиротевшие) + disk-маркер
+// max_turns_reached (покрывает и сессии, запущенные мимо Deck).
+export function terminalFor(sessionId, lastUserTs, maxTurnsTs, serverActive) {
+  if (serverActive) return null;
+  const run = getRunStatus(sessionId);
+  if (run && (run.ts || 0) >= (lastUserTs || 0)) {
+    if (run.state === 'max_turns') return { state: 'max_turns', reason: run.reason || 'Достигнут лимит ходов.' };
+    if (run.state === 'error') return { state: 'error', reason: run.reason || 'Ход завершился ошибкой.' };
+    if (run.state === 'orphaned') return { state: 'orphaned', reason: run.reason || 'Ход прерван перезапуском Deck.' };
+  }
+  if (maxTurnsTs && maxTurnsTs >= (lastUserTs || 0)) return { state: 'max_turns', reason: 'Достигнут лимит ходов (maxTurns).' };
+  return null;
+}
+
 export function apiSession(relFile) {
   const rp = resolveSessionPath(relFile);
   if (rp.error) return rp;
   let text = '';
   try { text = readFileSync(rp.resolved, 'utf8'); } catch { return { error: 'not found', code: 404 }; }
 
-  const { blocks, model, cwd, branches, winTokens, msgCount } = buildSessionBlocks(text);
+  const { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs, maxTurnsTs } = buildSessionBlocks(text);
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
   if (!title) title = lastPrompt.split('\n')[0].slice(0, 80) || '(без заголовка)';
@@ -519,6 +536,7 @@ export function apiSession(relFile) {
     count: msgCount,
     notes,
     tags: getTags(relFile),
+    terminal: terminalFor(sessionId, lastUserTs, maxTurnsTs, serverActive),   // R5: причина финиша (лимит/ошибка/осиротело) для видимого маркера + «Продолжить»
     ...wf,
     ...scope,
   };
@@ -550,7 +568,7 @@ export function apiSessionTail(relFile, after) {
   if (rp.error) return rp;
   let text = '';
   try { text = readFileSync(rp.resolved, 'utf8'); } catch { return { error: 'not found', code: 404 }; }
-  const { blocks, winTokens, lastUserTs } = buildSessionBlocks(text);
+  const { blocks, winTokens, lastUserTs, maxTurnsTs } = buildSessionBlocks(text);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   const a = Math.max(0, after | 0);
   const key = path.basename(rp.resolved).replace(/\.jsonl$/, '');
@@ -567,6 +585,7 @@ export function apiSessionTail(relFile, after) {
     working: (Date.now() - mtime) < WORKING_MS,
     serverActive,   // авторитетно: на сервере ЕСТЬ активный ход этой сессии → индикатор держится даже в паузах записи (>20с без изменений файла)
     activity: tailActivity(blocks),   // «что делает» — для строки индикатора при перезаходе/фоне
+    terminal: terminalFor(key, lastUserTs, maxTurnsTs, serverActive),   // R5: когда фоновый ход завершится (serverActive → false), tail покажет причину финиша, а не просто исчезнет
   };
 }
 

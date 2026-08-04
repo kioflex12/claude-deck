@@ -2,7 +2,7 @@
 // первичная отрисовка треда и DOM-хелперы вставки/прокрутки. Живую дозапись ведёт stream.js.
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
-import { startTail, stopTail } from './stream.js';
+import { startTail, stopTail, appendTerminalNote } from './stream.js';
 
 export function wireConsole(){
   const cons = document.querySelector('.cx-console');
@@ -88,5 +88,7 @@ export function renderThread(t){
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();
-  if (t.active || t.serverActive) startTail(t.file);   // сессия свежая ИЛИ на сервере жив ход (заблокирован на вопросе/долгом инструменте — файл не пишется, mtime старый) → всё равно тянем tail
+  if (t.serverActive) startTail(t.file);                        // на сервере жив ход (может стоять на вопросе/долгом инструменте — файл не пишется) → tail; когда завершится, tailTick покажет причину
+  else if (t.terminal) appendTerminalNote(document.querySelector('.cx-console'), t.terminal.state, t.terminal.reason);   // R5: ход уже завершился лимитом/ошибкой/осиротел — сразу видимый маркер + «Продолжить»
+  else if (t.active) startTail(t.file);                         // свежая сессия (недавний mtime) — тянем tail (чисто завершённые terminal=null → ноты не будет)
 }
