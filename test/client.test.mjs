@@ -4,39 +4,35 @@ import assert from 'node:assert/strict';
 import { esc, kTok, fmtTok, pctOf, ctxColor, timeAgo, mdToHtml } from '../web/js/util.js';
 import { jiraColumn, effectiveColumn, cardStatus, searchableText, WF_COLUMNS, WF_LABEL, mrKey } from '../web/js/columns.js';
 
-test('jiraColumn: Jira-статус → колонка/blocked', () => {
+test('jiraColumn: Jira-статус → колонка/blocked (build решается отдельно, readymerge→qa)', () => {
   assert.deepEqual(jiraColumn('Blocked', ''), { col: null, blocked: true });
-  assert.deepEqual(jiraColumn('Ready to Merge', ''), { col: 'readymerge', blocked: false });
+  assert.equal(jiraColumn('Ready to Merge', '').col, 'qa', 'ready-to-merge → колонка «На QA» (отдельной колонки нет)');
   assert.deepEqual(jiraColumn('Done', 'done'), { col: 'done', blocked: false });
   assert.equal(jiraColumn('Closed', '').col, 'done');
   assert.equal(jiraColumn('In Review', '').col, 'qa');
   assert.equal(jiraColumn('In QA', '').col, 'qa');
-  assert.deepEqual(jiraColumn('In Progress', '', { buildActive: false }), { col: 'active', blocked: false });
-  assert.deepEqual(jiraColumn('In Progress', '', { buildActive: true }), { col: 'build', blocked: false });
+  assert.equal(jiraColumn('In Progress', '').col, 'active', 'In Progress → В работе (build — не здесь, а в effectiveColumn)');
   assert.equal(jiraColumn('To Do', 'new').col, 'todo');
   assert.deepEqual(jiraColumn('Странный статус', ''), { col: null, blocked: false });
 });
 
-test('effectiveColumn: приоритет blocked→build→qa→(jira)→done/active/todo', () => {
+test('effectiveColumn: build-исключение важнее Jira, дальше — статус Jira', () => {
   assert.deepEqual(effectiveColumn({ wo: 'WO-1' }, { 'WO-1': { available: true, status: 'Blocked' } }), { col: 'blocked', blocked: true });
-  assert.deepEqual(effectiveColumn({ buildActive: true, wfColumn: 'active' }, {}), { col: 'build', blocked: false });
-  assert.equal(effectiveColumn({ wfColumn: 'build', buildActive: false }, {}).col, 'qa', 'stale build без живого билда → На QA');
-  assert.equal(effectiveColumn({ wfColumn: 'done' }, {}).col, 'done');
-  assert.equal(effectiveColumn({ wo: 'WO-2', wfColumn: 'active', wfHasState: true }, { 'WO-2': { available: true, status: 'Ready to Merge' } }).col, 'readymerge', 'jira уточняет стадию при наличии dev-workflow-состояния');
-  assert.equal(effectiveColumn({ active: true }, {}).col, 'active');
-  assert.equal(effectiveColumn({ active: false }, {}).col, 'todo');
+  assert.deepEqual(effectiveColumn({ buildActive: true, wfColumn: 'active' }, {}), { col: 'build', blocked: false }, 'живой билд → Build In Progress');
+  // build-исключение перекрывает Jira-статус (даже Done)
+  assert.equal(effectiveColumn({ wo: 'WO-1b', buildActive: true }, { 'WO-1b': { available: true, status: 'Done' } }).col, 'build', 'живой билд важнее любого Jira-статуса');
+  assert.equal(effectiveColumn({ wfColumn: 'build', buildActive: false }, {}).col, 'qa', 'stale build-стадия без живого билда → На QA');
+  assert.equal(effectiveColumn({ wo: 'WO-2', wfColumn: 'active' }, { 'WO-2': { available: true, status: 'Ready to Merge' } }).col, 'qa', 'ready-to-merge по Jira → На QA');
 });
 
-test('effectiveColumn: QA требует согласия dev-workflow и Jira; research-сессия не улетает по Jira', () => {
-  // research: нет dev-workflow-состояния, задача в Jira-QA → сессия остаётся в своей стадии, НЕ в QA
-  assert.equal(effectiveColumn({ wo: 'WO-5', active: true }, { 'WO-5': { available: true, status: 'In QA' } }).col, 'active', 'Jira-QA без dev-workflow не тащит в QA');
-  assert.equal(effectiveColumn({ wo: 'WO-5b' }, { 'WO-5b': { available: true, status: 'Done' } }).col, 'todo', 'Jira-Done без dev-workflow не тащит в Готово');
-  // оба в QA → На QA
-  assert.equal(effectiveColumn({ wo: 'WO-6', wfColumn: 'qa', wfHasState: true }, { 'WO-6': { available: true, status: 'In QA' } }).col, 'qa', 'dev-workflow + Jira в QA → QA');
-  // dev-workflow в QA, Jira ещё в работе → не оба → не QA
-  assert.equal(effectiveColumn({ wo: 'WO-7', wfColumn: 'qa', wfHasState: true }, { 'WO-7': { available: true, status: 'In Progress' } }).col, 'active', 'Jira отстаёт от dev-workflow → не QA');
-  // dev-workflow в QA без данных Jira → QA (полагаемся на спеккит, это не «только Jira»)
-  assert.equal(effectiveColumn({ wo: 'WO-8', wfColumn: 'qa', wfHasState: true }, {}).col, 'qa', 'dev-workflow QA без Jira-данных → QA');
+test('effectiveColumn: Jira — source of truth (ведёт даже без dev-workflow-состояния)', () => {
+  assert.equal(effectiveColumn({ wo: 'WO-5', active: true, wfColumn: 'active' }, { 'WO-5': { available: true, status: 'In QA' } }).col, 'qa', 'Jira On QA → На QA');
+  assert.equal(effectiveColumn({ wo: 'WO-5b' }, { 'WO-5b': { available: true, status: 'Done' } }).col, 'done', 'Jira Done → Готово');
+  assert.equal(effectiveColumn({ wo: 'WO-7', wfColumn: 'qa' }, { 'WO-7': { available: true, status: 'In Progress' } }).col, 'active', 'Jira In Progress перекрывает локальную стадию qa');
+  // Jira недоступна → фолбэк на стадию dev-workflow / свежесть
+  assert.equal(effectiveColumn({ wo: 'WO-8', wfColumn: 'qa' }, {}).col, 'qa', 'нет Jira → стадия dev-workflow');
+  assert.equal(effectiveColumn({ active: true }, {}).col, 'active', 'нет Jira, активна → В работе');
+  assert.equal(effectiveColumn({ active: false }, {}).col, 'todo', 'нет Jira, не активна → Ждёт');
 });
 
 test('cardStatus: под-статус без дубля колонки', () => {
@@ -53,9 +49,10 @@ test('searchableText: находит wo/cu/backend/ветку/теги/стат�
   assert.ok(!t2.includes('работает'), 'working=false → без «работает»');
 });
 
-test('WF_COLUMNS/WF_LABEL: словари колонок', () => {
-  assert.ok(Array.isArray(WF_COLUMNS) && WF_COLUMNS.length === 7);
-  assert.deepEqual(WF_COLUMNS.map((c) => c.key), ['todo', 'active', 'blocked', 'build', 'qa', 'readymerge', 'done']);
+test('WF_COLUMNS/WF_LABEL: словари колонок (без «Ждёт мерджа»)', () => {
+  assert.ok(Array.isArray(WF_COLUMNS) && WF_COLUMNS.length === 6);
+  assert.deepEqual(WF_COLUMNS.map((c) => c.key), ['todo', 'active', 'blocked', 'build', 'qa', 'done']);
+  assert.ok(!WF_COLUMNS.some((c) => c.key === 'readymerge'), 'колонки readymerge нет');
   assert.equal(WF_LABEL.qa, 'На QA');
   assert.equal(WF_LABEL.done, 'Готово');
 });

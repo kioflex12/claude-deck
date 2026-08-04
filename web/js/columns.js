@@ -5,23 +5,23 @@ export const WF_COLUMNS = [
   { key:'blocked',    title:'Заблокировано',    dot:'var(--bad)' },
   { key:'build',      title:'Build In Progress', dot:'var(--warn)' },
   { key:'qa',         title:'На QA',            dot:'var(--info)' },
-  { key:'readymerge', title:'Ждёт мерджа',      dot:'var(--info)' },
   { key:'done',       title:'Готово',           dot:'var(--good)' },
 ];
+// readymerge оставлен как СТАДИЯ dev-workflow (метка в рейле), но отдельной КОЛОНКИ на доске больше нет — бесполезна.
 export const WF_LABEL = { blocked:'Заблокировано', todo:'Ждёт', active:'В работе', build:'Build In Progress', qa:'На QA', readymerge:'Ждёт мерджа', done:'Готово' };
 // ключ MR-кэша — пара (ветка, wo), зеркало серверного _mrCache: базовую ветку (preprod) делят десятки задач, ключ по одной ветке склеивал бы их MR в одну запись
 export const mrKey = (s) => ((s && s.gitBranch) || '') + '|' + ((s && s.wo) || '');
-export function jiraColumn(status, category, s){
+// Статус задачи Jira → колонка доски. Build In Progress здесь НЕ выдаём — это живой TeamCity-сигнал, решается в
+// effectiveColumn до Jira. Ready-to-merge/ревью/QA — единая колонка «На QA» (колонки «Ждёт мерджа» больше нет).
+export function jiraColumn(status, category){
   const n = String(status||'').toLowerCase();
-  const inProg = () => ({ col:(s && s.buildActive===true)?'build':'active', blocked:false });   // In Progress → build ТОЛЬКО если билд реально идёт (TeamCity), иначе active
-  if (/block|блок/.test(n)) return { col:null, blocked:true };            // blocked — стадию не меняем, только бейдж
-  if (/ready\s*(to|for)?\s*merge|к\s*мерж|готов.*мерж/.test(n)) return { col:'readymerge', blocked:false };
+  if (/block|блок/.test(n)) return { col:null, blocked:true };            // blocked — только бейдж, колонка отдельная
   if (/done|release|closed|resolved|готово|релиз|закрыт/.test(n) || category==='done') return { col:'done', blocked:false };
-  if (/in\s*review|ready\s*(to|for)?\s*qa|in\s*qa|producer\s*review|testing|review|провер|ревью|тестир|на\s*qa/.test(n)) return { col:'qa', blocked:false };
-  if (/in\s*progress|in\s*dev|development|doing|в\s*работе|в\s*процесс|разработ/.test(n)) return inProg();
+  if (/in\s*review|ready\s*(to|for)?\s*qa|in\s*qa|producer\s*review|testing|review|провер|ревью|тестир|на\s*qa|ready\s*(to|for)?\s*merge|к\s*мерж|готов.*мерж/.test(n)) return { col:'qa', blocked:false };
+  if (/in\s*progress|in\s*dev|development|doing|в\s*работе|в\s*процесс|разработ/.test(n)) return { col:'active', blocked:false };
   if (/to\s*do|backlog|open|new|selected|to\s*be|ждёт|бэклог|открыт|новая/.test(n) || category==='new') return { col:'todo', blocked:false };
-  if (category==='indeterminate') return inProg();
-  return { col:null, blocked:false };   // неизвестный статус → колонка из локального состояния
+  if (category==='indeterminate') return { col:'active', blocked:false };
+  return { col:null, blocked:false };   // неизвестный статус → колонка из локального dev-workflow-состояния
 }
 export function jiraSubLabel(status){
   const n = String(status||'').toLowerCase();
@@ -29,30 +29,19 @@ export function jiraSubLabel(status){
   if (/in\s*review|ревью|на\s*ревью/.test(n)) return 'Ревью';
   return '';   // In QA / Ready To QA / testing и т.п. — то же, что колонка «На QA» → без дубля
 }
+// Колонка = статус задачи в Jira (source of truth). ЕДИНСТВЕННОЕ исключение — Build In Progress: живой билд TeamCity
+// (собирается ИЛИ в очереди) важнее любого Jira-статуса. Нет данных Jira → фолбэк на стадию dev-workflow (или свежесть).
 export function effectiveColumn(s, jiraCache){
-  let jm = null;
-  if (s.wo){ const j = jiraCache[s.wo]; if (j && j.available && j.status) jm = jiraColumn(j.status, j.category, s); }
-  if (jm && jm.blocked) return { col:'blocked', blocked:true };            // 1. Заблокировано (бейдж)
-  if (s.buildActive === true) return { col:'build', blocked:false };       // 2. Build In Progress — ТОЛЬКО живой билд TeamCity (не stale buildTriggered)
-
-  let wfCol = s.wfColumn || (s.active ? 'active' : 'todo');                // стадия dev-workflow (спеккит) — ОСНОВА
-  if (wfCol === 'build') wfCol = 'qa';                                     // 3. билд завершён (не идёт) → dev-workflow-стадия «На QA»
-  let col = wfCol;
-
-  // Jira только УТОЧНЯЕТ стадию, не подменяет её собой. Два правила против «полагаемся только на Jira»:
-  if (jm && jm.col && jm.col !== 'build'){
-    const advanced = jm.col === 'qa' || jm.col === 'readymerge' || jm.col === 'done';
-    if (advanced && !s.wfHasState){
-      // нет dev-workflow-состояния (research-сессия, лишь упоминающая задачу) → Jira одна не тащит в продвинутую
-      // колонку; оставляем стадию самой сессии (active/todo). Иначе research улетал в QA/Готово по статусу задачи.
-    } else if (jm.col === 'qa' || wfCol === 'qa'){
-      // «На QА» — только когда И dev-workflow, И Jira в QA; расходятся → берём НЕ-QA сторону.
-      col = (jm.col === 'qa' && wfCol === 'qa') ? 'qa' : (jm.col === 'qa' ? wfCol : jm.col);
-    } else {
-      col = jm.col;                                                        // done/readymerge/todo при наличии состояния — по Jira
-    }
+  if (s.buildActive === true) return { col:'build', blocked:false };       // исключение: живой билд (running/queued)
+  const j = s.wo ? jiraCache[s.wo] : null;
+  if (j && j.available && j.status){
+    const m = jiraColumn(j.status, j.category);
+    if (m.blocked) return { col:'blocked', blocked:true };
+    if (m.col) return { col:m.col, blocked:false };                        // Jira ведёт: To Do/In Progress/On QA/Done
   }
-  return { col, blocked:false };
+  let wfCol = s.wfColumn || (s.active ? 'active' : 'todo');                // Jira недоступна → стадия dev-workflow
+  if (wfCol === 'build' || wfCol === 'readymerge') wfCol = 'qa';           // билд-стадия без живого билда / ex-«ждёт мерджа» → На QA
+  return { col: wfCol, blocked:false };
 }
 // Статус-бар: НЕ дублирует колонку. Русский под-стадийный текст сверх колонки (или полный ярлык в «Доске»).
 export function cardStatus(s, jiraCache){
@@ -76,7 +65,7 @@ export function searchableText(s, jiraCache, mrCache, working){
   // стадия — по Jira-приоритету если доступна, иначе локальный wfColumn; добавляем и код, и человекочитаемую метку
   const jira = (s.wo && jiraCache[s.wo] && jiraCache[s.wo].available) ? jiraCache[s.wo] : null;
   let col = s.wfColumn;
-  if (jira && jira.status){ const m = jiraColumn(jira.status, jira.category, s); if (m.col) col = m.col; if (m.blocked) parts.push('blocked заблокировано'); parts.push(jira.status); }
+  if (jira && jira.status){ const m = jiraColumn(jira.status, jira.category); if (m.col) col = m.col; if (m.blocked) parts.push('blocked заблокировано'); parts.push(jira.status); }
   if (col) parts.push(col, WF_LABEL[col] || '');
   // MR состояния (live из GitLab, иначе wf-фолбэк)
   const mrs = mrCache[mrKey(s)] ? mrCache[mrKey(s)].mrs : null;
