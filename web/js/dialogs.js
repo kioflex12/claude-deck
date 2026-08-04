@@ -91,6 +91,12 @@ function openPendingNewSession(cwd, name, mode, model, effort){
   loadSkills(cwd);     // «/»-скиллы для нового cwd
   setTimeout(()=>{ const ta = document.getElementById('composer-ta'); if (ta) ta.focus(); }, 60);
 }
+// Открыть пустую сессию Claude в КОНКРЕТНОЙ папке (напр. из ленты «Требует внимания» → разобрать незакоммиченную копию).
+export function openNewSessionInDir(cwd, name){
+  if (!cwd || !requireAuth()) return;
+  const nm = name || (String(cwd).split(/[\\/]/).filter(Boolean).pop() || 'сессия');
+  openPendingNewSession(cwd, nm, S.sessionMode || 'default', S.sessionModel || '', S.sessionEffort || '');
+}
 // Форк остаётся с промтом (продолжение контекста): создаём и сразу отправляем.
 function openNewSession(cwd, prompt, mode, forkFile){
   stopStream();

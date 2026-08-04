@@ -478,3 +478,11 @@
     .env-chip.up .env-dot{ background:var(--good); box-shadow:0 0 0 3px var(--good-soft); }
     .env-chip.down{ color:var(--bad); border-color:var(--bad-soft); }
     .env-chip.down .env-dot{ background:var(--bad); box-shadow:0 0 0 3px var(--bad-soft); }
+
+    /* Фаза-4: модалка незакоммиченной копии — список изменённых файлов */
+    .rf-list{ max-height:320px; overflow:auto; margin:8px 0; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); padding:6px 4px; }
+    .rf-row{ display:flex; align-items:baseline; gap:9px; padding:2px 8px; font-family:var(--mono); font-size:11.5px; }
+    .rf-st{ flex:none; width:22px; color:var(--warn); font-weight:700; }
+    .rf-path{ color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rf-more{ padding:4px 8px; font-family:var(--mono); font-size:11px; color:var(--text-faint); }
+    .rf-empty{ padding:8px; color:var(--text-faint); font-size:12px; }

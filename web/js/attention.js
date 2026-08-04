@@ -7,6 +7,7 @@ import { esc, timeAgo } from './util.js';
 import { attentionReasons } from './columns.js';
 import { openSession } from './session.js';
 import { openWoJira, openExternal } from './ui.js';
+import { modalBack, openNewSessionInDir } from './dialogs.js';
 
 function attentionSessions(){
   const out = [];
@@ -48,11 +49,30 @@ function sessionCardHTML(item){
   </article>`;
 }
 function repoCardHTML(r){
-  return `<article class="attn-card sev-git" data-dir="${esc(r.dir)}" tabindex="0" role="button" title="Открыть папку: ${esc(r.dir)}">
+  return `<article class="attn-card sev-git" data-dir="${esc(r.dir)}" tabindex="0" role="button" title="Показать изменения и разобрать в сессии Claude">
     <div class="attn-head"><span class="attn-proj">📁 ${esc(r.name)}</span>${r.branch?`<span class="attn-branch">⎇ ${esc(r.branch)}</span>`:''}</div>
     <div class="attn-reasons"><span class="attn-chip rk-git">${RK.git} ${r.count} ${r.count===1?'незакоммиченный файл':'незакоммиченных файлов'}</span></div>
     <div class="attn-foot"><span class="attn-path">${esc(r.dir)}</span></div>
   </article>`;
+}
+// Клик по незакоммиченной копии: показываем ЧТО изменено + путь «решить» — открыть сессию Claude в этой папке
+// (разобрать/закоммитить прямо в Deck), а не бесполезное открытие папки в проводнике (вторичная кнопка).
+function openRepoModal(r){
+  const back = modalBack('repoBack');
+  const files = Array.isArray(r.files) ? r.files : [];
+  const rows = files.map(f => `<div class="rf-row"><span class="rf-st">${esc(f.status||'?')}</span><span class="rf-path">${esc(f.path||'')}</span></div>`).join('') || '<div class="rf-empty">список файлов недоступен</div>';
+  const more = r.count > files.length ? `<div class="rf-more">…и ещё ${r.count - files.length}</div>` : '';
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>📁 ${esc(r.name)} · ⎇ ${esc(r.branch||'')} · ${r.count} ${r.count===1?'файл':'файлов'}</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note">Незакоммиченные изменения в рабочей копии. Открой сессию Claude в этой папке — попроси разобрать и закоммитить прямо тут.</div>
+      <div class="rf-list">${rows}${more}</div>
+      <div class="ns-actions"><button class="btn-ghost" id="rfFolder" type="button">📁 Открыть папку</button><button class="ns-start" id="rfSession" type="button">💬 Открыть сессию Claude здесь</button></div>
+    </div></div>`;
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('#rfFolder').addEventListener('click', ()=>{ if (window.deckNative && window.deckNative.openPath) window.deckNative.openPath({ path: r.dir, cwd: r.dir }); });
+  back.querySelector('#rfSession').addEventListener('click', ()=>{ close(); openNewSessionInDir(r.dir, r.name); });
+  back.classList.add('open');
 }
 
 function envSectionHTML(){
@@ -88,7 +108,7 @@ export function renderAttention(){
     el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });
   });
   view.querySelectorAll('.attn-card[data-dir]').forEach(el=>{
-    const open = ()=>{ const dir = el.dataset.dir; if (window.deckNative && window.deckNative.openPath) window.deckNative.openPath({ path: dir, cwd: dir }); };
+    const open = ()=>{ const r = (S.ATTENTION_GIT||[]).find(x=>x.dir===el.dataset.dir); if (r) openRepoModal(r); };
     el.addEventListener('click', open);
     el.addEventListener('keydown', e=>{ if (e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } });
   });

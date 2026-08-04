@@ -363,15 +363,17 @@ export const _gitCache = new Map();   // dir -> { ts, data:{count,branch}|null }
 const GIT_TTL = 45 * 1000;
 function gitDirty(dir) {
   return new Promise((resolve) => {
-    // --porcelain=v1 -b: первая строка «## <branch>...<upstream>», далее по строке на изменённый/неотслеживаемый файл.
+    // --porcelain=v1 -b: первая строка «## <branch>...<upstream>», далее по строке на изменённый/неотслеживаемый файл (XY + путь).
     execFile('git', ['-C', dir, 'status', '--porcelain=v1', '-b'], { timeout: 4000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       if (err) { resolve(null); return; }   // не git-репо / git недоступен / таймаут → тихо пропускаем
-      let branch = '', count = 0;
+      let branch = '', count = 0; const files = [];
       for (const ln of String(stdout).split('\n')) {
         if (ln.startsWith('## ')) { branch = ln.slice(3).split('...')[0].split(' ')[0]; continue; }
-        if (ln.trim()) count++;
+        if (!ln.trim()) continue;
+        count++;
+        if (files.length < 100) files.push({ status: ln.slice(0, 2).trim(), path: ln.slice(3) });   // список — для модалки «что именно не закоммичено»
       }
-      resolve({ count, branch });
+      resolve({ count, branch, files });
     });
   });
 }
@@ -389,7 +391,7 @@ export async function apiGitDirty() {
     let data;
     if (c && Date.now() - c.ts < GIT_TTL) data = c.data;
     else { data = await gitDirty(dir); _gitCache.set(dir, { ts: Date.now(), data }); }
-    if (data && data.count > 0) repos.push({ dir, name: path.basename(dir.replace(/[\\/]+$/, '')), branch: data.branch, count: data.count });
+    if (data && data.count > 0) repos.push({ dir, name: path.basename(dir.replace(/[\\/]+$/, '')), branch: data.branch, count: data.count, files: data.files || [] });
   }));
   repos.sort((a, b) => b.count - a.count);
   return { repos };
