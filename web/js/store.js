@@ -34,6 +34,7 @@ export const S = {
   streamTimer: null,          // тикер «Claude работает Nс»
   currentStreamId: null,      // id стрима для гарантированного /api/stop
   streamingFile: null,        // файл стримящейся сессии (оверрайд working=true в рендере)
+  serverBusy: false,          // на сервере жив ход текущей сессии, хотя SSE-канал оборван (из tail serverActive) — новый промт должен steer'иться, а не плодить 2-й ход
   sessionMode: 'default',     // режим разрешений (shift-tab цикл)
   sessionModel: '',           // выбранная модель (пусто = дефолт)
   sessionEffort: '',          // выбранный reasoning-effort

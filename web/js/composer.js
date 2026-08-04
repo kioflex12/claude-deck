@@ -328,7 +328,7 @@ function sendMessage(){
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
   const payload = { text, mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
   if (!S.currentFile && S.pendingNewSession){ payload.newSessionCwd = S.pendingNewSession.cwd; payload.pendingName = S.pendingNewSession.name; }  // первый промт → создать именованную сессию
-  if (S.streaming && S.currentFile){ steerPrompt(payload); return; }   // идёт стрим по существующей сессии → докидываем в живой ход (steering), Клод прочитает на ближайшей границе
+  if ((S.streaming || S.serverBusy) && S.currentFile){ steerPrompt(payload); return; }   // жив ход (SSE ИЛИ серверный, если канал оборвался) → докидываем в него (steering); НЕ плодим 2-й ход = не будет дубля «Claude работает»
   if (S.streaming){ enqueuePrompt(payload); return; }       // стрим новой (файла ещё нет) → в очередь до появления сессии
   runPrompt(payload);
 }

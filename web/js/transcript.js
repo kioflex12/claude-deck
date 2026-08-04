@@ -88,5 +88,5 @@ export function renderThread(t){
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();
-  if (t.active) startTail(t.file);         // сессия свежая → тянем новые блоки вживую
+  if (t.active || t.serverActive) startTail(t.file);   // сессия свежая ИЛИ на сервере жив ход (заблокирован на вопросе/долгом инструменте — файл не пишется, mtime старый) → всё равно тянем tail
 }

@@ -481,7 +481,9 @@ export function apiSession(relFile) {
   const sessionId = path.basename(rp.resolved).replace(/\.jsonl$/, '');
   const agents = sessionAgentsDetail(projDir, sessionId);   // деталь: label/activity/tokens (открытая сессия — парсить можно)
   const bgRunning = agents.filter((a) => a.running).length;
-  const active = (Date.now() - mtime) < ACTIVE_MS || bgRunning > 0;
+  let serverActive = false;
+  for (const e of activeStreams.values()) { if (e && e.key === sessionId) { serverActive = true; break; } }   // на сервере жив ход этой сессии (заблокирован на вопросе/долгом инструменте — файл не пишется) → клиент поднимет tail
+  const active = (Date.now() - mtime) < ACTIVE_MS || bgRunning > 0 || serverActive;
   // Стадия/билд/MR/скоуп из dev-workflow — те же поля, что и на карточке, чтобы правый рейл их отражал.
   const st = wo ? loadWfStates().get(wo) : null;
   const wf = wfInfo(st, active);
@@ -502,7 +504,8 @@ export function apiSession(relFile) {
     ctxPct: Math.min(winTokens / CTX_LIMIT, 1),
     mtime,
     active,
-    working: (Date.now() - mtime) < WORKING_MS || bgRunning > 0,
+    serverActive,
+    working: (Date.now() - mtime) < WORKING_MS || bgRunning > 0 || serverActive,
     bgRunning,
     agents,
     blocks,

@@ -109,8 +109,9 @@
     .q-plan{ margin:0; max-height:320px; overflow:auto; font-family:var(--mono); font-size:11.5px; line-height:1.5; color:var(--text); background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:9px 11px; white-space:pre-wrap; word-break:break-word; }
     .q-opts{ display:flex; flex-direction:column; gap:6px; }
     .q-opt{ display:flex; flex-direction:column; gap:2px; text-align:left; font-family:var(--ui); padding:8px 11px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); cursor:pointer; transition:.13s; }
-    .q-opt:hover:not(:disabled){ border-color:var(--border-strong); background:var(--surface); }
-    .q-opt.sel{ border-color:var(--accent); background:var(--accent-soft); }
+    .q-opt:hover:not(:disabled){ border-color:var(--accent); }   /* ховер = только акцентная рамка; НЕ уводим фон в var(--surface) — это фон самой карточки, вариант «растворялся» */
+    .q-opt.sel{ border-color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 0 0 1px var(--accent); }   /* выбор держится и под курсором: hover меняет лишь border-color, а заливку/кольцо/цвет заголовка .sel не перебивает */
+    .q-opt.sel .q-opt-label{ color:var(--accent-ink); }
     .q-opt:disabled{ opacity:.55; cursor:default; }
     .q-opt-label{ font-size:12.5px; font-weight:560; }
     .q-opt-desc{ font-size:11.5px; color:var(--text-muted); }

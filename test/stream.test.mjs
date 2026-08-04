@@ -77,8 +77,9 @@ test('stream.js: questionCardHTML рендерит варианты; wireQuestio
   wireQuestion(null, d);
 
   // функциональный мини-DOM: клик по варианту single-select → auto-submit → POST /api/answer с answers
+  S.currentFile = null;   // изолируем от live-tail: без открытой сессии resumeTailAfterInput (после ответа) — no-op, иначе стартанул бы tail и его fetch'и перебили бы posted
   let posted = null;
-  setFetch(async (url, opt) => { posted = { url, body: opt && opt.body ? JSON.parse(opt.body) : null }; return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '', headers: { get(){ return null; } } }; });
+  setFetch(async (url, opt) => { if (url === '/api/answer') posted = { url, body: opt && opt.body ? JSON.parse(opt.body) : null }; return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '', headers: { get(){ return null; } } }; });
   const card = makeNode('cx-msg cx-question', { single: '1' });
   const block = card.add(makeNode('q-block', { multi: '0', question: 'Куда идём?' }));
   const opt1 = block.add(makeNode('q-opt', { label: 'Влево' }));

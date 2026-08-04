@@ -101,6 +101,7 @@ export function wireApproval(el, d){
     const r = el.querySelector('.ap-result');
     if (r){ r.hidden = false; r.textContent = decision==='deny' ? 'запрещено ✗' : decision==='always' ? 'всегда ✓' : 'разрешено ✓'; r.classList.add(decision==='deny' ? 'ap-r-deny' : 'ap-r-allow'); }
     el.classList.add('ap-resolved');
+    resumeTailAfterInput();   // канал мог оборваться — поднять tail, чтобы продолжение хода прилетело и индикатор не завис на «Ожидает»
   }));
 }
 
@@ -139,6 +140,15 @@ function collectAnswers(el){
   return answers;
 }
 
+// После ответа на вопрос / решения по аппруву: если живого Deck-SSE нет (канал оборвался или это перезаход), сервер-ход
+// продолжится и напишет .jsonl — поднимаем tail, чтобы продолжение прилетело вживую и индикатор пересчитался с «Ожидает»
+// на «работает»/скрыт (иначе «Ожидает вашего ответа» висит до ручного перезахода, а новые блоки не подтягиваются).
+export function resumeTailAfterInput(){
+  const f = S.currentFile; if (!f) return;
+  if (S.streaming && S.streamingFile === f) return;   // живой SSE сам дорисует продолжение
+  startTail(f);
+}
+
 async function submitAnswers(el, d){
   if (el.classList.contains('q-resolved')) return;
   const answers = collectAnswers(el);
@@ -148,6 +158,7 @@ async function submitAnswers(el, d){
   try { await fetch('/api/answer', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: d.id, answers }) }); } catch {}
   const foot = el.querySelector('.q-foot'); if (foot) foot.remove();
   const r = el.querySelector('.q-result'); if (r){ r.hidden = false; r.textContent = 'Ответ отправлен: ' + Object.values(answers).join(' · '); }
+  resumeTailAfterInput();
 }
 
 export function wireQuestion(el, d){
@@ -169,6 +180,7 @@ export async function runPrompt(payload){
   const model = payload.model || '', effort = payload.effort || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
+  stopTail();   // живой стрим сам владеет индикатором: снимаем tail-индикатор, иначе рядом с новым «работает» висел бы старый tail (дубль «Claude работает»)
   if (queuedEl && queuedEl.parentElement){                // это был поставленный в очередь блок — снимаем метку
     queuedEl.classList.remove('cx-queued');
     const tag = queuedEl.querySelector('.cx-queued-tag'); if (tag) tag.remove();
@@ -309,6 +321,7 @@ export async function runPrompt(payload){
     } else if (d.type === 'thinking'){
       const piece = d.delta || '';
       if (liveThink || piece.trim()){        // блок создаём только с первым НЕПУСТЫМ thinking_delta
+        if (waiting){ waiting = false; t0 = Date.now(); }   // после ответа Клод может СНАЧАЛА думать (не сразу текст/tool) — снимаем «Ожидает», иначе индикатор завис бы на размышлении
         if (activity !== '✻ размышляет'){ activity = '✻ размышляет'; paintRun(); }
         clearLive();
         if (!liveThink) startNewThink();
@@ -382,7 +395,7 @@ export async function runPrompt(payload){
   };
 }
 
-export function stopTail(){ if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
+export function stopTail(){ S.serverBusy = false; if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
 
 export function startTail(file){ stopTail(); S.tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
 
@@ -471,6 +484,7 @@ async function tailTick(file){
     const cons = ensureConsole();
     const ind = document.getElementById('tailInd');
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
+    cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });   // steer-промт подхвачен ходом (пошли новые блоки) → снимаем «⏳ ожидает» (SSE-события turn тут нет)
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
@@ -478,6 +492,7 @@ async function tailTick(file){
   // Занятость — ТОЛЬКО по serverActive (на сервере жив ход этой сессии). mtime-«working» НЕ используем: он устаревает
   // на долгих инструментах (индикатор мигал «то есть, то нет») и остаётся свежим ~20с после Стопа (индикатор всплывал призраком).
   const working = !!d.serverActive;
+  S.serverBusy = working;   // новый промт при живом сервер-ходе, но оборванном SSE → sendMessage должен steer'ить, а не плодить 2-й ход (дубль «работает»)
   updateTailIndicator(working || pending, d.turnStartTs, pending, d.activity);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает <активность>»; иначе скрыт
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
