@@ -142,6 +142,19 @@ test('/api/git-dirty → 200, {repos:[]} (фикстур-cwd не git-репо �
   assert.equal(body.repos.length, 0, 'нет git-репо среди фикстур → ничего не требует внимания');
 });
 
+test('быстрые действия без настроенных интеграций → мягкий ok:false с причиной (не падение)', async () => {
+  const post = async (p, b) => { const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
+  const jc = await post('/api/jira-comment', { wo: 'WO-1', body: 'тест' });
+  assert.equal(jc.status, 200); assert.equal(jc.body.ok, false); assert.match(jc.body.error, /Jira/);
+  const mr = await post('/api/create-mr', { sourceBranch: 'WO-1-x', targetBranch: 'preprod', repoHint: 'client-unity' });
+  assert.equal(mr.status, 200); assert.equal(mr.body.ok, false); assert.match(mr.body.error, /GitLab/);
+  const bt = await post('/api/trigger-build', { buildTypeId: 'Wo_Client_Development_Android', branch: 'WO-1-x' });
+  assert.equal(bt.status, 200); assert.equal(bt.body.ok, false); assert.match(bt.body.error, /TeamCity/);
+  // валидация входа: пустой WO → ошибка ещё до сети (тут Jira и так выкл, но проверяем ветку явным ключом)
+  const bad = await post('/api/jira-comment', { wo: '', body: 'x' });
+  assert.equal(bad.body.ok, false);
+});
+
 test('/api/config/test → 200, {ok, message}; неизвестный svc → ok:false', async () => {
   const r = await fetch(base + '/api/config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ svc: 'jira', host: '', email: '', token: '' }) });
   const body = await r.json();

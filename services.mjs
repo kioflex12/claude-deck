@@ -224,3 +224,74 @@ export async function jiraStatus(wo, fresh) {
   }
 }
 export async function apiJira(res, u) { sendJSON(res, await jiraStatus(u.searchParams.get('wo') || '', u.searchParams.get('refresh') === '1')); }
+
+// -------- Фаза-4: быстрые действия с карточки (прямые API-записи, каждое — после подтверждения в UI) --------
+// Отчёт в Jira: POST комментария. Тело Jira требует ADF (Atlassian Document Format), не plain-text — заворачиваем
+// абзацы. Комментарий обратим (можно удалить), но всё равно спрашиваем подтверждение на клиенте.
+function adfFromText(text) {
+  const paras = String(text || '').split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  return { type: 'doc', version: 1, content: (paras.length ? paras : ['—']).map((p) => ({ type: 'paragraph', content: [{ type: 'text', text: p }] })) };
+}
+export async function apiJiraComment(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 64 * 1024); } catch {}
+  const wo = String(body.wo || '').trim(), text = String(body.body || '').trim();
+  if (!JIRA_ENABLED) { sendJSON(res, { ok: false, error: 'Jira не настроена (host/email/token)' }); return; }
+  if (!/^WO-\d+$/i.test(wo)) { sendJSON(res, { ok: false, error: 'нужен ключ задачи WO-XXXX' }); return; }
+  if (!text) { sendJSON(res, { ok: false, error: 'пустой комментарий' }); return; }
+  try {
+    const auth = Buffer.from(JIRA_EMAIL + ':' + JIRA_TOKEN).toString('base64');
+    const r = await fetchRetry('https://' + JIRA_HOST + '/rest/api/3/issue/' + encodeURIComponent(wo) + '/comment', {
+      method: 'POST', headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ body: adfFromText(text) }),
+    }, { retries: 1 });
+    if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
+    const j = await r.json().catch(() => ({}));
+    sendJSON(res, { ok: true, id: j.id, url: 'https://' + JIRA_HOST + '/browse/' + wo });
+  } catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); }
+}
+
+// Создать MR: GitLab API требует ID/путь проекта, а Deck знает только ветку. Резолвим проект по repoHint (имени репо
+// из скоупа задачи: client-unity / backend-services / staticsutils). Не удалось определить — честно отдаём ошибку
+// (пользователь создаст MR в GitLab вручную), НЕ угадываем вслепую.
+async function glFindProject(repoHint) {
+  const list = await glJson('/api/v4/projects?search=' + encodeURIComponent(repoHint) + '&membership=true&per_page=20&order_by=last_activity_at');
+  if (!Array.isArray(list) || !list.length) return null;
+  const hint = repoHint.toLowerCase();
+  return list.find((p) => String(p.path || '').toLowerCase() === hint || String(p.name || '').toLowerCase() === hint) || list[0];
+}
+export async function apiCreateMr(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 64 * 1024); } catch {}
+  const source = String(body.sourceBranch || '').trim(), target = String(body.targetBranch || 'preprod').trim(), title = String(body.title || '').trim(), repoHint = String(body.repoHint || '').trim();
+  if (!GL_TOKEN || !GL_HOST) { sendJSON(res, { ok: false, error: 'GitLab не настроен (host/token)' }); return; }
+  if (!source) { sendJSON(res, { ok: false, error: 'нет исходной ветки' }); return; }
+  if (!repoHint) { sendJSON(res, { ok: false, error: 'не задан репозиторий (repoHint)' }); return; }
+  try {
+    const project = await glFindProject(repoHint);
+    if (!project) { sendJSON(res, { ok: false, error: 'проект GitLab по «' + repoHint + '» не найден — создайте MR вручную' }); return; }
+    const r = await fetchRetry(GL_HOST + '/api/v4/projects/' + encodeURIComponent(project.id) + '/merge_requests', {
+      method: 'POST', headers: { 'PRIVATE-TOKEN': GL_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify({ source_branch: source, target_branch: target, title: title || source, remove_source_branch: false }),
+    }, { retries: 1 });
+    if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
+    const j = await r.json();
+    sendJSON(res, { ok: true, iid: j.iid, web_url: j.web_url, project: project.path_with_namespace || project.path });
+  } catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); }
+}
+
+// Деплой: поставить клиентскую сборку ветки в очередь TeamCity (buildQueue). buildTypeId = один из TC_BUILD_TYPES.
+export async function apiTriggerBuild(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 16 * 1024); } catch {}
+  const buildTypeId = String(body.buildTypeId || '').trim(), branch = String(body.branch || '').trim();
+  if (!TC_TOKEN || !TC_HOST) { sendJSON(res, { ok: false, error: 'TeamCity не настроен (host/token)' }); return; }
+  if (!buildTypeId) { sendJSON(res, { ok: false, error: 'нет buildTypeId' }); return; }
+  try {
+    const payload = { buildType: { id: buildTypeId } };
+    if (branch) payload.branchName = branch;
+    const r = await fetchRetry(TC_HOST + '/app/rest/buildQueue', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TC_TOKEN, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload),
+    }, { retries: 1 });
+    if (!r.ok) { const t = await r.text().catch(() => ''); sendJSON(res, { ok: false, error: 'HTTP ' + r.status + (t ? ' — ' + t.slice(0, 200) : '') }); return; }
+    const j = await r.json().catch(() => ({}));
+    sendJSON(res, { ok: true, id: j.id, webUrl: j.webUrl });
+  } catch (e) { sendJSON(res, { ok: false, error: String((e && e.message) || e) }); }
+}
+// Клиентские build-конфиги dev-сборки — для диалога «Деплой» (совпадают с TC_BUILD_TYPES выше).
+export const TC_DEV_BUILD_TYPES = TC_BUILD_TYPES;

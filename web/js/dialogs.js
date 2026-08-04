@@ -1,8 +1,9 @@
 // Deck — модалки/диалоги: подложка modalBack, новая сессия/форк, удаление, обновления (Electron) и экран настроек.
 // Вынесено из app.js; состояние — в store (S).
-import { S, SESSION_CACHE, MODE_ORDER, MODE_LABEL } from './store.js';
+import { S, SESSION_CACHE, MODE_ORDER, MODE_LABEL, JIRA_CACHE, MR_CACHE } from './store.js';
 import { esc } from './util.js';
-import { toast } from './ui.js';
+import { toast, openExternal } from './ui.js';
+import { mrKey } from './columns.js';
 import { stopStream, runPrompt } from './stream.js';
 import { renderComposer, paintMode, loadSkills } from './composer.js';
 import { wireConsole } from './transcript.js';
@@ -176,7 +177,7 @@ export function openRenameDialog(file){
   back.classList.add('open');
   setTimeout(()=>{ const p = back.querySelector('#renameInp'); if (p) p.focus(); }, 60);
 }
-function openForkDialog(t){
+export function openForkDialog(t){
   const back = modalBack('forkBack');
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m===S.sessionMode?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Форк сессии</span><button class="dm-x" type="button">✕</button></div>
@@ -198,6 +199,121 @@ function openForkDialog(t){
   });
   back.classList.add('open');
   setTimeout(()=>{ const p = back.querySelector('#forkPrompt'); if (p) p.focus(); }, 60);
+}
+
+// -------- Фаза-4: быстрые действия с карточки (прямые API-записи, каждое — после явного подтверждения) --------
+// Имя репо GitLab по скоупу задачи — для резолва проекта при создании MR.
+function repoHintForScope(s){
+  if (s.clientCu) return 'client-unity';
+  if (s.backend) return 'backend-services';
+  if (s.statics) return 'staticsutils';
+  return '';
+}
+// Черновик отчёта в Jira из уже известных Deck данных (ветка, статус, MR, сборка) — пользователь правит перед отправкой.
+function quickReportDraft(s){
+  const lines = [];
+  if (s.gitBranch) lines.push(`Ветка: ${s.gitBranch}${s.baseBranch?` → ${s.baseBranch}`:''}`);
+  const j = s.wo && JIRA_CACHE[s.wo];
+  if (j && j.available && j.status) lines.push(`Статус Jira: ${j.status}`);
+  const mrs = MR_CACHE[mrKey(s)] && MR_CACHE[mrKey(s)].mrs;
+  if (mrs && mrs.length) lines.push('MR: ' + mrs.slice(0,3).map(m=>`!${m.iid} (${m.state})`).join(', '));
+  else if (s.wfMrUrl) lines.push('MR: ' + s.wfMrUrl);
+  if (s.buildActive) lines.push('Сборка: идёт'); else if (s.buildFailed) lines.push('Сборка: упала'); else if (s.wfBuildState==='done') lines.push('Сборка: готова');
+  return lines.join('\n');
+}
+export function openQuickJiraDialog(s){
+  if (!s.wo){ toast('У сессии нет задачи WO — отчёт в Jira недоступен'); return; }
+  const back = modalBack('qjiraBack');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Отчёт в Jira · ${esc(s.wo)}</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note">Комментарий уйдёт в задачу под вашим Jira-аккаунтом (токен из настроек). Правьте текст перед отправкой.</div>
+      <textarea id="qjBody" class="ns-inp" rows="6"></textarea>
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="qjSend" type="button">Отправить в Jira</button></div>
+      <div class="um-note" id="qjStatus" style="margin-top:6px"></div>
+    </div></div>`;
+  const ta = back.querySelector('#qjBody'); ta.value = quickReportDraft(s);
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('.dm-cancel').addEventListener('click', close);
+  back.querySelector('#qjSend').addEventListener('click', async ()=>{
+    const body = ta.value.trim(); if (!body){ ta.focus(); return; }
+    const st = back.querySelector('#qjStatus'); st.textContent = 'Отправляю…';
+    let r; try { r = await (await fetch('/api/jira-comment', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ wo: s.wo, body }) })).json(); } catch { st.textContent = 'Ошибка запроса.'; return; }
+    if (!r.ok){ st.textContent = '✗ ' + (r.error||'не удалось'); return; }
+    toast('Комментарий добавлен в ' + s.wo); close();
+  });
+  back.classList.add('open');
+  setTimeout(()=>{ ta.focus(); }, 60);
+}
+export function openCreateMrDialog(s){
+  const source = s.gitBranch || '';
+  if (!source){ toast('У сессии нет рабочей ветки — MR создать не из чего'); return; }
+  const back = modalBack('cmrBack');
+  const target = s.baseBranch || 'preprod';
+  const title = (s.wo?`[${s.wo}] `:'') + (s.title || source);
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Создать MR</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note">MR создастся в GitLab под вашим токеном. Репозиторий определяется по имени — поправьте, если не тот.</div>
+      <label class="ns-lbl">Из ветки</label><input id="cmrSrc" class="ns-inp" type="text" value="${esc(source)}">
+      <label class="ns-lbl">В ветку</label><input id="cmrTgt" class="ns-inp" type="text" value="${esc(target)}">
+      <label class="ns-lbl">Репозиторий (поиск в GitLab)</label><input id="cmrRepo" class="ns-inp" type="text" value="${esc(repoHintForScope(s))}" placeholder="client-unity / backend-services / staticsutils">
+      <label class="ns-lbl">Заголовок MR</label><input id="cmrTitle" class="ns-inp" type="text" value="${esc(title)}">
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="cmrSend" type="button">Создать MR</button></div>
+      <div class="um-note" id="cmrStatus" style="margin-top:6px"></div>
+    </div></div>`;
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('.dm-cancel').addEventListener('click', close);
+  back.querySelector('#cmrSend').addEventListener('click', async ()=>{
+    const payload = {
+      sourceBranch: back.querySelector('#cmrSrc').value.trim(),
+      targetBranch: back.querySelector('#cmrTgt').value.trim(),
+      repoHint: back.querySelector('#cmrRepo').value.trim(),
+      title: back.querySelector('#cmrTitle').value.trim(),
+    };
+    const st = back.querySelector('#cmrStatus'); st.textContent = 'Создаю MR…';
+    let r; try { r = await (await fetch('/api/create-mr', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json(); } catch { st.textContent = 'Ошибка запроса.'; return; }
+    if (!r.ok){ st.textContent = '✗ ' + (r.error||'не удалось'); return; }
+    toast('MR !' + r.iid + ' создан'); close();
+    if (r.web_url) openExternal(r.web_url);
+    delete MR_CACHE[mrKey(s)];   // сбросить кэш — новый MR подтянется на ближайшем поллинге
+    if (typeof pollSessions === 'function') pollSessions(true);
+  });
+  back.classList.add('open');
+}
+// dev-сборки клиента (совпадают с TC_BUILD_TYPES в services.mjs)
+const DEV_BUILD_TYPES = [{ id:'Wo_Client_Development_Android', plat:'Android' }, { id:'Wo_Client_Development_IOS', plat:'iOS' }];
+export function openDeployDialog(s){
+  const branch = s.gitBranch || '';
+  if (!branch){ toast('У сессии нет рабочей ветки — деплоить нечего'); return; }
+  const back = modalBack('depBack');
+  const cbs = DEV_BUILD_TYPES.map((b,i)=>`<label class="dep-cb"><input type="checkbox" data-bt="${esc(b.id)}"${i===0?' checked':''}> ${esc(b.plat)}</label>`).join('');
+  back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Деплой (сборка клиента)</span><button class="dm-x" type="button">✕</button></div>
+    <div class="dm-body">
+      <div class="um-note" style="color:var(--warn)">⚠ Поставит РЕАЛЬНУЮ сборку в очередь TeamCity для ветки <b>${esc(branch)}</b>. Это израсходует агент сборки.</div>
+      <div class="dep-cbs">${cbs}</div>
+      <div class="ns-actions"><button class="btn-ghost dm-cancel" type="button">Отмена</button><button class="ns-start" id="depSend" type="button">Запустить сборку</button></div>
+      <div class="um-note" id="depStatus" style="margin-top:6px"></div>
+    </div></div>`;
+  const close = ()=>back.classList.remove('open');
+  back.querySelector('.dm-x').addEventListener('click', close);
+  back.querySelector('.dm-cancel').addEventListener('click', close);
+  back.querySelector('#depSend').addEventListener('click', async ()=>{
+    const picked = [...back.querySelectorAll('.dep-cb input:checked')].map(i=>i.dataset.bt);
+    if (!picked.length){ back.querySelector('#depStatus').textContent = 'Выберите платформу.'; return; }
+    const st = back.querySelector('#depStatus'); st.textContent = 'Ставлю в очередь…';
+    const results = [];
+    for (const buildTypeId of picked){
+      let r; try { r = await (await fetch('/api/trigger-build', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ buildTypeId, branch }) })).json(); } catch { r = { ok:false, error:'запрос не прошёл' }; }
+      results.push({ buildTypeId, r });
+    }
+    const ok = results.filter(x=>x.r.ok).length;
+    if (ok){ toast('Сборок в очереди: ' + ok); if (typeof pollSessions === 'function') pollSessions(true); }
+    const fail = results.filter(x=>!x.r.ok);
+    st.textContent = (ok?`✓ поставлено: ${ok}`:'') + (fail.length?`  ✗ ошибки: ` + fail.map(x=>x.r.error).join('; '):'');
+    if (!fail.length) setTimeout(close, 900);
+  });
+  back.classList.add('open');
 }
 
 export function renderUpdateStatus(s){

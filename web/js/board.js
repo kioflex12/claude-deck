@@ -8,9 +8,10 @@ import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL, mrKe
 import { openWoJira, toast } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
-import { openNewSessionDialog, openRenameDialog, openDeleteDialog } from './dialogs.js';
+import { openNewSessionDialog, openRenameDialog, openDeleteDialog, openForkDialog, openQuickJiraDialog, openCreateMrDialog, openDeployDialog } from './dialogs.js';
 import { hydrateMrs, hydrateJira } from './services.js';
 import { openSession } from './session.js';
+import { isBaseBranch } from './app.js';
 
 export function boardMatch(s){
   if (S.projFilter!=='all' && s.project!==S.projFilter) return false;
@@ -134,12 +135,16 @@ function closeCardMenu(){
 export function openCardMenu(e, file){
   closeCardMenu();
   const s = S.SESSIONS.find(x=>x.file===file);
-  const items = [
-    { label:'Открыть',      act:()=>openSession(file) },
-    { label:'Изменить имя', act:()=>openRenameDialog(file) },
-    { label:'Обновить',     act:()=>refreshCard(file) },
-    { label:'Удалить',      danger:true, act:()=>openDeleteDialog(file, s && s.title) },
-  ];
+  const items = [{ label:'Открыть', act:()=>openSession(file) }];
+  if (s && s.cwd) items.push({ label:'Форкнуть', act:()=>openForkDialog(s) });
+  if (s && s.wo) items.push({ label:'Отчёт в Jira', act:()=>openQuickJiraDialog(s) });
+  if (s && s.gitBranch && !isBaseBranch(s.gitBranch)){
+    items.push({ label:'Создать MR', act:()=>openCreateMrDialog(s) });
+    items.push({ label:'Деплой (сборка)', act:()=>openDeployDialog(s) });
+  }
+  items.push({ label:'Изменить имя', act:()=>openRenameDialog(file) });
+  items.push({ label:'Обновить',     act:()=>refreshCard(file) });
+  items.push({ label:'Удалить',      danger:true, act:()=>openDeleteDialog(file, s && s.title) });
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.innerHTML = items.map((it,i)=>`<button type="button" data-i="${i}"${it.danger?' class="danger"':''}>${esc(it.label)}</button>`).join('');

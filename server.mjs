@@ -21,7 +21,7 @@ import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, api
 import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
 import { apiChatPrepare, apiChat, apiChatInput, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
-import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest } from './services.mjs';
+import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest, apiJiraComment, apiCreateMr, apiTriggerBuild } from './services.mjs';
 import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout } from './auth.mjs';
 
 // -------- статика web/ (D4c: клиент разбит на ES-модули + deck.css). Path-safe: только из web/. --------
@@ -89,6 +89,9 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
+  if (u.pathname === '/api/jira-comment') { apiJiraComment(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/create-mr') { apiCreateMr(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/trigger-build') { apiTriggerBuild(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/health') { apiHealth(res); return; }
   if (u.pathname === '/api/config/test') { apiConfigTest(req, res).catch((e) => sendJSON(res, { ok: false, message: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/config/import-tokens') { apiImportTokens(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
