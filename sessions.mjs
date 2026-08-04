@@ -45,11 +45,16 @@ function loadNames() {
   catch { _names = {}; }
   return _names;
 }
-function nameOf(file) { const n = loadNames()[file]; return (typeof n === 'string' && n.trim()) ? n : ''; }
-function setName(file, name) {
+// Ключ имени нормализуем в нижний регистр: slug(cwd), по которому клиент/сервер вычисляют rel новой сессии, и реальная
+// папка проекта в ~/.claude/projects могут отличаться РЕГИСТРОМ буквы диска на Windows (d:\ vs D:\). Разно-регистровый
+// ключ → имя сохранялось под тем, что не читалось на доске, и заголовок падал на первый промт (баг именования).
+function nameOf(file) { const m = loadNames(); const n = m[file] || m[String(file).toLowerCase()]; return (typeof n === 'string' && n.trim()) ? n : ''; }
+export function setName(file, name) {
   const map = loadNames();
+  const key = String(file).toLowerCase();
+  if (file !== key && map[file] !== undefined) delete map[file];   // подчистить возможный старый разно-регистровый ключ
   const clean = String(name || '').trim().slice(0, 120);
-  if (clean) map[file] = clean; else delete map[file];
+  if (clean) map[key] = clean; else delete map[key];
   try { mkdirSync(path.dirname(namesFile()), { recursive: true }); writeFileSync(namesFile(), JSON.stringify(map, null, 2)); } catch {}
   return clean;
 }

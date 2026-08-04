@@ -10,6 +10,7 @@ import {
 } from './core.mjs';
 import { firstString } from './text.mjs';
 import { getSdkQuery } from './sdk.mjs';
+import { setName } from './sessions.mjs';
 
 // Мутирующие инструменты, которые managed-тир форсирует в ask. settingSources('project') нужен, чтобы CLI нашёл скиллы
 // проекта (/dev-workflow и пр.) и CLAUDE.md — без него слэш-команды = «Unknown command». Но project несёт и
@@ -82,13 +83,14 @@ export async function apiChatPrepare(req, res) {
   const newSession = body.newSession === true;         // Part 3: создать НОВУЮ сессию (без resume) в cwd
   const fork = body.fork === true;                     // форк: resume + forkSession — новый id с контекстом исходной
   const cwd = String(body.cwd || '');
+  const name = String(body.name || '').slice(0, 120);  // заданное пользователем имя новой сессии — сервер закрепит его при создании (устойчивее клиентского POST: без гонки и без расхождения rel)
   let bytes = 0;
   for (const a of attachments) bytes += (a && a.dataB64 ? a.dataB64.length : 0) + (a && a.text ? a.text.length : 0);
   if (bytes > STAGE_MAX_BYTES) { sendJSON(res, { error: 'attachments too large (~18MB limit)' }, 413); return; }
   const now = Date.now();
   for (const [k, v] of stagedRequests) if (now - v.ts > 5 * 60 * 1000) stagedRequests.delete(k);   // sweep старьё
   const token = 'st_' + now.toString(36) + Math.random().toString(36).slice(2, 10);
-  stagedRequests.set(token, { sessionFile, prompt, mode, model, effort, attachments, newSession, cwd, fork, ts: now });
+  stagedRequests.set(token, { sessionFile, prompt, mode, model, effort, attachments, newSession, cwd, fork, name, ts: now });
   sendJSON(res, { token });
 }
 
@@ -106,7 +108,7 @@ export async function apiChat(req, res, u) {
   const heartbeat = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 15000);
 
   // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
-  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '';
+  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '', newName = '';
   const token = u.searchParams.get('token');
   if (token) {
     const staged = stagedRequests.get(token);
@@ -120,6 +122,7 @@ export async function apiChat(req, res, u) {
     isNew = staged.newSession === true;                             // Part 3: новая сессия без resume
     isFork = staged.fork === true;                                  // форк: resume исходной + forkSession
     newCwd = staged.cwd || '';
+    newName = staged.name || '';
   } else {
     relFile = u.searchParams.get('file') || '';
     prompt = u.searchParams.get('prompt') || '';
@@ -265,6 +268,7 @@ export async function apiChat(req, res, u) {
           sessionKey = m.session_id;
           streamEntry.key = sessionKey;                              // новая/форкнутая сессия узнала id → привязываем активный ход к её файлу
           const rel = String(cwd).replace(/[^a-zA-Z0-9]/g, '-') + '/' + m.session_id + '.jsonl';
+          if (newName) { try { setName(rel, newName); } catch {} }   // закрепляем имя серверно тем же rel — без гонки с клиентским POST и без расхождения ключа/регистра
           send({ type: 'session', id: m.session_id, file: rel });
         }
       } else if (m.type === 'stream_event') {

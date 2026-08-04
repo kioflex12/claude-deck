@@ -180,6 +180,7 @@ export async function runPrompt(payload){
   const model = payload.model || '', effort = payload.effort || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
+  const emptyEl = cons.querySelector('.empty'); if (emptyEl) emptyEl.remove();   // плейсхолдер «Пустая сессия…» новой сессии — убрать при первом же промте (иначе висел над диалогом)
   stopTail();   // живой стрим сам владеет индикатором: снимаем tail-индикатор, иначе рядом с новым «работает» висел бы старый tail (дубль «Claude работает»)
   if (queuedEl && queuedEl.parentElement){                // это был поставленный в очередь блок — снимаем метку
     queuedEl.classList.remove('cx-queued');
@@ -239,7 +240,7 @@ export async function runPrompt(payload){
       const body = isFork
         ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim }
         : payload.newSessionCwd
-        ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, attachments: slim }
+        ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, name: payload.pendingName || '', attachments: slim }
         : { prompt: text, mode, model, effort, sessionFile: S.currentFile, attachments: slim };
       const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
