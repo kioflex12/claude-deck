@@ -13,7 +13,7 @@ import path from 'node:path';
 test('services.js: рендер-пути TeamCity/GitLab/Jira/теги/агенты в null-DOM', async () => {
   setFetch(async () => ({ ok:true, status:200,
     json: async () => ({ available:true,
-      builds:[{ plat:'Android', state:'running', status:'', number:'42', webUrl:'https://tc/1' }],
+      builds:[{ plat:'Android', state:'running', status:'', number:'42', webUrl:'https://tc/1', percent:42, stage:'Compiling' }],
       mrs:[{ iid:7, web_url:'https://gl/-/merge_requests/7', target_branch:'preprod', source_branch:'feature/x', state:'opened', project:'client' }],
       status:'In Progress', category:'indeterminate', summary:'работаем' }),
     text: async () => '', headers:{ get(){ return null; } } }));

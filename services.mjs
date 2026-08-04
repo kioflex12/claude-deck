@@ -65,7 +65,7 @@ const TC_BUILD_TYPES = [
   { id: 'Wo_Client_Development_Android', plat: 'Android' },
   { id: 'Wo_Client_Development_IOS', plat: 'iOS' },
 ];
-const TC_FIELDS = 'fields=count,build(id,number,status,state,branchName,webUrl,buildTypeId)';
+const TC_FIELDS = 'fields=count,build(id,number,status,state,branchName,webUrl,buildTypeId,percentageComplete,running-info(percentageComplete,currentStageText))';
 export const _tcCache = new Map();   // branch -> { ts, data }
 const TC_TTL = 8000;
 
@@ -130,7 +130,11 @@ export async function apiBuild(res, u) {
     const builds = [];
     for (const bt of TC_BUILD_TYPES) {
       const b = await tcLatestBuild(bt.id, branch, wo);
-      if (b) builds.push({ plat: bt.plat, number: b.number, status: b.status, state: b.state, webUrl: b.webUrl, branchName: b.branchName });
+      if (!b) continue;
+      const ri = b['running-info'] || null;   // прогресс идущей сборки — из ТОГО ЖЕ ответа (без доп. запроса к TeamCity)
+      const percent = (typeof b.percentageComplete === 'number') ? b.percentageComplete : (ri && typeof ri.percentageComplete === 'number' ? ri.percentageComplete : null);
+      const stage = ri && ri.currentStageText ? String(ri.currentStageText) : '';
+      builds.push({ plat: bt.plat, number: b.number, status: b.status, state: b.state, webUrl: b.webUrl, branchName: b.branchName, percent, stage });
     }
     const data = { available: true, host: TC_HOST, branch, builds };
     _tcCache.set(branch, { ts: Date.now(), data });

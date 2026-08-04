@@ -36,7 +36,14 @@ export async function loadBuilds(t){
     box.innerHTML = d.builds.map(b => {
       const s = buildDot(b); if (s.run) running = true;
       const link = b.webUrl ? aReal(b.webUrl, '#'+esc(b.number||'—'), 'plain') : `<span class="ri-v">#${esc(b.number||'—')}</span>`;
-      return `<div class="build-row"><span class="plat">${esc(b.plat)}</span><span class="build-state"><span class="d ${s.cls}"></span>${s.label}</span><span class="bl-link">${link}</span></div>`;
+      const row = `<div class="build-row"><span class="plat">${esc(b.plat)}</span><span class="build-state"><span class="d ${s.cls}"></span>${s.label}</span><span class="bl-link">${link}</span></div>`;
+      // прогресс-бар со степом (как в TeamCity) — только для идущей сборки с известным процентом
+      let prog = '';
+      if (s.run && typeof b.percent === 'number'){
+        const p = Math.max(0, Math.min(100, Math.round(b.percent)));
+        prog = `<div class="build-prog"><div class="bp-bar"><i style="width:${p}%"></i></div><div class="bp-step">${b.stage ? esc(b.stage)+' · ' : ''}${p}%</div></div>`;
+      }
+      return row + prog;
     }).join('');
     return running;
   };

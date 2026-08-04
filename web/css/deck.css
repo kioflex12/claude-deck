@@ -202,6 +202,17 @@
     .rail-hint{ font-size:11.5px; color:var(--text-faint); line-height:1.5; margin-top:4px; word-break:break-all; }
     .rail-empty{ font-size:12.5px; color:var(--text-faint); font-style:italic; }
     .build-row .bl-link{ margin-left:auto; font-family:var(--mono); font-size:11.5px; }
+    /* статус-точка сборки: в base.css размер задан ТОЛЬКО для .pill .d → в рейле точка была нулевого размера (невидима).
+       Задаём размер здесь + «свечение» box-shadow: идёт=жёлтая пульсирующая, готово=зелёная, упал=красная. */
+    .build-state .d{ width:8px; height:8px; border-radius:50%; flex:none; }
+    .build-state .d.run{ box-shadow:0 0 7px var(--warn); }
+    .build-state .d.pass{ box-shadow:0 0 6px var(--good); }
+    .build-state .d.fail{ box-shadow:0 0 8px var(--bad); }
+    /* прогресс-бар идущей сборки (шаг + процент из TeamCity) */
+    .build-prog{ display:flex; flex-direction:column; gap:3px; margin:1px 0 7px 2px; }
+    .bp-bar{ height:4px; border-radius:3px; background:var(--surface-2); overflow:hidden; }
+    .bp-bar i{ display:block; height:100%; background:var(--warn); border-radius:3px; box-shadow:0 0 6px var(--warn); transition:width .4s ease; }
+    .bp-step{ font-family:var(--mono); font-size:10px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
     /* композер: нижняя панель управления в духе терминала Claude Code */
     .cx-foot.composer-foot{ justify-content:space-between; }
