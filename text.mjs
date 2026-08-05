@@ -88,12 +88,27 @@ export function firstUserWo(text) {
   }
   return '';
 }
+// Граница сжатия контекста: после compact CLI начинает новый отрезок вставкой «This session is being continued…».
+// Запросы ДО неё уходили с почти полным окном (замеры: 0.6–0.99М), но в окне модели их больше нет — брать их usage как
+// «сколько занято сейчас» нельзя: сжатая сессия показывала полную красную полосу и ложное «сожмите контекст».
+// Префикс "content":" обязателен: сама фраза встречается и в тексте ответов (обсуждение компакта), а как поле content —
+// только у настоящей вставки продолжения.
+const COMPACT_MARK = '"content":"This session is being continued';
+
+// Занятое окно = вход последнего запроса ПОСЛЕ последней границы сжатия. Нулевой usage (прерванный/служебный ответ)
+// не несёт информации — отступаем к предыдущему, иначе полоска падала в 0% на почти полном контексте.
 export function lastUsageWindow(text) {
-  const i = text.lastIndexOf('"usage":');
-  if (i < 0) return 0;
-  const seg = text.slice(i, i + 500);
-  const num = (k) => { const m = seg.match(new RegExp('"' + k + '":(\\d+)')); return m ? +m[1] : 0; };
-  return num('input_tokens') + num('cache_read_input_tokens') + num('cache_creation_input_tokens');
+  const from = text.lastIndexOf(COMPACT_MARK);
+  let i = text.length;
+  for (let step = 0; step < 6; step++) {
+    i = text.lastIndexOf('"usage":', i - 1);
+    if (i < 0 || i < from) return 0;   // после сжатия своего usage ещё нет → «нет данных», а не предсжатый объём
+    const seg = text.slice(i, i + 500);
+    const num = (k) => { const m = seg.match(new RegExp('"' + k + '":(\\d+)')); return m ? +m[1] : 0; };
+    const w = num('input_tokens') + num('cache_read_input_tokens') + num('cache_creation_input_tokens');
+    if (w > 0) return w;
+  }
+  return 0;
 }
 export function countMessages(text) {
   return (text.match(/"type":"user"/g) || []).length + (text.match(/"type":"assistant"/g) || []).length;
@@ -215,13 +230,13 @@ export function buildSessionBlocks(text) {
     const start = blocks.length;
     const content = msg.content;
     if (typeof content === 'string') {
-      if (role === 'user') { const c = classifyUserBlock(content); if (c) blocks.push(c); }
+      if (role === 'user') { const c = classifyUserBlock(content); if (c){ blocks.push(c); if (c.kind === 'compact') winTokens = 0; } }   // сжатие — окно начинается заново: предсжатый usage к текущему объёму не относится
       else { const t = content.replace(SYSREM, '').trim(); if (t) blocks.push({ kind: role, text: cap(t) }); }
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (!b || typeof b !== 'object') continue;
         if (b.type === 'text' && b.text && b.text.trim()) {
-          if (role === 'user') { const c = classifyUserBlock(b.text); if (c) blocks.push(c); }
+          if (role === 'user') { const c = classifyUserBlock(b.text); if (c){ blocks.push(c); if (c.kind === 'compact') winTokens = 0; } }
           else blocks.push({ kind: role, text: cap(b.text.trim()) });
         }
         else if (b.type === 'thinking' && b.thinking && b.thinking.trim()) blocks.push({ kind: 'thinking', text: cap(b.thinking.trim()) });
@@ -240,7 +255,7 @@ export function buildSessionBlocks(text) {
       const u = msg.usage;
       const tin = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       const tout = u.output_tokens || 0;
-      winTokens = tin;
+      if (tin > 0) winTokens = tin;   // нулевой usage (прерванный/служебный ответ) не заменяет реально известный объём окна
       turnOut += tout;   // сгенерировано в текущем ходе — растёт по мере работы, показывается в индикаторе как живая динамика
       for (let k = blocks.length - 1; k >= start; k--) {
         if (blocks[k].kind === 'assistant' || blocks[k].kind === 'thinking') { blocks[k].meta = { in: tin, out: tout, ctxPct: Math.min(tin / CTX_LIMIT, 1) }; break; }

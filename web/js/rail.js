@@ -16,6 +16,7 @@ export function scopeChipsHTML(t){
 }
 export function sideHTML(t){
   const p = Math.round((t.ctxPct||0)*100);
+  const winKnown = (t.winTokens|0) > 0;   // сразу после сжатия своего usage ещё нет: показываем «—», а не 0% (и не предсжатый объём, который раньше давал полную полосу)
   const stateColor = t.active ? 'var(--good)' : 'var(--text-faint)';
   const stateLabel = t.active ? 'активна' : 'архив';
 
@@ -67,9 +68,9 @@ export function sideHTML(t){
         <div class="stat"><div class="k">модель</div><div class="v">${esc(t.model)}</div></div>
         <div class="stat"><div class="k">сообщений</div><div class="v">${t.count}</div></div>
         <div class="stat"><div class="k">активность</div><div class="v">${timeAgo(t.mtime)}</div></div>
-        <div class="stat"><div class="k">окно</div><div class="v stat-win">${kTok(t.winTokens)} / 1M</div></div>
+        <div class="stat"><div class="k">окно</div><div class="v stat-win">${winKnown ? kTok(t.winTokens) + ' / 1M' : '—'}</div></div>
       </div>
-      <div class="ctx-row"><span class="k-line">контекст</span><span class="ctxbar"><i style="width:${p}%;background:${ctxColor(t.ctxPct)}"></i></span><span class="ctx-pct" style="color:${ctxColor(t.ctxPct)}">${p}%</span></div>
+      <div class="ctx-row" title="${winKnown ? '' : 'Контекст только что сжат — объём станет известен после следующего ответа'}"><span class="k-line">контекст</span><span class="ctxbar"><i style="width:${winKnown ? p : 0}%;background:${ctxColor(t.ctxPct)}"></i></span><span class="ctx-pct" style="color:${winKnown ? ctxColor(t.ctxPct) : 'var(--text-faint)'}">${winKnown ? p + '%' : '—'}</span></div>
       <div class="row-item" style="margin-top:10px"><span class="ri-k">стадия</span><span class="ri-v">${stageMeta}</span></div>
     </div>
     <div class="sec"><div class="sec-label">Ветка</div>

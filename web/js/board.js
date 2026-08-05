@@ -20,6 +20,7 @@ export function boardMatch(s){
 
 function ctxMini(s){
   const p = pctOf(s);
+  if (!(s.winTokens|0)) return `<span class="mini-ctx" title="Контекст только что сжат — объём станет известен после следующего ответа"><span class="mini-bar"><i style="width:0"></i></span>—</span>`;
   return `<span class="mini-ctx"><span class="mini-bar"><i style="width:${p}%;background:${ctxColor(s.ctxPct)}"></i></span>${p}%</span>`;
 }
 

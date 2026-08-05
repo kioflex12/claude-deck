@@ -350,7 +350,11 @@ export async function runPrompt(payload){
   const finish = (note, opts) => {
     if (finished) return; finished = true;
     teardownLive();                      // снять индикатор «работает» из чата + погасить таймер/ES/live-блоки
-    if (opts && typeof opts.ctxPct === 'number') updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
+    // Сам сжимающий запрос уходит с ПОЛНЫМ окном (вход = весь контекст) — его usage не отражает объём ПОСЛЕ сжатия.
+    // Показать его в рейле = полная красная полоса на только что сжатой сессии. Такой замер игнорируем.
+    const compactOwnUsage = isCompactCmd && opts && typeof opts.winTokens === 'number' && compactBefore
+      && typeof compactBefore.winTokens === 'number' && opts.winTokens >= compactBefore.winTokens * 0.8;
+    if (opts && typeof opts.ctxPct === 'number' && !compactOwnUsage) updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
     if (opts && opts.maxTurns){   // упёрлись в лимит шагов → кнопка продолжить ход (resume той же сессии)
       const cbEl = appendHTML(cons, '<div class="cx-note"><button class="q-submit" type="button" id="continueBtn">▶ Продолжить</button></div>');
@@ -375,10 +379,17 @@ export async function runPrompt(payload){
       const aTok = opts && typeof opts.winTokens === 'number' ? opts.winTokens : null;
       const bTok = compactBefore && typeof compactBefore.winTokens === 'number' ? compactBefore.winTokens : null;
       let line = '✓ Контекст сжат';
-      if (bPct != null && aPct != null) line += ` — ${bPct}% → ${aPct}%`;
-      else if (aPct != null) line += ` — теперь ${aPct}% контекста`;
-      if (bTok != null && aTok != null){ line += ` · ${kTok(bTok)} → ${kTok(aTok)}`; if (bTok > aTok) line += ` (освобождено ~${kTok(bTok - aTok)})`; }
-      else if (aTok != null) line += ` · ${kTok(aTok)} / 1M`;
+      if (compactOwnUsage){
+        // Замер после сжатия — это вход самого сжимающего запроса (весь контекст), новый объём им не измеришь.
+        // Пишем только достоверное: сколько было; фактический размер приедет с первым ответом нового отрезка.
+        if (bPct != null) line += ` — было ${bPct}%` + (bTok != null ? ` (${kTok(bTok)})` : '');
+        line += ' · новый объём появится после следующего ответа';
+      } else {
+        if (bPct != null && aPct != null) line += ` — ${bPct}% → ${aPct}%`;
+        else if (aPct != null) line += ` — теперь ${aPct}% контекста`;
+        if (bTok != null && aTok != null){ line += ` · ${kTok(bTok)} → ${kTok(aTok)}`; if (bTok > aTok) line += ` (освобождено ~${kTok(bTok - aTok)})`; }
+        else if (aTok != null) line += ` · ${kTok(aTok)} / 1M`;
+      }
       S.pendingCompactNote = line;
       delete SESSION_CACHE[f];
       setTimeout(() => { if (S.currentFile === f) openSession(f); }, 500);
@@ -593,12 +604,13 @@ export function updateTailIndicator(on, turnStartTs, waiting, activity, tokens){
 export function updateRailContext(ctxPct, winTokens){
   updateComposerWarnings(ctxPct);   // порог контекста → баннер «сжать» над композером
   const side = document.getElementById('sessionSide'); if (!side) return;
+  const unknown = winTokens === 0;   // ход после сжатия ещё не дал своего usage — «—» вместо цифры (иначе видно предсжатое/нулевое)
   if (typeof ctxPct === 'number'){
     const p = Math.round(ctxPct * 100), col = ctxColor(ctxPct);
-    const bar = side.querySelector('.ctxbar i'); if (bar){ bar.style.width = p + '%'; bar.style.background = col; }
-    const pct = side.querySelector('.ctx-pct'); if (pct){ pct.textContent = p + '%'; pct.style.color = col; }
+    const bar = side.querySelector('.ctxbar i'); if (bar){ bar.style.width = (unknown ? 0 : p) + '%'; bar.style.background = col; }
+    const pct = side.querySelector('.ctx-pct'); if (pct){ pct.textContent = unknown ? '—' : (p + '%'); pct.style.color = unknown ? 'var(--text-faint)' : col; }
   }
-  if (typeof winTokens === 'number'){ const w = side.querySelector('.stat-win'); if (w) w.textContent = kTok(winTokens) + ' / 1M'; }
+  if (typeof winTokens === 'number'){ const w = side.querySelector('.stat-win'); if (w) w.textContent = unknown ? '—' : (kTok(winTokens) + ' / 1M'); }
 }
 
 // Опрос висящих вопросов/аппрувов (в т.ч. заданных агентом ПОСЛЕ обрыва канала) + дорисовка карточек. Дедуп по data-id:

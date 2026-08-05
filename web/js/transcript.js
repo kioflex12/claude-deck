@@ -49,7 +49,9 @@ function metaLine(m){
 // Референс-стиль: таймлайн с точкой-маркером слева, содержимое плоское. Текст ассистента — без карточки/шапки «CLAUDE»
 // (была коробка на каждый кусок → полотно). Инструмент — заголовок (имя + описание) + IN(команда) + OUT(результат виден).
 export function blockHTML(b){
-  if (b.kind==='user') return `<div class="cx-msg cx-user"><div class="cx-role">Ты</div><div class="cx-md">${mdToHtml(b.text)}</div></div>`;
+  // Мой промт — без подписи «Ты»: она висела мелким ярлыком отдельной строкой и сливалась с точкой-маркером. Различие
+  // несёт сама форма блока (акцентная плашка с полосой слева), а не текстовая метка.
+  if (b.kind==='user') return `<div class="cx-msg cx-user"><div class="cx-md">${mdToHtml(b.text)}</div></div>`;
   if (b.kind==='assistant') {
     const full = b.text || '';
     const body = full.length > 1200

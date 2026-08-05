@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../core.mjs';
-import { firstString, lastString } from '../text.mjs';
+import { firstString, lastString, lastUsageWindow } from '../text.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
 
@@ -305,6 +305,26 @@ test('buildSessionBlocks: лента блоков, шум отфильтрова
   const assistantWithMeta = blocks.find((b) => b.kind === 'assistant' && b.meta);
   assert.ok(assistantWithMeta, 'usage-мета навешана на текст/thinking-блок хода');
   assert.equal(assistantWithMeta.meta.in, 150);
+});
+
+test('окно контекста после сжатия: предсжатый usage не показывается как занятое окно', () => {
+  const LF = String.fromCharCode(10);
+  const big = JSON.stringify({ type:'assistant', message:{ role:'assistant', model:'claude-opus-5', content:[{ type:'text', text:'много' }], usage:{ input_tokens:5, cache_read_input_tokens:970_000, output_tokens:100 } } });
+  const boundary = JSON.stringify({ type:'user', message:{ role:'user', content:'This session is being continued from a previous conversation that ran out of context.' + LF + LF + 'Summary:' + LF + '1. итог' }, timestamp:'2026-08-05T10:30:00Z' });
+  const small = JSON.stringify({ type:'assistant', message:{ role:'assistant', model:'claude-opus-5', content:[{ type:'text', text:'дальше' }], usage:{ input_tokens:5, cache_read_input_tokens:78_000, output_tokens:20 } } });
+  const zeroUsage = JSON.stringify({ type:'assistant', message:{ role:'assistant', model:'<synthetic>', content:[{ type:'text', text:'x' }], usage:{ input_tokens:0, output_tokens:0 } } });
+
+  assert.equal(buildSessionBlocks(big).winTokens, 970_005, 'до сжатия — реальный объём окна');
+  const after = buildSessionBlocks(big + LF + boundary);
+  assert.equal(after.winTokens, 0, 'сразу после сжатия объём неизвестен (0), а не предсжатые 970k = полная полоса');
+  assert.equal(after.blocks.filter((b) => b.kind === 'compact').length, 1, 'вставка продолжения — свой вид блока, не «Ты»');
+  assert.equal(buildSessionBlocks(big + LF + boundary + LF + small).winTokens, 78_005, 'первый ответ нового отрезка задаёт реальный объём');
+  assert.equal(buildSessionBlocks(big + LF + zeroUsage).winTokens, 970_005, 'нулевой usage служебного ответа не обнуляет известный объём');
+
+  assert.equal(lastUsageWindow(big), 970_005, 'список карточек: до сжатия — реальный объём');
+  assert.equal(lastUsageWindow(big + LF + boundary), 0, 'список карточек: после сжатия предсжатый usage не берём');
+  assert.equal(lastUsageWindow(big + LF + boundary + LF + small), 78_005);
+  assert.equal(lastUsageWindow(big + LF + zeroUsage), 970_005, 'нулевой usage пропускаем, берём предыдущий известный');
 });
 
 test('buildSessionBlocks: image-вложение → блок kind:image с data (после перезахода скрин виден)', () => {

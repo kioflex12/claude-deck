@@ -3,11 +3,13 @@
        на каждый кусок). Цвет точки = вид блока. Ограничение ширины строки — чтоб на широком окне текст не тянулся. */
     .cx-msg{ position:relative; display:flex; flex-direction:column; gap:5px; max-width:800px; padding-left:20px; }
     .cx-msg::before{ content:''; position:absolute; left:2px; top:7px; width:7px; height:7px; border-radius:50%; background:var(--text-faint); }
-    .cx-role{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-faint); }
-    /* пользователь — акцентная точка + тон, без рамки-карточки */
-    .cx-user::before{ background:var(--accent); }
-    .cx-user .cx-role{ color:var(--accent); }
-    .cx-user .cx-md{ min-width:0; color:var(--accent-ink); }
+    /* Мой промт — единственный блок с фоном и полосой слева: реплики человека должны читаться сразу, без подписи «Ты»
+       (мелкий ярлык отдельной строкой сливался с точкой-маркером и выглядел лишним). Ответ Клода остаётся плоским —
+       иначе весь вывод превращается в полотно коробок. */
+    .cx-user{ padding:9px 13px 9px 15px; margin-left:2px; background:var(--accent-soft); border-left:3px solid var(--accent); border-radius:0 9px 9px 0; }
+    .cx-user::before{ display:none; }
+    .cx-user .cx-md{ min-width:0; color:var(--accent-ink); font-weight:520; }
+    .cx-user .cx-att{ margin-top:2px; }
     /* ассистент — плоский текст (была карточка с шапкой «CLAUDE» на КАЖДЫЙ кусок → полотно коробок) */
     .cx-asst::before{ background:var(--accent-ink); }
     .cx-asst{ color:var(--text); }
