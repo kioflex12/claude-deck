@@ -54,7 +54,7 @@
 
   /* topbar */
   .topbar { display: flex; align-items: center; gap: 16px; padding: 11px 22px; background: var(--bg-elev); border-bottom: 1px solid var(--border); flex: none; }
-  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand { display: flex; align-items: center; gap: 11px; cursor: pointer; }
   .brand-mark { width: 26px; height: 26px; border-radius: 7px; flex: none; background: linear-gradient(150deg, var(--accent), var(--accent-ink)); display: grid; place-items: center; color: #fff; font-family: var(--mono); font-weight: 700; font-size: 15px; box-shadow: 0 2px 8px var(--accent-soft); }
   .brand-name { font-weight: 680; font-size: 16px; letter-spacing: -0.01em; }
   .tag-concept { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 20px; align-self: center; }

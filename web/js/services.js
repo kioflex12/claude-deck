@@ -186,7 +186,7 @@ export function agentBoxHTML(agents){   // ТОЛЬКО активные (runnin
   }).join('');
 }
 
-export function stopAgentsPoll(){ if (S.agentsTimer){ clearInterval(S.agentsTimer); S.agentsTimer = null; } }
+export function stopAgentsPoll(){ if (S.agentsTimer){ clearInterval(S.agentsTimer); S.agentsTimer = null; } S.liveAgents = []; }   // чужие агенты не должны утекать в индикатор следующей сессии
 
 async function pollAgents(file){
   if (S.currentFile !== file){ stopAgentsPoll(); return; }
@@ -195,6 +195,7 @@ async function pollAgents(file){
   const sec = document.getElementById('agentsSec'), box = document.getElementById('agentsBox');
   const agents = Array.isArray(d.agents) ? d.agents : [];
   const live = runningAgents(agents);
+  S.liveAgents = live;   // индикатор хода показывает, чем занят фоновый агент: пока Task «молчит», это единственные живые цифры
   if (sec && box){ if (live.length){ sec.hidden = false; box.innerHTML = agentBoxHTML(agents); } else { sec.hidden = true; box.innerHTML = ''; } }
   // отражаем в кэше/списке, чтобы признак «работает» на карточке/лейбле держался, пока агенты живы
   if (SESSION_CACHE[file]){ SESSION_CACHE[file].bgRunning = d.bgRunning; SESSION_CACHE[file].agents = agents; }

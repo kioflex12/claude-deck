@@ -4,7 +4,7 @@
 
 <div class="app">
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">D</div><div class="brand-name">Deck</div></div>
+    <div class="brand" title="На главную (доска статусов)"><div class="brand-mark">D</div><div class="brand-name">Deck</div></div>
     <div class="proj-switch" id="projSwitch">
       <button class="proj-btn" id="projBtn" type="button" title="Проект (папка)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -35,6 +35,7 @@
   </header>
   <div id="authGate" class="auth-gate" hidden><span class="ag-msg">Вы не вошли в Claude — чат, лимиты и новые сессии недоступны.</span><button id="authGateBtn" class="ag-btn" type="button">Войти в Claude</button></div>
   <div id="svcGate" class="auth-gate svc-gate" hidden><span class="ag-msg" id="svcGateMsg"></span><button id="svcGateBtn" class="ag-btn" type="button">Открыть настройки</button></div>
+  <div class="ctx-tabs" id="ctxTabs" hidden></div>
 
   <div id="viewBoard" style="display:flex;flex-direction:column;flex:1;min-height:0">
     <div class="now" id="now"></div>

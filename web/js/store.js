@@ -14,6 +14,7 @@ export const S = {
   query: '',                  // строка поиска (нижний регистр)
   skillCat: 'all',            // выбранная категория скиллов
   currentFile: null,          // открытая сессия
+  openFiles: [],              // открытые контексты (полоса вкладок): переключение между несколькими сессиями без выхода на доску
   returnView: 'status',       // куда вернуться из сессии
   SESSIONS: [],               // список сессий доски
 
@@ -55,7 +56,7 @@ export const S = {
   pendingDone: new Set(),       // простаивают 1 опрос — гасим ложное «готово» на долгом tool-call
   pollTimer: null, polling: false,
   tailTimer: null, tailCount: 0,
-  agentsTimer: null,
+  agentsTimer: null, liveAgents: [],   // работающие сабагенты открытой сессии (из /api/agents) — их токены идут в строку индикатора
   mrHydrating: false, jiraHydrating: false,
   tailCountTimer: null, railTimer: null,
   _lastHeavy: 0, usageTimer: null, healthTimer: null,

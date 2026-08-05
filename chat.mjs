@@ -280,11 +280,13 @@ export async function apiChat(req, res, u) {
     const q = query({ prompt: channel.gen(), options });
     let lastWin, lastCtx, lastSub, lastErr = false;
     const toolBufs = {};   // индекс content-блока → { name, buf } для сборки tool-input из input_json_delta (показ команды live)
+    let turnOutTok = 0, msgOutTok = 0;   // сгенерировано токенов: закрытыми сообщениями хода + текущим (для живого счётчика в индикаторе)
     for await (const m of q) {
       if (m.type === 'result') {   // конец ОДНОГО хода — обрабатываем ВСЕГДА (в т.ч. при closed), иначе канал не закроется и query зависнет
         const u = m.usage || {};
         const win = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
         lastWin = win; lastCtx = win ? Math.min(win / CTX_LIMIT, 1) : undefined; lastSub = m.subtype; lastErr = !!m.is_error;
+        turnOutTok = 0; msgOutTok = 0;   // новый ход — счётчик выхода с нуля
         if (!closed) send({ type: 'turn', subtype: m.subtype, isError: !!m.is_error, winTokens: win || undefined, ctxPct: lastCtx });   // граница хода: обновить контекст/индикатор, но стрим НЕ рвём
         if (channel.pending() === 0) channel.end();   // нет подкинутого ввода → закрываем канал (query завершится); есть → steering: следующий ход в той же сессии
         continue;
@@ -315,6 +317,11 @@ export async function apiChat(req, res, u) {
           const tb = toolBufs[ev.index]; delete toolBufs[ev.index];
           let input = {}; try { input = JSON.parse(tb.buf || '{}'); } catch {}
           send({ type: 'tool_input', name: tb.name, cmd: toolCmd(input), desc: toolDesc(input) });   // команда/описание — в live-ленту (IN)
+        } else if (ev.type === 'message_delta' && ev.usage) {
+          msgOutTok = ev.usage.output_tokens || 0;                      // usage сообщения — накопительное, приходит к его концу
+          send({ type: 'usage', turnOut: turnOutTok + msgOutTok });     // сверка живого счётчика токенов в индикаторе с фактом
+        } else if (ev.type === 'message_stop') {
+          turnOutTok += msgOutTok; msgOutTok = 0;                       // сообщение закрыто — его выход уходит в сумму хода
         }
       } else if (m.type === 'assistant' && m.error) {
         send({ type: 'error', message: String(m.error) });

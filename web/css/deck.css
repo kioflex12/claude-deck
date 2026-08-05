@@ -205,6 +205,40 @@
     /* карточка «работает сейчас» (зелёная) + тумблер уведомлений в топбаре */
     .flag.working{ background:var(--good-soft); color:var(--good); }
     .flag.working .dot{ animation:pulse 2.4s infinite; }
+    /* ход стоит на человеке — жёлтая метка с пульсом, чтобы вопрос не висел незамеченным */
+    .flag.awaiting{ background:var(--warn-soft); color:var(--warn); font-weight:640; }
+    .flag.awaiting .dot{ animation:pulse 1.5s infinite; }
+
+    /* MR-тег на карточке — кнопка, а не подпись: наведение обязано это показывать */
+    .card-foot .pill.mr-open, .card-foot .pill.mr-merged, .card-foot .pill.mr-closed{ cursor:pointer; text-decoration:none; transition:.13s; }
+    .card-foot .pill.mr-open:hover, .card-foot .pill.mr-merged:hover, .card-foot .pill.mr-closed:hover{ border-color:currentColor; filter:brightness(1.1); text-decoration:underline; }
+
+    /* полоса открытых контекстов: несколько сессий открыты одновременно, переключение — клик по вкладке */
+    .ctx-tabs{ display:flex; align-items:center; gap:6px; flex:none; padding:6px 20px; background:var(--bg-elev); border-bottom:1px solid var(--border); overflow-x:auto; }
+    .ct-back{ flex:none; font-family:var(--ui); font-size:12px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:4px 10px; cursor:pointer; }
+    .ct-back:hover{ color:var(--text); border-color:var(--accent); }
+    .ct-tab{ display:inline-flex; align-items:center; gap:6px; max-width:230px; flex:none; padding:4px 6px 4px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text-muted); font-size:12.5px; cursor:pointer; transition:.13s; }
+    .ct-tab:hover{ color:var(--text); border-color:var(--border-strong); }
+    .ct-tab.on{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+    .ct-tab.on.dim{ background:var(--surface); border-style:dashed; }   /* контекст открыт, но сейчас смотрим справочник поверх него */
+    .ct-title{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ct-dot{ width:6px; height:6px; border-radius:50%; flex:none; background:var(--good); animation:pulse 2.4s infinite; }
+    .ct-wait{ flex:none; font-size:11px; color:var(--warn); }
+    .ct-x{ flex:none; border:0; background:none; color:var(--text-faint); font-size:11px; padding:0 3px; cursor:pointer; }
+    .ct-x:hover{ color:var(--bad); }
+
+    /* имя контекста правится по тапу прямо в шапке */
+    .sb-title{ cursor:text; border-radius:6px; padding:2px 6px; margin:-2px -6px; transition:.13s; }
+    .sb-title:hover{ background:var(--surface-2); box-shadow:inset 0 0 0 1px var(--border); }
+    .sb-title-inp{ font-family:var(--ui); font-weight:620; font-size:14px; color:var(--text); background:var(--surface); border:1px solid var(--accent); border-radius:6px; padding:2px 6px; min-width:220px; }
+
+    /* саммари после /compact — свёрнутая пометка, а не полотно текста от «Ты» */
+    .cx-compact::before{ background:var(--info); }
+    .cx-compact .cx-think-h{ color:var(--info); }
+
+    /* «/»-список: подсказка по клавишам + честное «не найдено» */
+    .cx-sl-foot{ position:sticky; bottom:0; display:flex; gap:12px; padding:5px 13px; font-size:10.5px; color:var(--text-faint); background:var(--bg-elev); border-top:1px solid var(--border); }
+    .cx-sl-empty{ padding:9px 13px; font-size:12px; color:var(--text-muted); }
     .notify-btn{ flex:none; width:32px; height:32px; border-radius:9px; border:1px solid var(--border); background:var(--surface-2); font-size:15px; line-height:1; cursor:pointer; transition:.13s; padding:0; }
     .notify-btn:hover{ border-color:var(--border-strong); background:var(--surface); }
     .notify-btn[aria-pressed="true"]{ border-color:var(--good); background:var(--good-soft); }

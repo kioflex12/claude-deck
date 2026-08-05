@@ -3,7 +3,8 @@
 import { S, notifiedDone, notifiedInput, SESSION_CACHE, promptQueue } from './store.js';
 import { esc, mdToHtml, ctxColor, kTok } from './util.js';
 import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wireConsole } from './transcript.js';
-import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue } from './composer.js';
+import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue, saveSessionSettings } from './composer.js';
+import { renderCtxTabs } from './nav.js';
 import { loadBuilds, loadMrs, loadJira, wireTags, stopAgentsPoll } from './services.js';
 import { ensureNotifyPermission, titleOf, notifyDone, notifyInput } from './notify.js';
 import { sideHTML, wireRailTabs } from './rail.js';
@@ -39,6 +40,21 @@ export function stopStream(){
   // жёсткий сброс UI стрима: убрать индикатор «работает» и снять недостроенный live-блок из чата
   document.querySelectorAll('.cx-run-chat').forEach(el => el.remove());
   document.querySelectorAll('.cx-asst.cx-live').forEach(el => el.classList.remove('cx-live'));
+}
+
+// Строка индикатора хода: что делает · сколько идёт · сколько токенов уже сгенерировано · чем занят фоновый агент.
+// В ней обязаны постоянно меняться числа: без них долгий шаг (инструмент на минуты, сабагент) неотличим от зависания —
+// именно поэтому ход простаивал «афк» и его отменяли вручную.
+export function runLine(label, startTs, tokens){
+  const secs = Math.max(0, Math.round((Date.now() - (startTs || Date.now())) / 1000));
+  const parts = [ (label || '✻ Claude работает') + '… ' + secs + 'с' ];
+  if (tokens > 0) parts.push(kTok(tokens) + ' ток.');
+  const ag = (S.liveAgents || []).filter(a => a && a.running);
+  if (ag.length){
+    const a = ag[0];
+    parts.push('агент: ' + a.label + (a.tokensIn ? ' ' + kTok(a.tokensIn) : '') + (ag.length > 1 ? ' +' + (ag.length - 1) : ''));
+  }
+  return parts.join(' · ');
 }
 
 export function ensureConsole(){
@@ -238,10 +254,14 @@ export async function runPrompt(payload){
   let t0 = Date.now();
   let waiting = false;   // висит вопрос/аппрув — Claude ЖДЁТ ответа, а не работает: индикатор меняется, таймер замирает
   let activity = '';     // что ИМЕННО делает сейчас: инструмент/размышление/ответ (обновляется по событиям SSE)
+  // Живой счётчик токенов хода: сервер сверяет его фактом (событие usage приходит к концу каждого сообщения), а между
+  // сверками растёт оценка по объёму пришедших дельт (~4 символа на токен) — чтобы число двигалось непрерывно.
+  let tokBase = 0, charsSince = 0;
+  const tokNow = () => tokBase + Math.round(charsSince / 4);
   const paintRun = () => {
     const el = runEl.querySelector('.cx-run-txt'); if (!el) return;
     const sp = runEl.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
-    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : ((activity || '✻ Claude работает') + '… ' + Math.round((Date.now()-t0)/1000) + 'с');
+    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : runLine(activity, t0, tokNow());
   };
   S.streamTimer = setInterval(paintRun, 1000);
 
@@ -276,6 +296,7 @@ export async function runPrompt(payload){
     const stick = isNearBottom();
     if (liveMd) liveMd.innerHTML = mdToHtml(liveAccum);
     if (liveThink) liveThink.innerHTML = mdToHtml(liveThinkAccum);
+    paintRun();   // счётчик токенов/секунд движется в такт стриму, а не раз в секунду
     if (stick) scrollBottom();
   };
   const scheduleLive = () => {
@@ -395,6 +416,7 @@ export async function runPrompt(payload){
       finalizeThink();                   // размышление закончилось — начинается ответ
       if (!liveMd) startNewMd();
       liveAccum += d.delta;
+      charsSince += (d.delta || '').length;
       scheduleLive();
     } else if (d.type === 'thinking'){
       const piece = d.delta || '';
@@ -404,6 +426,7 @@ export async function runPrompt(payload){
         clearLive();
         if (!liveThink) startNewThink();
         liveThinkAccum += piece;
+        charsSince += piece.length;
         scheduleLive();
       }
     } else if (d.type === 'tool'){
@@ -413,11 +436,13 @@ export async function runPrompt(payload){
       if (stick) scrollBottom();
     } else if (d.type === 'tool_input'){   // команда/описание инструмента дозагрузились (server дособрал input_json_delta) → дорисуем IN + описание в live-блок
       const el = liveToolEl;
+      charsSince += (d.cmd || '').length;   // аргументы инструмента — тоже сгенерированные токены
       if (el){
         if (d.desc){ const ds = el.querySelector('.cx-tdesc'); if (ds) ds.textContent = d.desc; }
         if (d.cmd) el.insertAdjacentHTML('beforeend', '<div class="cx-io"><span class="cx-io-l">IN</span><pre class="cx-io-b">' + esc(d.cmd) + '</pre></div>');
         if (stick) scrollBottom();
       }
+      paintRun();
     } else if (d.type === 'approval'){
       waiting = true; paintRun();     // ждём решения пользователя — не «работает»
       clearLive(); finalizeThink();   // карточка аппрува — новый элемент ленты
@@ -434,6 +459,9 @@ export async function runPrompt(payload){
       if (stick) scrollBottom();
     } else if (d.type === 'session'){   // Part 3: узнали файл новой сессии — с этого момента метим её
       S.currentFile = d.file; S.streamingFile = d.file; S.tailCount = 0;
+      if (!S.openFiles.includes(d.file)) S.openFiles.push(d.file);   // новая сессия — в полосу открытых контекстов
+      saveSessionSettings(d.file);   // выбранные в окне создания режим/модель/effort закрепляем за появившейся сессией
+      renderCtxTabs();
       const nm = payload.pendingName || (S.pendingNewSession && S.pendingNewSession.name) || '';
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = nm || 'Новая сессия';
       if (nm){ fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: d.file, name: nm }) }).catch(()=>{}); }  // закрепляем имя как заголовок карточки
@@ -451,11 +479,13 @@ export async function runPrompt(payload){
       })();
     } else if (d.type === 'start'){
       if (d.streamId) S.currentStreamId = d.streamId;   // для гарантированного /api/stop
+    } else if (d.type === 'usage'){
+      if (typeof d.turnOut === 'number'){ tokBase = d.turnOut; charsSince = 0; paintRun(); }   // факт от сервера — оценка обнуляется
     } else if (d.type === 'turn'){
       // граница ХОДА в живой сессии (steering): предыдущий промт отработал, стрим НЕ рвём. Обновляем контекст,
       // сбрасываем индикатор шага и снимаем «ожидает» с подкинутых промтов (их ход сейчас начнётся).
       updateRailContext(d.ctxPct, d.winTokens);
-      waiting = false; activity = ''; t0 = Date.now(); paintRun();
+      waiting = false; activity = ''; t0 = Date.now(); tokBase = 0; charsSince = 0; paintRun();
       clearLive(); finalizeThink();
       cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });
     } else if (d.type === 'steered'){
@@ -529,7 +559,7 @@ export function startRailRefresh(file){
 
 // Индикатор «Claude работает… Nс» при перезаходе (tail). turnStartTs (эпоха, старт хода с сервера) — чтобы показывать
 // РЕАЛЬНУЮ длительность хода, а не с момента перезахода; нет — фолбэк на локальное время появления индикатора.
-export function updateTailIndicator(on, turnStartTs, waiting, activity){
+export function updateTailIndicator(on, turnStartTs, waiting, activity, tokens){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');
   if (on){
@@ -548,8 +578,7 @@ export function updateTailIndicator(on, turnStartTs, waiting, activity){
     } else {
       const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
       ind._start = start;
-      const label = activity || '✻ Claude работает';   // «что делает» из tail (⚙ инструмент / ✻ размышляет / ✍ пишет), иначе общий текст
-      const paint = () => { if (txt) txt.textContent = label + '… ' + Math.max(0, Math.round((Date.now() - start) / 1000)) + 'с'; };
+      const paint = () => { if (txt) txt.textContent = runLine(activity, start, tokens || 0); };   // «что делает» из tail (⚙ инструмент / ✻ размышляет / ✍ пишет) + секунды/токены/фоновый агент
       paint();
       if (S.tailCountTimer) clearInterval(S.tailCountTimer);
       S.tailCountTimer = setInterval(paint, 1000);
@@ -615,7 +644,7 @@ async function tailTick(file){
   // на долгих инструментах (индикатор мигал «то есть, то нет») и остаётся свежим ~20с после Стопа (индикатор всплывал призраком).
   const working = !!d.serverActive;
   S.serverBusy = working;   // новый промт при живом сервер-ходе, но оборванном SSE → sendMessage должен steer'ить, а не плодить 2-й ход (дубль «работает»)
-  updateTailIndicator(working || pending, S.tailStepStart || d.turnStartTs, pending, d.activity);   // таймер — от текущего шага (S.tailStepStart), не от старта хода; вопрос/аппрув → «ожидает»
+  updateTailIndicator(working || pending, S.tailStepStart || d.turnStartTs, pending, d.activity, d.turnOut);   // таймер — от текущего шага (S.tailStepStart), не от старта хода; вопрос/аппрув → «ожидает»
   pinQueued();   // ВСЕ ожидающие промты — единым блоком в самом низу (над индикатором), в стабильном порядке добавления, без прыжков
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)

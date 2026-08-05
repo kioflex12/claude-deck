@@ -1,26 +1,29 @@
 // Deck — оркестратор экрана сессии: открытие сессии (openSession) собирает рейл, ленту, композер и стрим.
 // Кластер сессии/чата разнесён по rail/transcript/composer/stream; здесь — только точка сборки.
-import { S, SESSION_CACHE, normMode } from './store.js';
+import { S, SESSION_CACHE } from './store.js';
 import { esc } from './util.js';
-import { openWoJira } from './ui.js';
-import { isWorking } from './board.js';
-import { setView } from './nav.js';
+import { openWoJira, toast } from './ui.js';
+import { isWorking, renderBoard } from './board.js';
+import { setView, renderCtxTabs } from './nav.js';
 import { launchUnity } from './unity.js';
 import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira } from './services.js';
 import { wireSideActions } from './dialogs.js';
 import { sideHTML, wireRailTabs, scopeChipsHTML } from './rail.js';
 import { renderThread, appendHTML } from './transcript.js';
-import { renderComposer, loadSkills } from './composer.js';
+import { renderComposer, loadSkills, applySessionSettings } from './composer.js';
 import { stopStream, startRailRefresh, questionCardHTML, wireQuestion, approvalCardHTML, wireApproval } from './stream.js';
 
 export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
   S.currentFile = file;
+  if (!S.openFiles.includes(file)) S.openFiles.push(file);   // контекст попал в полосу вкладок — вернуться в него можно одним кликом
+  renderCtxTabs();   // вкладка видна сразу, не после загрузки транскрипта (и остаётся, даже если загрузка упала)
   S.returnView = (S.activeView==='status' || S.activeView==='board') ? S.activeView : 'status';
   S.railTab = 'context'; S.artifacts = null; S.artifactsCwd = '';   // новая сессия — начинаем с вкладки «Контекст»
   document.getElementById('viewBoard').style.display = 'none';
   document.getElementById('viewSkills').style.display = 'none';
   document.getElementById('viewMcp').style.display = 'none';
+  document.getElementById('viewAttention').style.display = 'none';   // контекст открывают и из «Внимание» — иначе тот вид остался бы на экране под сессией
   document.getElementById('viewSession').style.display = 'flex';
   document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected','false'));
   const bar = document.getElementById('sessionBar');
@@ -49,18 +52,65 @@ export async function openSession(file){
   // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
   // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
   const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
-  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title">${esc(t.title)}</span>${woChip}`;
+  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title" title="Клик — переименовать контекст">${esc(t.title)}</span>${woChip}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
+  const titleEl = bar.querySelector('.sb-title'); if (titleEl) titleEl.addEventListener('click', () => editTitle(file));
+  renderCtxTabs();
   renderRail(t);       // правый рейл: разметка + привязки + live-секции (MR/сборки/Jira)
   startAgentsPoll(t.file);   // live-статус фоновых сабагентов
   renderThread(t);     // лента блоков + запуск live-tail для активной сессии
   resurfaceQuestions(file);   // висящие (неотвеченные) вопросы AskUserQuestion/ExitPlanMode — снова показать и ждать ответ
   resurfaceApprovals(file);   // висящие аппрувы (обрыв SSE их не решил) — снова показать и ждать решение
-  S.sessionMode = normMode(localStorage.getItem('deckMode'));   // сохранённый режим (как модель/effort) — перезаход больше не сбрасывает выбор на default; невалидное → default
+  applySessionSettings(file);   // режим/модель/effort ЭТОЙ сессии (первый заход берёт общий дефолт и закрепляет за сессией) — выбор в одном контексте не переезжает в другие
   renderComposer(t);
   loadSkills(t.cwd);   // грузим скиллы cwd один раз (для «/»)
   if (t.active || S.streamingFile === file) startRailRefresh(file);   // активная сессия → описание/скоуп/ветка/MR/сборки/Jira обновляются по ходу работы
+}
+
+// Переименование контекста прямо в шапке: тап по имени превращает его в поле ввода. Enter — сохранить, Esc/уход
+// фокуса — отменить. Имя сессии — то же, что правит контекстное меню карточки (/api/session-name), поэтому после
+// сохранения обновляем и список, и кэш, и полосу вкладок.
+function editTitle(file){
+  const bar = document.getElementById('sessionBar'); if (!bar) return;
+  const span = bar.querySelector('.sb-title'); if (!span || bar.querySelector('.sb-title-inp')) return;
+  const was = span.textContent;
+  const inp = document.createElement('input');
+  inp.className = 'sb-title-inp'; inp.type = 'text'; inp.value = was;
+  span.replaceWith(inp);
+  inp.focus(); inp.select();
+  let done = false;
+  const restore = (text) => {
+    if (done) return; done = true;
+    const s = document.createElement('span');
+    s.className = 'sb-title'; s.title = 'Клик — переименовать контекст'; s.textContent = text;
+    inp.replaceWith(s);
+    s.addEventListener('click', () => editTitle(file));
+  };
+  const save = async () => {
+    if (done) return;   // Enter уже сохранил — blur снятого поля не должен слать второй запрос
+    const name = inp.value.trim();
+    if (!name || name === was){ restore(was); return; }
+    restore(name);   // отклик сразу, не ждём сервер
+    try {
+      const r = await fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file, name }) });
+      const d = await r.json();
+      if (!r.ok || (d && d.error)) throw new Error((d && d.error) || 'rename failed');
+      const applied = (d && d.name) || name;
+      const se = S.SESSIONS.find(x => x.file === file); if (se) se.title = applied;
+      if (SESSION_CACHE[file]) SESSION_CACHE[file].title = applied;
+      const cur = document.querySelector('#sessionBar .sb-title'); if (cur && S.currentFile === file) cur.textContent = applied;
+      renderCtxTabs(); renderBoard(false);
+    } catch (e){
+      toast('Не удалось переименовать: ' + (e.message || e));
+      const cur = document.querySelector('#sessionBar .sb-title'); if (cur) cur.textContent = was;   // сервер отказал — показываем прежнее имя
+    }
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){ e.preventDefault(); save(); }
+    else if (e.key === 'Escape'){ e.preventDefault(); restore(was); }
+  });
+  inp.addEventListener('blur', () => save());
 }
 
 // Полный рендер правого рейла (без консоли/tail): разметка + привязки + live-секции. Зовётся при открытии сессии и при

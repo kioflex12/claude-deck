@@ -73,6 +73,9 @@ export function blockHTML(b){
     if (!src) return '';
     return `<div class="cx-msg cx-imgmsg"><img class="cx-img" src="${src}" alt="вложение" loading="lazy"></div>`;
   }
+  if (b.kind==='compact'){   // саммари после /compact — свёрнутая пометка (как размышление), а не «Ты» с полотном английского текста
+    return `<div class="cx-msg cx-compact"><button class="cx-think-h" type="button"><span class="cx-tw">▸</span>⧗ Контекст сжат — саммари предыдущей части сессии</button><div class="cx-think-body cx-md" hidden>${mdToHtml(b.text)}</div></div>`;
+  }
   if (b.kind==='system') return `<div class="cx-msg cx-sys">${esc(b.text||'')}</div>`;         // служебное — приглушённо, не «Ты»
   if (b.kind==='command') return `<div class="cx-msg cx-cmd"><span class="cx-cmd-ico">⌘</span>${esc(b.text||'')}</div>`;   // вызов команды человеком
   return '';

@@ -7,6 +7,7 @@ import {
   userDataDir, PROJECTS_DIR, WO_STATES_DIR, NON_ENVS, JIRA_ENABLED,
   ACTIVE_MS, WORKING_MS, BG_ACTIVE_MS, LIST_CAP, CTX_LIMIT, SYSREM,
   sendJSON, readJsonBody, movePath, oneLine, activeStreams,
+  pendingQuestionsByKey, pendingApprovalsByKey,
   loadProjects, saveProjects, slugForPath, activeProject, getRunStatus, writeJsonAtomic,
 } from './core.mjs';
 import {
@@ -294,6 +295,14 @@ function textSummary(f) {
   _summaryCache.set(key, c);
   return c;
 }
+// Ход сессии стоит НЕ на Claude, а на человеке: висит неотвеченный вопрос (AskUserQuestion/ExitPlanMode) либо
+// нерешённый аппрув инструмента. Без этого признака карточка «работает» и карточка «ждёт меня» выглядят одинаково,
+// и ход может простоять часами незамеченным.
+export function awaitingInputFor(sessionId) {
+  const q = pendingQuestionsByKey.get(sessionId), a = pendingApprovalsByKey.get(sessionId);
+  return !!((q && q.size) || (a && a.size));
+}
+
 function buildSessionSummary(f, wfStates) {
   const c = textSummary(f);   // кэшируемая (из файла) часть
   // Свежее на каждый вызов: зависит от «сейчас» (время), mtime сабагентов, dev-workflow-состояния и тегов.
@@ -318,6 +327,7 @@ function buildSessionSummary(f, wfStates) {
     active,
     working: (Date.now() - f.mtime) < WORKING_MS || bgRunning > 0 || serverActive,   // живая генерация ИЛИ фоновый агент ИЛИ живой ход на сервере (не гаснет на долгом инструменте → нет ложного «завершено»)
     serverActive,
+    awaitingInput: awaitingInputFor(f.id),
     bgRunning,
     wfHasState: !!st,   // есть ли dev-workflow-состояние (спеккит) для этой WO — иначе Jira одна не двигает в продвинутые колонки
     column: columnByAge(f.mtime),
@@ -536,6 +546,7 @@ export function apiSession(relFile) {
     active,
     serverActive,
     working: (Date.now() - mtime) < WORKING_MS || bgRunning > 0 || serverActive,
+    awaitingInput: awaitingInputFor(sessionId),
     bgRunning,
     agents,
     blocks,
@@ -574,7 +585,7 @@ export function apiSessionTail(relFile, after) {
   if (rp.error) return rp;
   let text = '';
   try { text = readFileSync(rp.resolved, 'utf8'); } catch { return { error: 'not found', code: 404 }; }
-  const { blocks, winTokens, lastUserTs, maxTurnsTs } = buildSessionBlocks(text);
+  const { blocks, winTokens, lastUserTs, maxTurnsTs, turnOut } = buildSessionBlocks(text);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   const a = Math.max(0, after | 0);
   const key = path.basename(rp.resolved).replace(/\.jsonl$/, '');
@@ -591,6 +602,8 @@ export function apiSessionTail(relFile, after) {
     working: (Date.now() - mtime) < WORKING_MS,
     serverActive,   // авторитетно: на сервере ЕСТЬ активный ход этой сессии → индикатор держится даже в паузах записи (>20с без изменений файла)
     activity: tailActivity(blocks),   // «что делает» — для строки индикатора при перезаходе/фоне
+    turnOut,        // сгенерировано токенов в текущем ходе: индикатор показывает растущее число, а не только секунды
+    awaitingInput: awaitingInputFor(key),
     terminal: terminalFor(key, lastUserTs, maxTurnsTs, serverActive),   // R5: когда фоновый ход завершится (serverActive → false), tail покажет причину финиша, а не просто исчезнет
   };
 }

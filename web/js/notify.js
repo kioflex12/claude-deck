@@ -4,6 +4,7 @@ import { S, notifiedDone, notifiedInput, JIRA_CACHE } from './store.js';
 import { isWorking, renderNow, renderBoard } from './board.js';
 import { openSession } from './session.js';
 import { setStreamStatus } from './stream.js';
+import { renderCtxTabs } from './nav.js';
 import { hydrateMrs, hydrateJira } from './services.js';
 import { renderUsageBar } from './usage.js';
 import { updateAttentionBadge, renderAttention } from './attention.js';
@@ -105,6 +106,7 @@ export async function pollSessions(force){
     }
   } catch { S.polling = false; return; }
   if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(!!force); hydrateJira(!!force); } }   // renderBoard(false) сохраняет colScroll; force → гидрация мимо кэшей (свежий MR/Jira сразу)
+  if (heavy) renderCtxTabs();                              // вкладки открытых контекстов: имя/работает/ждёт ответа — из свежих SESSIONS
   renderUsageBar();
   updateAttentionBadge();                                  // счётчик «Требует внимания» — из свежих SESSIONS (блокеры/упавшие сборки/проверка)
   if (S.activeView === 'attention') renderAttention();

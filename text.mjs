@@ -177,6 +177,13 @@ export function classifyUserBlock(rawText) {
   const t = String(rawText || '').replace(SYSREM, '').trim();
   if (!t) return null;
   if (t.startsWith('Caveat:') || t.includes('<local-command-stdout>')) return null;   // чистый шум — пропускаем
+  // Инжект продолжения после /compact: CLI кладёт в сессию user-строку «This session is being continued…» со всем
+  // саммари. Это НЕ реплика человека — как «Ты» она читалась полотном английского текста на пол-экрана (и выглядела
+  // так, будто перезаход что-то сломал). Отдаём отдельным видом — свёрнутой пометкой о сжатии.
+  if (/^This session is being continued from a previous conversation/i.test(t)) {
+    const body = t.replace(/^[\s\S]*?Summary:\s*/i, '').trim() || t;
+    return { kind: 'compact', text: cap(body) };
+  }
   if (t.includes('<task-notification>')) return { kind: 'system', text: '⚙ фоновая задача' };
   if (t.startsWith('[Request interrupted')) return { kind: 'system', text: '⛔ прервано пользователем' };
   const cmd = t.match(/<command-name>([\s\S]*?)<\/command-name>/);
@@ -186,7 +193,7 @@ export function classifyUserBlock(rawText) {
 export function buildSessionBlocks(text) {
   const blocks = [];
   const toolById = {};
-  let model = '', cwd = '', winTokens = 0, msgCount = 0, lastUserTs = 0, maxTurnsTs = 0;
+  let model = '', cwd = '', winTokens = 0, msgCount = 0, lastUserTs = 0, maxTurnsTs = 0, turnOut = 0;
   const branches = [];
   const tsMs = (s) => { const n = Date.parse(s || ''); return isNaN(n) ? 0 : n; };
   for (const line of text.split('\n')) {
@@ -228,16 +235,17 @@ export function buildSessionBlocks(text) {
         }
       }
     }
-    if (role === 'user' && blocks.length > start) lastUserTs = tsMs(ev.timestamp);   // старт текущего хода = время последнего человеческого промпта
+    if (role === 'user' && blocks.length > start) { lastUserTs = tsMs(ev.timestamp); turnOut = 0; }   // старт текущего хода = время последнего человеческого промпта (счётчик выхода хода — с нуля)
     if (role === 'assistant' && msg.usage) {
       const u = msg.usage;
       const tin = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       const tout = u.output_tokens || 0;
       winTokens = tin;
+      turnOut += tout;   // сгенерировано в текущем ходе — растёт по мере работы, показывается в индикаторе как живая динамика
       for (let k = blocks.length - 1; k >= start; k--) {
         if (blocks[k].kind === 'assistant' || blocks[k].kind === 'thinking') { blocks[k].meta = { in: tin, out: tout, ctxPct: Math.min(tin / CTX_LIMIT, 1) }; break; }
       }
     }
   }
-  return { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs, maxTurnsTs };
+  return { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs, maxTurnsTs, turnOut };
 }

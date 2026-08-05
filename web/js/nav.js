@@ -1,6 +1,6 @@
 // Deck — навигация: переключение видов (setView), командная палитра (Ctrl/⌘+K) и поиск-дропдаун сессий.
 // Вынесено из app.js; состояние — в store (S). Топбар-события (вкладки, поиск, фильтры, палитра) — top-level листенеры ниже.
-import { S, JIRA_CACHE, MR_CACHE } from './store.js';
+import { S, JIRA_CACHE, MR_CACHE, SESSION_CACHE } from './store.js';
 import { esc } from './util.js';
 import { searchableText, cardStatus } from './columns.js';
 import { renderBoard, isWorking } from './board.js';
@@ -38,10 +38,17 @@ export function renderPal(q){
 function setSel(i){ S.palSel=i; document.querySelectorAll('.pal-item').forEach((el,j)=>el.classList.toggle('sel',j===i)); const s=document.querySelector('.pal-item.sel'); if(s) s.scrollIntoView({block:'nearest'}); }
 function runPal(i){ const it=S.palItems[i]; if(!it) return; closePal(); it.act(); }
 
+// Справочники и каталоги (Скиллы/MCP) — НАКЛАДНЫЕ вкладки: открываются поверх того, где ты был, и не закрывают
+// контекст. Раньше любой переход убивал открытую сессию (стрим рвался, лента стиралась) — заглянуть в MCP было нельзя.
+// Именно function, а не const-множество: setView вызывается и из модуля, который грузится РАНЬШЕ тела nav.js
+// (циклический импорт через app.load) — объявление функции поднимается, const в этот момент ещё в TDZ.
+function isOverlayView(v){ return v === 'skills' || v === 'mcp'; }
+
 export function setView(v){
-  const leavingSession = !!S.currentFile;   // уходим из открытой сессии → доску надо освежить сразу, не ждать поллинг
-  stopStream();   // уходя из сессии — закрыть живой стрим
-  S.activeView = v; S.currentFile = null;
+  const keepSession = isOverlayView(v) && !!S.currentFile;   // сессия остаётся открытой «под» справочником: DOM цел, стрим жив, обратно — одним кликом
+  const leavingSession = !!S.currentFile && !keepSession;   // уходим из открытой сессии → доску надо освежить сразу, не ждать поллинг
+  if (!keepSession){ stopStream(); S.currentFile = null; }   // уходя из сессии — закрыть живой стрим
+  S.activeView = v;
   const boardish = (v==='board' || v==='status');
   document.getElementById('viewBoard').style.display = boardish ? 'flex' : 'none';
   document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
@@ -51,7 +58,57 @@ export function setView(v){
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
   if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else if (v==='attention') renderAttention(); else renderBoard(true);
+  renderCtxTabs();
   if (boardish && leavingSession) pollSessions(true);   // форс-рефреш: свежий список сессий + live MR/Jira сразу после выхода из контекста (не ждём 7с-поллинг)
+}
+
+// Возврат в уже открытый контекст без перезагрузки: только показываем его вид обратно. Перерисовка (openSession) здесь
+// была бы вредна — она стёрла бы живую ленту и порвала стрим, ради которого сессию и держали открытой.
+export function backToSession(){
+  if (!S.currentFile) return;
+  S.activeView = 'session';
+  document.getElementById('viewBoard').style.display = 'none';
+  document.getElementById('viewSkills').style.display = 'none';
+  document.getElementById('viewMcp').style.display = 'none';
+  document.getElementById('viewAttention').style.display = 'none';
+  document.getElementById('viewSession').style.display = 'flex';
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected','false'));
+  renderCtxTabs();
+}
+
+// Полоса открытых контекстов: одновременно открытых сессий может быть несколько, переключение между ними — один клик,
+// а не «выйти на доску и найти карточку заново». Здесь же кнопка возврата из накладной вкладки туда, откуда её открыли.
+export function renderCtxTabs(){
+  const bar = document.getElementById('ctxTabs'); if (!bar) return;
+  S.openFiles = S.openFiles.filter(f => f === S.currentFile || S.SESSIONS.some(s => s.file === f) || SESSION_CACHE[f]);
+  const overlay = isOverlayView(S.activeView);
+  if (!S.openFiles.length && !overlay){ bar.hidden = true; bar.innerHTML = ''; return; }
+  const back = overlay
+    ? `<button class="ct-back" type="button" data-back="1">← ${S.currentFile ? 'в контекст' : 'на доску'}</button>`
+    : '';
+  const tabs = S.openFiles.map(f => {
+    const s = S.SESSIONS.find(x => x.file === f) || SESSION_CACHE[f] || {};
+    const cur = f === S.currentFile;
+    const dot = isWorking(s) ? '<span class="ct-dot"></span>' : '';
+    const wait = s.awaitingInput ? '<span class="ct-wait" title="ждёт вашего ответа">✋</span>' : '';
+    const title = s.title || 'сессия';
+    return `<span class="ct-tab${cur ? ' on' : ''}${cur && overlay ? ' dim' : ''}" data-file="${esc(f)}" title="${esc(title)}">${dot}${wait}<span class="ct-title">${esc(title)}</span><button class="ct-x" type="button" data-close="${esc(f)}" title="Закрыть контекст">✕</button></span>`;
+  }).join('');
+  bar.hidden = false;
+  bar.innerHTML = back + tabs;
+  const bb = bar.querySelector('.ct-back');
+  if (bb) bb.addEventListener('click', () => { if (S.currentFile) backToSession(); else setView(S.returnView === 'board' ? 'board' : 'status'); });
+  bar.querySelectorAll('.ct-x').forEach(x => x.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const f = x.dataset.close;
+    S.openFiles = S.openFiles.filter(v => v !== f);
+    if (S.currentFile === f) setView(S.returnView === 'board' ? 'board' : 'status'); else renderCtxTabs();
+  }));
+  bar.querySelectorAll('.ct-tab').forEach(el => el.addEventListener('click', () => {
+    const f = el.dataset.file;
+    if (f === S.currentFile){ if (S.activeView !== 'session') backToSession(); return; }
+    openSession(f);
+  }));
 }
 
 export function applySearchQuery(){                    // единый ре-рендер под текущий query (после ввода/очистки)
@@ -123,5 +180,7 @@ document.addEventListener('keydown', e => {
     else if (e.key==='Enter') { e.preventDefault(); runPal(S.palSel); }
     return;
   }
-  if (e.key==='Escape' && S.currentFile) setView(S.returnView);
+  if (e.key!=='Escape') return;
+  if (isOverlayView(S.activeView) && S.currentFile) backToSession();   // справочник поверх контекста — Esc возвращает в контекст, а не выкидывает на доску
+  else if (S.currentFile) setView(S.returnView);
 });

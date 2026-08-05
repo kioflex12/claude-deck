@@ -113,6 +113,17 @@ async function start() {
     if (isExternalHttp(url)) shell.openExternal(url);
   });
 
+  // Масштаб — только через before-input-event, а не аксельраторы меню. Роль zoomIn слушает Ctrl+Plus, но на многих
+  // раскладках «+» физически приходит как Ctrl+Shift+= (или Ctrl+= без Shift) — сочетание до роли не доходило, и
+  // увеличение работало лишь кнопкой меню, тогда как Ctrl+Minus работал. Здесь ловим все варианты клавиши сами.
+  mainWindow.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const k = String(input.key || '');
+    if (k === '+' || k === '=' || k === 'Add') { zoomStep(1); e.preventDefault(); }
+    else if (k === '-' || k === '_' || k === 'Subtract') { zoomStep(-1); e.preventDefault(); }
+    else if (k === '0') { zoomStep(0); e.preventDefault(); }
+  });
+
   mainWindow.on('resize', () => { captureBounds(); saveStateDebounced(); });
   mainWindow.on('move', () => { captureBounds(); saveStateDebounced(); });
   mainWindow.on('close', (e) => {
@@ -121,6 +132,13 @@ async function start() {
     if (deckState.minimizeToTray && !app.isQuitting) { e.preventDefault(); mainWindow.hide(); }
   });
   mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// Шаг масштаба (0 — сброс). Уровни, а не zoomFactor: шаг 0.5 совпадает с шагом штатных ролей zoomIn/zoomOut.
+function zoomStep(dir) {
+  if (!mainWindow) return;
+  const wc = mainWindow.webContents;
+  wc.setZoomLevel(dir === 0 ? 0 : Math.max(-6, Math.min(7, wc.getZoomLevel() + dir * 0.5)));
 }
 
 // --- показ/скрытие окна ---
@@ -452,7 +470,13 @@ function buildMenu() {
       isMac ? { role: 'close' } : { label: 'Выход', click: () => { app.isQuitting = true; app.quit(); } },
     ] },
     { label: 'Правка', submenu: [ { role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' } ] },
-    { label: 'Вид', submenu: [ { label: 'Командная палитра', accelerator: 'CommandOrControl+K', click: openPaletteUI }, { type: 'separator' }, { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' } ] },
+    // Масштаб: свои пункты вместо ролей zoomIn/zoomOut/resetZoom. registerAccelerator:false — сочетание в меню лишь
+    // подписано, а нажатие обрабатывает before-input-event (иначе роль и он сработали бы оба = двойной шаг).
+    { label: 'Вид', submenu: [ { label: 'Командная палитра', accelerator: 'CommandOrControl+K', click: openPaletteUI }, { type: 'separator' }, { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' },
+      { label: 'Обычный масштаб', accelerator: 'CommandOrControl+0', registerAccelerator: false, click: () => zoomStep(0) },
+      { label: 'Увеличить', accelerator: 'CommandOrControl+Plus', registerAccelerator: false, click: () => zoomStep(1) },
+      { label: 'Уменьшить', accelerator: 'CommandOrControl+-', registerAccelerator: false, click: () => zoomStep(-1) },
+      { type: 'separator' }, { role: 'togglefullscreen' } ] },
     { label: 'Окно', submenu: [ { role: 'minimize' }, { role: 'zoom' } ] },
     { label: 'Помощь', role: 'help', submenu: [
       { label: 'Проверить обновления…', click: openUpdatesUI },

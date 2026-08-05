@@ -44,7 +44,7 @@ S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.82';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.83';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -129,6 +129,7 @@ export async function load(){
   }, 1500);
 }
 function wireTopbar(){
+  const br = document.querySelector('.brand'); if (br) br.addEventListener('click', () => setView('status'));   // логотип — путь «домой» (как в любом веб-приложении)
   const u = document.getElementById('usageInd'); if (u) u.addEventListener('click', openUsageModal);
   const a = document.getElementById('authChip'); if (a) a.addEventListener('click', onAuthChip);
   const g = document.getElementById('authGateBtn'); if (g) g.addEventListener('click', startLogin);

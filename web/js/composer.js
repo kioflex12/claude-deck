@@ -1,6 +1,6 @@
 // Deck — поле ввода сессии: автокомплит «/»-скиллов, поповер режима/модели/effort, вложения (пикер/drag/вставка),
 // очередь промтов во время стрима и отправка. Состояние — в store (S); запуск стрима — через stream.runPrompt.
-import { S, SESSION_CACHE, SKILLS_CACHE, attachDraft, promptQueue, MODE_ORDER, MODE_LABEL, ATTACH_MAX_BYTES } from './store.js';
+import { S, SESSION_CACHE, SKILLS_CACHE, attachDraft, promptQueue, MODE_ORDER, MODE_LABEL, ATTACH_MAX_BYTES, normMode } from './store.js';
 import { esc } from './util.js';
 import { toast } from './ui.js';
 import { requireAuth } from './auth.js';
@@ -33,7 +33,7 @@ export function updateSlash(){
   const v = ta.value;
   if (v[0] === '/' && !v.slice(1).includes(' ')) {
     S.slashItems = slashFilter(v.slice(1));   // без лимита: дропдаун .cx-slash скроллится (max-height+overflow), а проектов-скиллов бывает >60
-    S.slashOpen = S.slashItems.length > 0;
+    S.slashOpen = true;   // «/» набран — список открыт ВСЕГДА: пустой фильтр честно говорит «не найдено», а не выглядит как «скиллов нет»
     S.slashSel = 0;
     renderSlash();
   } else {
@@ -46,7 +46,12 @@ export function renderSlash(){
   if (!box) return;
   if (!S.slashOpen){ box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = S.slashItems.map((s,i)=>`<div class="cx-sl-item ${i===S.slashSel?'sel':''}" data-i="${i}"><span class="cx-sl-name">/${esc(s.name)}</span><span class="cx-sl-src">${esc(s.source)}</span><span class="cx-sl-desc">${esc((s.description||'').slice(0,110))}</span></div>`).join('');
+  const foot = '<div class="cx-sl-foot">↑↓ навигация · Tab/↵ выбрать · Esc закрыть</div>';
+  if (!S.slashItems.length){
+    box.innerHTML = `<div class="cx-sl-empty">${S.SESSION_SKILLS.length ? 'Скилл не найден — измените запрос' : 'Скиллы этой папки ещё загружаются…'}</div>` + foot;
+    return;
+  }
+  box.innerHTML = S.slashItems.map((s,i)=>`<div class="cx-sl-item ${i===S.slashSel?'sel':''}" data-i="${i}"><span class="cx-sl-name">/${esc(s.name)}</span><span class="cx-sl-src">${esc(s.source)}</span><span class="cx-sl-desc">${esc((s.description||'').slice(0,110))}</span></div>`).join('') + foot;
   box.querySelectorAll('.cx-sl-item').forEach(el=>{
     el.addEventListener('mousedown', e => { e.preventDefault(); chooseSlash(+el.dataset.i); });
     el.addEventListener('mousemove', () => { S.slashSel = +el.dataset.i; highlightSlash(); });
@@ -66,6 +71,39 @@ function chooseSlash(i){
   ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight,150) + 'px';
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = !ta.value.trim();
   ta.focus();
+}
+
+// Черновик поля ввода по сессии: набранный, но не отправленный промт должен ждать возврата в контекст, а не исчезать.
+const DRAFT_PREFIX = 'deckDraft:';
+export function loadDraft(file){ try { return file ? (localStorage.getItem(DRAFT_PREFIX + file) || '') : ''; } catch { return ''; } }
+export function saveDraft(file, text){
+  if (!file) return;
+  try { if (text && text.trim()) localStorage.setItem(DRAFT_PREFIX + file, text.slice(0, 20000)); else localStorage.removeItem(DRAFT_PREFIX + file); } catch {}
+}
+
+// Режим/модель/effort принадлежат КОНКРЕТНОЙ сессии, а не приложению: включённый в одной сессии байпас не должен
+// становиться байпасом во всех. Глобальные ключи остаются только дефолтом для НОВОЙ сессии; при первом открытии этот
+// дефолт фиксируется в запись сессии — дальше переключения в других сессиях на неё уже не влияют.
+const SETT_PREFIX = 'deckSett:';
+export function saveSessionSettings(file){
+  if (!file) return;
+  try { localStorage.setItem(SETT_PREFIX + file, JSON.stringify({ mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort })); } catch {}
+}
+export function applySessionSettings(file){
+  let rec = null;
+  try { rec = JSON.parse(localStorage.getItem(SETT_PREFIX + file) || 'null'); } catch {}
+  if (rec && typeof rec === 'object'){
+    S.sessionMode = normMode(rec.mode); S.sessionModel = rec.model || ''; S.sessionEffort = rec.effort || '';
+    return;
+  }
+  S.sessionMode = normMode(localStorage.getItem('deckMode'));
+  S.sessionModel = localStorage.getItem('deckModel') || '';
+  S.sessionEffort = localStorage.getItem('deckEffort') || '';
+  saveSessionSettings(file);
+}
+function persistSettings(){
+  if (S.currentFile) saveSessionSettings(S.currentFile);
+  else { try { localStorage.setItem('deckMode', S.sessionMode); localStorage.setItem('deckModel', S.sessionModel); localStorage.setItem('deckEffort', S.sessionEffort); } catch {} }   // сессии ещё нет (новая) — это дефолт для следующих
 }
 
 export function renderComposer(t){
@@ -101,13 +139,16 @@ export function renderComposer(t){
     </div>`;
   const ta = document.getElementById('composer-ta'), btn = document.getElementById('sendBtn');
   const grow = () => { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,150)+'px'; btn.disabled = !(ta.value.trim() || attachDraft.length); };
-  ta.addEventListener('input', () => { grow(); updateSlash(); });
+  ta.addEventListener('input', () => { grow(); updateSlash(); saveDraft(S.currentFile, ta.value); });
   ta.addEventListener('keydown', e => {
     if (S.slashOpen) {
-      if (e.key==='ArrowDown'){ e.preventDefault(); S.slashSel=Math.min(S.slashSel+1, S.slashItems.length-1); highlightSlash(); return; }
-      if (e.key==='ArrowUp'){ e.preventDefault(); S.slashSel=Math.max(S.slashSel-1, 0); highlightSlash(); return; }
-      if (e.key==='Enter'){ e.preventDefault(); chooseSlash(S.slashSel); return; }
       if (e.key==='Escape'){ e.preventDefault(); S.slashOpen=false; document.getElementById('slashBox').hidden=true; return; }
+      if (S.slashItems.length){   // пустой список навигацию не перехватывает: Enter должен отправлять текст, а не «ничего»
+        if (e.key==='ArrowDown'){ e.preventDefault(); S.slashSel=Math.min(S.slashSel+1, S.slashItems.length-1); highlightSlash(); return; }
+        if (e.key==='ArrowUp'){ e.preventDefault(); S.slashSel=Math.max(S.slashSel-1, 0); highlightSlash(); return; }
+        if (e.key==='Tab' && !e.shiftKey){ e.preventDefault(); chooseSlash(S.slashSel); return; }   // Tab — подставить подсвеченный скилл (⇧+Tab ниже остаётся сменой режима)
+        if (e.key==='Enter'){ e.preventDefault(); chooseSlash(S.slashSel); return; }
+      }
     }
     if (e.key==='Tab' && e.shiftKey) { e.preventDefault(); cycleMode(); return; }   // как в расширении — циклим режим
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -137,9 +178,11 @@ export function renderComposer(t){
     const files = items.filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
     if (files.length){ e.preventDefault(); addAttachments(files); }   // скриншот из буфера — главный сценарий
   });
-  paintMode();   // режим/модель/effort задаёт вызывающий (openSession сбрасывает на default; new/fork — выбранное в окне)
+  paintMode();   // режим/модель/effort задаёт вызывающий (openSession берёт настройки этой сессии; new/fork — выбранное в окне)
   if (!S.MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
   attachDraft.length = 0; renderAttachDraft();
+  const draft = loadDraft(t && t.file);   // недоотправленный промт этой сессии — вернуть в поле как было
+  if (draft){ ta.value = draft; grow(); }
   updateComposerWarnings();
   setTimeout(()=>ta.focus(), 60);
 }
@@ -213,11 +256,11 @@ function openModePop(){
     <div class="mp-eff"><div class="mp-eff-top"><span>Effort</span><b id="mpEffLbl">${esc(effs[ei].label.replace(/^Effort:\s*/,''))}</b></div>
       <input type="range" class="mp-slider" id="mpEff" min="0" max="${Math.max(0,effs.length-1)}" step="1" value="${ei}"${effs.length<=1?' disabled':''}></div>`;
   pop.hidden = false;
-  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ S.sessionMode=r.dataset.m; localStorage.setItem('deckMode',S.sessionMode); paintMode(); openModePop(); }));
+  pop.querySelectorAll('.mp-mode').forEach(r=>r.addEventListener('click', ()=>{ S.sessionMode=r.dataset.m; persistSettings(); paintMode(); openModePop(); }));
   const ms = pop.querySelector('#mpModel');
-  if (ms) ms.onchange = ()=>{ S.sessionModel=ms.value; localStorage.setItem('deckModel',S.sessionModel); openModePop(); paintMode(); };
+  if (ms) ms.onchange = ()=>{ S.sessionModel=ms.value; persistSettings(); openModePop(); paintMode(); };
   const es = pop.querySelector('#mpEff'), el = pop.querySelector('#mpEffLbl');
-  if (es) es.oninput = ()=>{ const arr=effortsForModel(S.sessionModel); const v=arr[+es.value]||arr[0]; S.sessionEffort=v.value; localStorage.setItem('deckEffort',S.sessionEffort); if (el) el.textContent=v.label.replace(/^Effort:\s*/,''); paintMode(); };
+  if (es) es.oninput = ()=>{ const arr=effortsForModel(S.sessionModel); const v=arr[+es.value]||arr[0]; S.sessionEffort=v.value; persistSettings(); if (el) el.textContent=v.label.replace(/^Effort:\s*/,''); paintMode(); };
   // клик вне поповера — закрыть
   const off = (e)=>{ const p=document.getElementById('modePop'); if (!p||p.hidden){ document.removeEventListener('mousedown',off,true); return; } if (!p.contains(e.target) && !(e.target.closest && e.target.closest('#modeBtn'))){ p.hidden=true; document.removeEventListener('mousedown',off,true); } };
   document.addEventListener('mousedown', off, true);
@@ -228,7 +271,7 @@ function toggleModePop(){ const pop=document.getElementById('modePop'); if (!pop
 export function cycleMode(){
   const i = MODE_ORDER.indexOf(S.sessionMode);
   S.sessionMode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
-  localStorage.setItem('deckMode', S.sessionMode);
+  persistSettings();
   paintMode();
   const pop = document.getElementById('modePop'); if (pop && !pop.hidden) openModePop();   // поповер открыт → отразить смену
 }
@@ -395,6 +438,7 @@ function sendMessage(){
   if ((!text && !attachments.length) || (!S.currentFile && !S.pendingNewSession)) return;
   S.slashOpen = false; const box = document.getElementById('slashBox'); if (box) box.hidden = true;
   ta.value = ''; ta.style.height = 'auto';
+  saveDraft(S.currentFile, '');                           // промт ушёл — черновик снят (иначе вернулся бы при следующем заходе)
   attachDraft.length = 0; renderAttachDraft();            // черновик вложений очищаем
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
   const payload = { text, mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };

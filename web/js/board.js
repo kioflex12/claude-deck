@@ -53,7 +53,7 @@ export function cardHTML(s){
     const txt = st.sub || WF_LABEL[st.col] || '';
     if (txt) statusBar = `<div class="card-status cs-${esc(st.col)}${blocked?' cs-blocked':''}">${esc(txt)}</div>`;
   }
-  const stColor = blocked ? 'var(--bad)' : working ? 'var(--good)' : s.active ? 'var(--accent)' : '';   // blocked — красная полоса (виден и без бара)
+  const stColor = blocked ? 'var(--bad)' : s.awaitingInput ? 'var(--warn)' : working ? 'var(--good)' : s.active ? 'var(--accent)' : '';   // blocked — красная полоса (виден и без бара); ждёт ответа — жёлтая
   const stripe = stColor ? `class="card stripe" style="--st:${stColor}"` : 'class="card"';
   const pulse = working ? '<span class="pulse"></span>' : '';
   const wfChips = wf ? [
@@ -72,7 +72,11 @@ export function cardHTML(s){
   const woColor = (WF_COLUMNS.find(c => c.key === st.col) || {}).dot || 'var(--accent)';
   const woTag = s.wo ? `<span class="card-wo" data-wo="${esc(s.wo)}" title="Открыть ${esc(s.wo)} в Jira · ${esc(WF_LABEL[st.col] || '')}" style="--wo-c:${woColor}">${esc(s.wo)}<span class="ext">↗</span></span>` : '';
   const bg = (s.bgRunning|0) > 0 ? ` · ${s.bgRunning} ${s.bgRunning===1?'агент':'агента'} в фоне` : '';
-  const flag = working
+  // «Ждёт ответа» важнее «работает»: ход стоит на человеке и сам не двинется — это должно быть видно с доски,
+  // иначе вопрос/аппрув висит незамеченным, пока карточка выглядит как обычная работающая.
+  const flag = s.awaitingInput
+    ? `<div class="flag awaiting"><span class="dot"></span>ждёт ответа</div>`
+    : working
     ? `<div class="flag working"><span class="dot"></span>работает${bg}</div>`
     : s.active ? `<div class="flag attention"><span class="dot"></span>активна · ${timeAgo(s.mtime)}</div>` : '';
   const buildPill = s.buildActive
