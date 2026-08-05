@@ -125,6 +125,14 @@ function scanSecretSources() {
   const sysEnv = readPersistentEnv();
   for (const k of want) take(k, sysEnv[k], 'системные переменные Windows');   // главный источник на чужой машине: GUI-app не видит их в process.env
   for (const p of secretsEnvCandidates()) { const env = parseEnvFile(p); if (env) for (const k of want) take(k, env[k], p); }
+  // Claude Code settings.json → env-блок. Частый источник токенов у разработчиков: Claude инжектит их в СВОЙ процесс
+  // (потому терминал их видит), но GUI-Deck этот процесс-env не наследует, а в реестре/.env их нет → скан находил пусто.
+  // Глобальный ~/.claude + per-project .claude (вверх от папок сессий). settings.local.json приоритетнее settings.json.
+  const settingsFiles = [], sfSeen = new Set();
+  const addSf = (p) => { if (p && !sfSeen.has(p)) { sfSeen.add(p); settingsFiles.push(p); } };
+  addSf(path.join(os.homedir(), '.claude', 'settings.local.json')); addSf(path.join(os.homedir(), '.claude', 'settings.json'));
+  for (const cwd of uniqueSessionCwds()) { let dir = cwd; for (let i = 0; i < 5 && dir; i++) { addSf(path.join(dir, '.claude', 'settings.local.json')); addSf(path.join(dir, '.claude', 'settings.json')); const parent = path.dirname(dir); if (parent === dir) break; dir = parent; } }
+  for (const sf of settingsFiles) { try { const j = JSON.parse(readFileSync(sf, 'utf8')); const env = j && j.env; if (env && typeof env === 'object') for (const k of want) take(k, env[k], sf); } catch {} }
   try {
     const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
     const scan = (servers, where) => { if (servers && typeof servers === 'object') for (const [name, cfg] of Object.entries(servers)) { const env = cfg && cfg.env; if (env) for (const k of want) take(k, env[k], where + '.' + name + '.env'); } };
