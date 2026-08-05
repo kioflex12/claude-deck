@@ -44,7 +44,7 @@ S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.71';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.72';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -86,6 +86,16 @@ document.addEventListener('click', (e) => {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => toast('Не удалось скопировать'));
   else { try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done(); } catch { toast('Не удалось скопировать'); } }
 }, true);
+// Лайтбокс: клик по вложенной картинке (в ленте или в композере) — открыть во весь экран, повторный клик/Esc — закрыть.
+document.addEventListener('click', (e) => {
+  const img = e.target && e.target.closest ? e.target.closest('.cx-img, .cx-att-img') : null;
+  if (!img || !img.getAttribute('src')) return;
+  e.preventDefault();
+  let ov = document.getElementById('imgLightbox');
+  if (!ov){ ov = document.createElement('div'); ov.id = 'imgLightbox'; ov.className = 'img-lightbox'; ov.addEventListener('click', () => ov.classList.remove('open')); document.body.appendChild(ov); }
+  ov.innerHTML = '<img alt="">'; ov.firstChild.src = img.getAttribute('src'); ov.classList.add('open');
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ const ov = document.getElementById('imgLightbox'); if (ov) ov.classList.remove('open'); } });
 
 export async function load(){
   // Мгновенный каркас ДО данных: топбар уже привязан (wireTopbar), сразу показываем борд и кнопки (пустыми) —

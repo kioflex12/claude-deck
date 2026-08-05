@@ -63,6 +63,11 @@ export function blockHTML(b){
     const outBox = b.result ? `<div class="cx-io"><span class="cx-io-l">OUT</span><pre class="cx-io-b cx-io-out">${esc(b.result)}</pre></div>` : '';
     return `<div class="cx-msg cx-twrap">${head}${inBox}${outBox}</div>`;
   }
+  if (b.kind==='image'){
+    const src = b.data ? ('data:'+(b.media||'image/png')+';base64,'+b.data) : (b.url||'');
+    if (!src) return '';
+    return `<div class="cx-msg cx-imgmsg"><img class="cx-img" src="${src}" alt="вложение" loading="lazy"></div>`;
+  }
   if (b.kind==='system') return `<div class="cx-msg cx-sys">${esc(b.text||'')}</div>`;         // служебное — приглушённо, не «Ты»
   if (b.kind==='command') return `<div class="cx-msg cx-cmd"><span class="cx-cmd-ico">⌘</span>${esc(b.text||'')}</div>`;   // вызов команды человеком
   return '';

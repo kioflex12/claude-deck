@@ -31,6 +31,8 @@ export async function openSession(file){
   document.getElementById('composer').innerHTML = '';
   document.getElementById('sessionSide').innerHTML = '';
   if (S.streamingFile === file || S.SESSIONS.some(s => s.file === file && isWorking(s))) delete SESSION_CACHE[file];   // активная сессия — свежий стейт (active/blocks), чтобы показать «работает» и live-tail при перезаходе
+  const _curMt = (S.SESSIONS.find(s => s.file === file) || {}).mtime;   // диск новее кэша (ход завершился, дописан финальный вывод) → перечитать, иначе показали бы устаревший транскрипт без финала
+  if (SESSION_CACHE[file] && _curMt && SESSION_CACHE[file].mtime && _curMt > SESSION_CACHE[file].mtime) delete SESSION_CACHE[file];
   let t = SESSION_CACHE[file];
   if (!t){
     try {

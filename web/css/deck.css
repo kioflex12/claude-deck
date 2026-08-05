@@ -506,3 +506,11 @@
     .rf-path{ color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .rf-more{ padding:4px 8px; font-family:var(--mono); font-size:11px; color:var(--text-faint); }
     .rf-empty{ padding:8px; color:var(--text-faint); font-size:12px; }
+
+    /* вложения-картинки в ленте + лайтбокс (клик — во весь экран) */
+    .cx-imgmsg::before{ background:var(--accent); }
+    .cx-img{ max-width:340px; max-height:240px; border-radius:8px; border:1px solid var(--border); display:block; cursor:zoom-in; }
+    .cx-att-img{ cursor:zoom-in; }
+    .img-lightbox{ position:fixed; inset:0; background:rgba(0,0,0,.82); display:none; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; padding:24px; }
+    .img-lightbox.open{ display:flex; }
+    .img-lightbox img{ max-width:96vw; max-height:96vh; border-radius:8px; box-shadow:0 10px 46px rgba(0,0,0,.55); }

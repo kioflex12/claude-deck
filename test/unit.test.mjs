@@ -306,3 +306,10 @@ test('buildSessionBlocks: лента блоков, шум отфильтрова
   assert.ok(assistantWithMeta, 'usage-мета навешана на текст/thinking-блок хода');
   assert.equal(assistantWithMeta.meta.in, 150);
 });
+
+test('buildSessionBlocks: image-вложение → блок kind:image с data (после перезахода скрин виден)', () => {
+  const jl = JSON.stringify({ type:'user', message:{ role:'user', content:[ { type:'text', text:'смотри скрин' }, { type:'image', source:{ type:'base64', media_type:'image/png', data:'AAAA' } } ] } });
+  const r = buildSessionBlocks(jl);
+  const img = r.blocks.find((b) => b.kind === 'image');
+  assert.ok(img, 'image-блок создан'); assert.equal(img.data, 'AAAA'); assert.equal(img.media, 'image/png');
+});

@@ -220,7 +220,12 @@ export function buildSessionBlocks(text) {
         else if (b.type === 'thinking' && b.thinking && b.thinking.trim()) blocks.push({ kind: 'thinking', text: cap(b.thinking.trim()) });
         else if (b.type === 'tool_use') { const blk = { kind: 'tool', name: b.name || 'tool', arg: briefArg(b.input), desc: toolDesc(b.input), cmd: toolCmd(b.input), result: '' }; if (b.id) toolById[b.id] = blk; blocks.push(blk); }
         else if (b.type === 'tool_result') { const blk = b.tool_use_id && toolById[b.tool_use_id]; if (blk) blk.result = briefResult(b.content); }
-        // image — скрываем
+        else if (b.type === 'image' && b.source) {   // вложения-скриншоты: рисуем (раньше прятали → после перезахода пропадали)
+          const src = b.source;
+          if (src.type === 'base64' && src.data && src.data.length < 3000000) blocks.push({ kind: 'image', media: src.media_type || 'image/png', data: src.data });
+          else if (src.type === 'url' && src.url) blocks.push({ kind: 'image', url: src.url });
+          else blocks.push({ kind: 'system', text: '🖼 изображение (слишком большое для показа)' });
+        }
       }
     }
     if (role === 'user' && blocks.length > start) lastUserTs = tsMs(ev.timestamp);   // старт текущего хода = время последнего человеческого промпта

@@ -34,6 +34,7 @@ test('transcript.js: blockHTML всех видов + renderThread + appendHTML �
   assert.ok(toolHtml.includes('>IN<') && toolHtml.includes('git status'), 'IN = команда');
   assert.ok(toolHtml.includes('>OUT<') && toolHtml.includes('clean'), 'OUT = результат');
   assert.ok(!blockHTML({ kind:'tool', name:'Read' }).includes('cx-io'), 'без cmd/result — без IN/OUT-боксов');
+  assert.ok(blockHTML({ kind:'image', media:'image/png', data:'AAAA' }).includes('src="data:image/png;base64,AAAA"'), 'image-блок → <img> с data-url');
 
   renderThread({ file:'f1', active:false, blocks });             // active:false → без live-tail
   assert.equal(S.tailCount, blocks.length);                     // курсор = число показанных блоков
