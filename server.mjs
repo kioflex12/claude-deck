@@ -22,7 +22,7 @@ import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
 import { apiChatPrepare, apiChat, apiChatInput, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
 import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest, apiJiraComment, apiCreateMr, apiTriggerBuild, apiEnvStatus } from './services.mjs';
-import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout } from './auth.mjs';
+import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout, autoImportOnFirstRun } from './auth.mjs';
 
 // -------- статика web/ (D4c: клиент разбит на ES-модули + deck.css). Path-safe: только из web/. --------
 const WEB_DIR = path.join(HERE, 'web');
@@ -137,6 +137,7 @@ const server = http.createServer((req, res) => {
 // preferredPort: явный порт (напр. standalone 4317); иначе env PORT; иначе 0 → ОС выдаёт свободный.
 export function startServer(preferredPort) {
   initRuns();   // R2: ход, оставшийся running с прошлого запуска (Deck упал/перезапустился), → orphaned — видимый маркер при перезаходе, а не «просто остановилось»
+  autoImportOnFirstRun();   // онбординг: на пустом конфиге тихо подтянуть хосты/токены из системных переменных + пути из папок сессий (без ручного ввода)
   const listenPort = preferredPort != null ? preferredPort : (Number(process.env.PORT) || 0);
   server.requestTimeout = 0;      // не убивать долгий SSE-ход дефолтным 5-мин лимитом запроса (иначе closed=true → авто-реджект инструментов)
   server.keepAliveTimeout = 0;    // не закрывать keep-alive соединение по простою

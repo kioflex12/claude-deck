@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import {
   HERE, getClaudeBin, sendJSON, readJsonBody, writeJsonAtomic,
   loadConfig, saveConfig, configFile, loadProjects, tokenFile, writeTokenSecure, applyConfig, getElectron, parseEnvFile,
@@ -66,7 +66,55 @@ function secretsEnvCandidates() {
     if (p) { p = path.resolve(p); try { if (statSync(p).isDirectory()) p = path.join(p, '.env'); } catch {} add(p); }
   } catch {}
   add(path.join(HERE, '.env'));
-  for (const cwd of uniqueSessionCwds()) add(path.join(cwd, '.env'));
+  // .env ищем НЕ только в самой cwd сессии, но и вверх по дереву до корня репо (сессия часто идёт в подпапке, а .env
+  // лежит в корне клона vibecode) + домашний .env. Так у коллеги на другой машине его креды подхватятся сами.
+  for (const cwd of uniqueSessionCwds()) {
+    let dir = cwd;
+    for (let i = 0; i < 5 && dir; i++) { add(path.join(dir, '.env')); const parent = path.dirname(dir); if (parent === dir) break; dir = parent; }
+  }
+  add(path.join(os.homedir(), '.env'));
+  return out;
+}
+// Windows: GUI-приложение НЕ наследует пользовательские env-переменные так, как терминал (Explorer стартовал раньше их
+// установки, либо они заданы в shell-профиле, а не персистентно) → process.env в упакованном app почти пустой, и «Подтянуть
+// токены» на чужой машине находил пусто. Читаем ПЕРСИСТЕНТНЫЕ переменные прямо из реестра (read-only, без админа) — это и
+// есть «системные переменные», из которых просили тянуть. HKCU (пользовательские) приоритетнее HKLM (системных).
+let _persistEnv;
+function readPersistentEnv() {
+  if (_persistEnv) return _persistEnv;
+  _persistEnv = {};
+  if (process.platform !== 'win32') return _persistEnv;   // macOS/Linux: остаёмся на process.env/.env/.claude.json (GUI там тоже не наследует shell-env, но реестра нет)
+  for (const root of ['HKCU\\Environment', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment']) {
+    try {
+      const txt = String(execFileSync('reg', ['query', root], { encoding: 'utf8', windowsHide: true, timeout: 6000 }) || '');
+      for (const line of txt.split(/\r?\n/)) {
+        const m = line.match(/^\s{2,}(\S.*?)\s+REG_(?:EXPAND_)?SZ\s+(.*)$/);
+        if (m) { const k = m[1].trim(); if (!(k in _persistEnv)) _persistEnv[k] = m[2].trim(); }   // HKCU просканирован первым → его значения не перетираем HKLM
+      }
+    } catch {}
+  }
+  return _persistEnv;
+}
+// Пути, которых нет в env, — выводим из папок известных сессий: WO_STATES_DIR = <репо>/.claude/skills/dev-workflow/
+// workflow-states (ищем вверх от cwd сессий), clientUnityParent = родитель сегмента client-unity-N.
+function derivePathsFromSessions() {
+  const out = {};
+  for (const cwd of uniqueSessionCwds()) {
+    if (!out.woStatesDir) {
+      let dir = cwd;
+      for (let i = 0; i < 6 && dir; i++) {
+        const cand = path.join(dir, '.claude', 'skills', 'dev-workflow', 'workflow-states');
+        try { if (statSync(cand).isDirectory()) { out.woStatesDir = cand; break; } } catch {}
+        const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
+      }
+    }
+    if (!out.clientUnityParent) {
+      const segs = String(cwd).split(/[\\/]/);
+      const idx = segs.findIndex((s) => /^client-unity-\d+$/i.test(s));
+      if (idx > 0) out.clientUnityParent = segs.slice(0, idx).join(path.sep);
+    }
+    if (out.woStatesDir && out.clientUnityParent) break;
+  }
   return out;
 }
 function scanSecretSources() {
@@ -74,6 +122,8 @@ function scanSecretSources() {
   const found = {};
   const take = (k, v, source) => { if (!found[k] && v != null && String(v).trim()) found[k] = { value: String(v), source }; };
   for (const k of want) take(k, process.env[k], 'process.env/.env');
+  const sysEnv = readPersistentEnv();
+  for (const k of want) take(k, sysEnv[k], 'системные переменные Windows');   // главный источник на чужой машине: GUI-app не видит их в process.env
   for (const p of secretsEnvCandidates()) { const env = parseEnvFile(p); if (env) for (const k of want) take(k, env[k], p); }
   try {
     const j = JSON.parse(readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
@@ -86,15 +136,14 @@ function scanSecretSources() {
   }
   return found;
 }
-export async function apiImportTokens(req, res) {
-  let body = {}; try { body = await readJsonBody(req, 4096); } catch {}
-  const overwrite = !!(body && body.overwrite);
+// Ядро автоподтягивания настроек (общее для кнопки «Подтянуть» и авто-запуска на первом старте). Источники: env
+// (process.env → реестр Windows → .env-файлы → MCP-env в ~/.claude.json/.mcp.json) + деривация путей из папок сессий.
+function runImport(body = {}) {
+  const overwrite = !!body.overwrite;
   const cur = loadConfig();
-  // путь к .env из поля настроек — сохраняем ДО скана (scanSecretSources читает config.secretsEnvPath)
-  if (typeof body.secretsEnvPath === 'string') { cur.secretsEnvPath = body.secretsEnvPath.trim(); try { writeJsonAtomic(configFile(), cur); } catch {} }   // D1: атомарно
+  if (typeof body.secretsEnvPath === 'string') { cur.secretsEnvPath = body.secretsEnvPath.trim(); try { writeJsonAtomic(configFile(), cur); } catch {} }   // сохранить ДО скана (scanSecretSources читает config.secretsEnvPath)
   const found = scanSecretSources();
   const result = {}, sources = {};
-  // Хосты/пути → deck-config.json. Не перетираем заполненное (если не overwrite).
   const setCfg = (cfgKey, srcKey) => {
     const f = found[srcKey];
     if (!f) { result[cfgKey] = 'notfound'; return; }
@@ -105,6 +154,15 @@ export async function apiImportTokens(req, res) {
   setCfg('jiraHost', 'JIRA_HOST'); setCfg('jiraEmail', 'JIRA_EMAIL');
   setCfg('teamcityHost', 'TEAMCITY_HOST'); setCfg('gitlabHost', 'GITLAB_HOST');
   setCfg('woStatesDir', 'WO_STATES_DIR'); setCfg('claudeProjectsDir', 'CLAUDE_PROJECTS_DIR');
+  // пути, которых нет в env (WO_STATES_DIR / папка client-unity), — из папок известных сессий
+  const derived = derivePathsFromSessions();
+  const setDerived = (cfgKey, val, src) => {
+    if (!val) return;
+    if (cur[cfgKey] && String(cur[cfgKey]).trim() && !overwrite) { if (result[cfgKey] !== 'imported') result[cfgKey] = 'kept'; return; }
+    cur[cfgKey] = val; result[cfgKey] = 'imported'; sources[cfgKey] = src;
+  };
+  if (!(cur.woStatesDir && String(cur.woStatesDir).trim())) setDerived('woStatesDir', derived.woStatesDir, 'папки сессий');
+  setDerived('clientUnityParent', derived.clientUnityParent, 'папки сессий');
   try { writeJsonAtomic(configFile(), cur); } catch {}   // D1: атомарно
   // Токены → safeStorage. Не перетираем уже сохранённый (если не overwrite). Значения не логируем/не отдаём.
   const setTok = (svc, srcKey) => {
@@ -118,7 +176,26 @@ export async function apiImportTokens(req, res) {
   setTok('jira', 'JIRA_TOKEN'); setTok('teamcity', 'TEAMCITY_TOKEN'); setTok('gitlab', 'GITLAB_TOKEN');
   applyConfig();
   _summaryCache.clear(); _jiraCache.clear(); _tcCache.clear(); _buildActiveCache.clear(); _mrCache.clear();
+  return { result, sources };
+}
+export async function apiImportTokens(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 4096); } catch {}
+  const { result, sources } = runImport(body);
   sendJSON(res, { ok: true, electron: !!getElectron(), result, sources, config: configView() });
+}
+// Первый запуск (конфиг пуст) → тихо подтягиваем всё из системы/сессий БЕЗ кнопки. Ничего не перетираем (overwrite:false),
+// поэтому повторные запуски с уже настроенным конфигом сюда не заходят. Best-effort — сбой не роняет старт.
+export function autoImportOnFirstRun() {
+  try {
+    if (!getElectron()) return;   // только в упакованном/Electron GUI (там и обрезан env). В тестах и standalone `node server.mjs` process.env доступен сам — реестр не читаем (герметичность тестов).
+    const c = loadConfig();
+    const configured = [c.jiraHost, c.teamcityHost, c.gitlabHost, c.woStatesDir, c.clientUnityParent].some((v) => v && String(v).trim())
+      || ['jira', 'teamcity', 'gitlab'].some(hasStoredToken);
+    if (configured) return;   // уже настроено — не трогаем
+    const { result } = runImport({ overwrite: false });
+    const n = Object.values(result).filter((s) => s === 'imported').length;
+    if (n) console.log('  авто-настройка (первый запуск): подтянуто ' + n + ' значений из системных переменных/папок сессий');
+  } catch {}
 }
 
 // -------- D1: авторизация Claude ИЗ приложения (без ручного терминала). Через CLI `claude auth`. --------
