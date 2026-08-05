@@ -11,6 +11,13 @@ import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../co
 import { firstString, lastString, lastUsageWindow } from '../text.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
+// Динамический импорт server.mjs — ДО объявления тестов: node:test может начать выполнять уже объявленные тесты,
+// не дождавшись top-level await ниже (так CI на Node 20 падал с «Cannot access 'buildSessionBlocks' before initialization»).
+const {
+  isBaseBranch, pickWorkingBranch, pickBaseBranch,
+  classifyUserBlock, buildSessionBlocks, wfInfo, scopeInfo,
+  isReadOnlyTool, briefArg, woOf, buildUserMessage, makeInputChannel,
+} = await import(SRV);
 
 test('detectClientCuFromText: копия из cwd-полей (реальная рабочая папка), а не из вскользь-упоминаний', () => {
   const txt = '"cwd":"D:/wo/client-unity-2/Assets" ... "cwd":"D:/wo/client-unity-2" ... а в тексте client-unity-1 client-unity-1 client-unity-1';
@@ -130,11 +137,6 @@ test('fetchRetry: повторяет транзиентные до первог�
   } finally { globalThis.fetch = orig; }
 });
 
-const {
-  isBaseBranch, pickWorkingBranch, pickBaseBranch,
-  classifyUserBlock, buildSessionBlocks, wfInfo, scopeInfo,
-  isReadOnlyTool, briefArg, woOf, buildUserMessage, makeInputChannel,
-} = await import(SRV);
 
 test('buildUserMessage: текст+вложения → SDKUserMessage с массивом content-блоков', () => {
   const m = buildUserMessage('привет', []);
