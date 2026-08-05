@@ -44,7 +44,7 @@ S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.75';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.76';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -66,9 +66,10 @@ export function isBaseBranch(b){ return BASE_BRANCHES.has(String(b||'').trim().t
 document.addEventListener('click', (e) => {
   const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
   if (!a) return;
+  if (a.hasAttribute('download')) return;                          // программная выгрузка файла (Экспорт настроек) — пусть браузер скачает, не перехватываем
   const raw = a.getAttribute('href') || '';
   if (!raw || raw === '#' || raw[0] === '#') return;               // якорь/заглушка — свои обработчики
-  if (/^(mailto:|tel:)/i.test(raw)) return;                        // почта/тел — системе
+  if (/^(mailto:|tel:|blob:|data:)/i.test(raw)) return;            // почта/тел/blob-выгрузка/data-URI — системе/браузеру, не openLocalResource
   const abs = a.href || '';
   const external = /^https?:\/\//i.test(raw) && !abs.startsWith(location.origin + '/') && abs !== location.origin;
   e.preventDefault();

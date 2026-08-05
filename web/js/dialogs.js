@@ -389,10 +389,11 @@ export async function openUpdatesModal(){
 // token (задан → «✓ задан» + «удалить» ВМЕСТО инпута; не задан → инпут для вставки). state={value}|{set}.
 function nsFieldHtml(f, state, hasNative){
   state = state || {};
+  const tokHelp = f.type==='token' ? `<button class="ns-tokget" type="button" data-fid="${f.id}" data-svc="${esc(f.svc||'')}" title="Открыть страницу, где взять или сгенерировать токен">🔑 Взять токен</button>` : '';
   if (f.type==='token' && state.set){
     return `<div class="ns-row" data-fid="${f.id}">
       <label class="ns-lbl">${esc(f.label)}</label>
-      <div class="ns-tokset"><span class="tok-ok">✓ задан</span><button class="fld-del" type="button" data-fid="${f.id}">удалить</button></div>
+      <div class="ns-tokset"><span class="tok-ok">✓ задан</span><button class="fld-del" type="button" data-fid="${f.id}">удалить</button>${tokHelp}</div>
     </div>`;
   }
   const filled = f.type!=='token' && !!String(state.value||'').trim();
@@ -405,7 +406,7 @@ function nsFieldHtml(f, state, hasNative){
     <label class="ns-lbl" for="${f.id}">${esc(f.label)}</label>
     <div class="ns-fieldrow">
       <div class="ns-inpwrap${filled?' filled':''}"><input id="${f.id}" class="ns-inp" type="${inpType}" placeholder="${esc(f.ph||'')}" value="${val}"${ro} autocomplete="off"><span class="inp-ok">✓</span></div>
-      ${browse}${clr}
+      ${browse}${clr}${tokHelp}
     </div>
   </div>`;
 }
@@ -508,6 +509,17 @@ export async function openSettingsModal(){
       st[id].set = false; repaint(id);
       if (r && r.config) renderServicesGate(r.config);
       toast('Токен удалён: '+f.svc);
+    });
+    const tg = el.querySelector('.ns-tokget');   // «Взять токен» → страница выпуска токена сервиса (host из соседнего поля)
+    if (tg) tg.addEventListener('click', ()=>{
+      let url = '';
+      if (f.svc==='jira') url = 'https://id.atlassian.com/manage-profile/security/api-tokens';
+      else {
+        let h = String((f.svc==='teamcity' ? st.setTh.value : st.setGh.value) || '').trim();
+        if (h){ if (!/^https?:\/\//i.test(h)) h = 'https://' + h; h = h.replace(/\/+$/, ''); url = f.svc==='teamcity' ? h + '/profile.html?item=accessTokens' : h + '/-/user_settings/personal_access_tokens'; }
+      }
+      if (!url){ toast('Укажите host сервиса в поле выше — тогда открою страницу токенов'); return; }
+      openExternal(url);
     });
   }
   Object.keys(FIELDS).forEach(wireRow);

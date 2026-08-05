@@ -261,16 +261,24 @@ export async function runPrompt(payload){
     liveThink = body; liveThinkAccum = '';
   };
   // Дросселирование живого рендера: mdToHtml(весь накопленный текст)+innerHTML на КАЖДУЮ дельту = O(n^2) по главному
-  // потоку → на длинном ответе лагает ввод в композере. Копим дельты, рендерим максимум раз в кадр (rAF).
-  let liveRafPending = false;
+  // потоку → на длинном ответе лагал ввод в композере (глючил при работе). Копим дельты и перерисовываем НЕ чаще
+  // раза в LIVE_MIN_MS (~8/сек) — иначе на быстром стриме кадровый rAF всё равно даёт O(n^2) reflow и джанк ввода.
+  // Финальная корректность гарантируется синхронным clearLive/finalizeThink на границе блока.
+  const LIVE_MIN_MS = 120;
+  let liveRafPending = false, lastLiveFlush = 0;
   const flushLive = () => {
-    liveRafPending = false;
+    liveRafPending = false; lastLiveFlush = Date.now();
     const stick = isNearBottom();
     if (liveMd) liveMd.innerHTML = mdToHtml(liveAccum);
     if (liveThink) liveThink.innerHTML = mdToHtml(liveThinkAccum);
     if (stick) scrollBottom();
   };
-  const scheduleLive = () => { if (liveRafPending) return; liveRafPending = true; requestAnimationFrame(flushLive); };
+  const scheduleLive = () => {
+    if (liveRafPending) return;
+    liveRafPending = true;
+    const wait = Math.max(0, LIVE_MIN_MS - (Date.now() - lastLiveFlush));
+    if (wait) setTimeout(() => requestAnimationFrame(flushLive), wait); else requestAnimationFrame(flushLive);
+  };
   // Финализация блока — синхронный доrender финального текста (последние дельты могли не успеть в rAF), затем снять cx-live.
   const clearLive = () => { if (liveMd){ liveMd.innerHTML = mdToHtml(liveAccum); if (liveMd.parentElement) liveMd.parentElement.classList.remove('cx-live'); } liveMd = null; };
   const finalizeThink = () => { if (liveThink){ liveThink.innerHTML = mdToHtml(liveThinkAccum); if (liveThink.parentElement) liveThink.parentElement.classList.remove('cx-live'); } liveThink = null; };

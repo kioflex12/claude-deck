@@ -151,6 +151,8 @@
     .cx-msg.cx-queued{ opacity:.72; border-style:dashed; }
     .cx-queued-tag{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warn); margin-top:2px; }
     .cx-queue{ font-family:var(--mono); font-size:11.5px; color:var(--warn); margin-left:4px; align-self:center; }
+    .cx-earlier{ display:block; width:100%; margin:0 0 10px; padding:7px; font-size:12px; font-weight:600; color:var(--text-muted); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+    .cx-earlier:hover{ color:var(--text); border-color:var(--accent); }
     .cx-note{ font-size:12px; color:var(--text-muted); font-style:italic; padding-left:2px; }
     .cx-compact-done{ font-style:normal; font-weight:600; color:var(--good); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:7px 10px; margin:6px 0; }
 
@@ -330,6 +332,8 @@
     .ns-tokset .tok-ok{ color:var(--good); font-weight:700; font-size:13px; flex:1; }
     .fld-del{ flex:none; background:transparent; border:1px solid var(--border); color:var(--bad); font-size:11.5px; padding:3px 10px; border-radius:6px; cursor:pointer; }
     .fld-del:hover{ border-color:var(--bad); background:var(--bad-soft); }
+    .ns-tokget{ flex:none; height:34px; padding:0 11px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text-muted); cursor:pointer; font-size:12px; white-space:nowrap; }
+    .ns-tokget:hover{ border-color:var(--accent); color:var(--text); }
     /* заголовок группы полей + верхняя сводка статуса интеграций */
     .ns-grouphd{ font-size:12px; font-weight:600; color:var(--text); margin:18px 0 2px; padding-top:12px; border-top:1px solid var(--border); }
     .ns-summary{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }

@@ -5,6 +5,9 @@ import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
 import { loadPending, removePending } from './composer.js';
 
+const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
+const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
+
 export function wireConsole(){
   const cons = document.querySelector('.cx-console');
   if (!cons) return;
@@ -76,6 +79,24 @@ export function blockHTML(b){
 
 export function appendHTML(parent, html){ const t = document.createElement('div'); t.innerHTML = html.trim(); const el = t.firstElementChild; if (el) parent.appendChild(el); return el; }
 
+// Догрузка более ранних блоков (окно рендерит только хвост). Вставляем чанк ПЕРЕД текущим самым старым блоком,
+// удерживая позицию прокрутки (иначе лента прыгнула бы). Кнопка обновляет счётчик или исчезает, когда дошли до начала.
+function loadEarlier(){
+  const cons = document.querySelector('.cx-console'); if (!cons || !S.threadBlocks) return;
+  const from = Math.max(0, S.threadStart - EARLIER_CHUNK);
+  const slice = S.threadBlocks.slice(from, S.threadStart);
+  if (!slice.length) return;
+  S.threadStart = from;
+  const btn = cons.querySelector('.cx-earlier');
+  const tr = document.getElementById('transcript');
+  const prevH = tr ? tr.scrollHeight : 0, prevTop = tr ? tr.scrollTop : 0;
+  const frag = document.createDocumentFragment();
+  for (const b of slice){ const tmp = document.createElement('div'); tmp.innerHTML = blockHTML(b).trim(); if (tmp.firstElementChild) frag.appendChild(tmp.firstElementChild); }
+  cons.insertBefore(frag, btn ? btn.nextSibling : cons.firstChild);
+  if (btn){ if (S.threadStart > 0) btn.textContent = `▲ Показать более ранние (${S.threadStart})`; else btn.remove(); }
+  if (tr) tr.scrollTop = prevTop + (tr.scrollHeight - prevH);   // держим кадр на месте
+}
+
 export function scrollBottom(){ const tr = document.getElementById('transcript'); if (tr) tr.scrollTop = tr.scrollHeight; }
 
 export function isNearBottom(){ const tr = document.getElementById('transcript'); if (!tr) return true; return (tr.scrollHeight - tr.scrollTop - tr.clientHeight) < 90; }
@@ -89,7 +110,16 @@ export function attachThumbsHTML(atts){   // мини-превью у отпра
 
 export function renderThread(t){
   const blocks = t.blocks || [];
-  document.getElementById('thread').innerHTML = blocks.length ? `<div class="cx-console">${blocks.map(blockHTML).join('')}</div>` : `<div class="empty">Сессия без текстовых сообщений.</div>`;
+  S.threadBlocks = blocks;                     // вся лента в памяти — для догрузки более ранних (окно рендерит только хвост)
+  const total = blocks.length;
+  S.threadStart = Math.max(0, total - INITIAL_WINDOW);   // рендерим только последние INITIAL_WINDOW блоков: 10k×mdToHtml + огромный DOM = 5-10с; окно срезает это в разы
+  const thread = document.getElementById('thread');
+  if (!total){ thread.innerHTML = `<div class="empty">Сессия без текстовых сообщений.</div>`; }
+  else {
+    const more = S.threadStart > 0 ? `<button class="cx-earlier" type="button">▲ Показать более ранние (${S.threadStart})</button>` : '';
+    thread.innerHTML = `<div class="cx-console">${more}${blocks.slice(S.threadStart).map(blockHTML).join('')}</div>`;
+    const eb = thread.querySelector('.cx-earlier'); if (eb) eb.addEventListener('click', loadEarlier);
+  }
   wireConsole();
   S.tailCount = blocks.length;               // курсор live-tail = число уже показанных блоков
   try {   // восстановить «ожидающие» промты, пережившие перезаход (те, которых ещё нет в транскрипте) — чтобы не пропадали «вообще»
