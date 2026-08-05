@@ -489,6 +489,14 @@ export function stopTail(){ S.serverBusy = false; if (S.tailTimer){ clearInterva
 
 export function startTail(file){ stopTail(); S.tailStepStart = 0; S.tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
 
+// Все «ожидающие» промты (steer/очередь/восстановленные) — единым блоком в самом низу, над индикатором, в порядке
+// их появления в DOM. Перемещаем ВСЕ (не только первый), иначе при нескольких промтах они прыгали и меняли места.
+function pinQueued(){
+  const cons = document.querySelector('.cx-console'); if (!cons) return;
+  const anchor = document.getElementById('tailInd') || cons.querySelector('.cx-run-chat:not(.cx-queued)') || null;
+  for (const q of cons.querySelectorAll('.cx-queued')){ if (anchor) cons.insertBefore(q, anchor); else cons.appendChild(q); }
+}
+
 // Живой рефреш рейла: по мере работы над контекстом ветка/MR/сборки/Jira меняются — периодически перечитываем
 // состояние сессии и обновляем секции (MR/сборки/Jira/ветка) на месте, не трогая теги/скролл/композер.
 function stopRailRefresh(){ if (S.railTimer){ clearInterval(S.railTimer); S.railTimer = null; } }
@@ -579,13 +587,12 @@ async function tailTick(file){
   if (Array.isArray(d.blocks) && d.blocks.length){
     const cons = ensureConsole();
     const ind = document.getElementById('tailInd');
-    const qEl = cons.querySelector('.cx-queued');
-    const qMd = qEl && qEl.querySelector('.cx-md');
-    const qText = qMd ? (qMd.textContent || '').trim() : '';
-    for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
-    // «ожидает» снимаем ТОЛЬКО когда сам steer-промт долетел в транскрипт (совпал user-блок) — иначе он пропадал от ЧУЖОГО
-    // вывода раньше времени («фиг пойми где оказался»), а так остаётся видимым до реального подхвата.
-    if (qEl && qText && d.blocks.some(b => b.kind === 'user' && String(b.text || '').trim() === qText)) { qEl.remove(); try { removePending(file, qText); } catch {} }
+    const anchor = cons.querySelector('.cx-queued') || ind;   // новые блоки — НАД ожидающими промтами (они держатся в самом низу)
+    for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el) cons.insertBefore(el, anchor); }   // anchor=null → в конец
+    // «ожидает» снимаем у КАЖДОГО промта, чей текст долетел в транскрипт (несколько — независимо, не только первый: иначе
+    // второй «зависал»). Раньше времени (от ЧУЖОГО вывода) не снимаем — только по совпадению своего user-блока.
+    const userTexts = new Set(d.blocks.filter(b => b.kind === 'user').map(b => String(b.text || '').trim()));
+    for (const q of [...cons.querySelectorAll('.cx-queued')]){ const md = q.querySelector('.cx-md'); const tx = md ? (md.textContent || '').trim() : ''; if (tx && userTexts.has(tx)){ q.remove(); try { removePending(file, tx); } catch {} } }
     S.tailStepStart = Date.now();   // новый шаг/команда → таймер индикатора считает С ЭТОГО МОМЕНТА, а не общий тайминг хода
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
@@ -596,7 +603,7 @@ async function tailTick(file){
   const working = !!d.serverActive;
   S.serverBusy = working;   // новый промт при живом сервер-ходе, но оборванном SSE → sendMessage должен steer'ить, а не плодить 2-й ход (дубль «работает»)
   updateTailIndicator(working || pending, S.tailStepStart || d.turnStartTs, pending, d.activity);   // таймер — от текущего шага (S.tailStepStart), не от старта хода; вопрос/аппрув → «ожидает»
-  { const c2 = document.querySelector('.cx-console'); const q2 = c2 && c2.querySelector('.cx-queued'); const i2 = document.getElementById('tailInd'); if (c2 && q2 && i2) c2.insertBefore(q2, i2); }   // «ожидает» ВСЕГДА внизу — над индикатором, чтобы было на виду, а не терялось в прокрутке
+  pinQueued();   // ВСЕ ожидающие промты — единым блоком в самом низу (над индикатором), в стабильном порядке добавления, без прыжков
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
   if (!working && !pending){                // ход на сервере завершён и ничего не ждём → прекращаем опрос (не крутим по mtime и не показываем ложную занятость)
