@@ -356,13 +356,28 @@ function savePending(file, arr){
 // Повторная отправка восстановленного «ожидающего» промта (кнопка ▶ Отправить). Промт в очереди живёт только в памяти
 // (promptQueue) и стирается stopStream при перезаходе → до этого он «умирал». Здесь оживляем: вложения восстанавливаем
 // из preview (там полный data-URL), дальше — обычная развилка sendMessage (steer в живой ход / очередь / новый ход).
-export function resendPending(text, atts){
-  if (!S.currentFile || !requireAuth()) return;
-  const attachments = (atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
-  const payload = { text: String(text || ''), mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
-  if ((S.streaming || S.serverBusy) && S.currentFile){ steerPrompt(payload); return; }   // ход ещё жив → в него
-  if (S.streaming){ enqueuePrompt(payload); return; }
-  runPrompt(payload);
+// Авто-оживление восстановленных «ожидающих» промтов при перезаходе — БЕЗ ручного клика (очередь жила только в памяти и
+// гибла при перезаходе → промт «умирал»). Идёт ход → доставляем в него (steer, заберётся на ближайшей границе шага/хода —
+// раньше SDK не отдаёт). Свободна → в очередь + drainQueue сливает ПО ОДНОМУ (finish каждого runPrompt дёргает следующий,
+// параллельных ходов нет — транскрипт не задваивается; серверный single-writer — доп. страховка). Реально доставленный до
+// перезахода промт в pending уже снят (ack), поэтому авто-повтор не дублирует выполненное. preview хранит полный data-URL
+// → восстанавливаем отправляемое вложение (dataB64) из него.
+export function armPending(file){
+  if (!file || S.currentFile !== file) return;
+  const pend = loadPending(file); if (!pend.length) return;
+  const cons = document.querySelector('.cx-console');
+  const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && (md.textContent || '').trim() === tx) return b; } return null; };
+  for (const it of pend){
+    const text = String(it.text || '');
+    const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
+    if (S.serverBusy){
+      const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
+      fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, prompt: text, attachments: slim }) }).then(r => r.json()).then(d => { if (d && d.ok) removePending(file, text); }).catch(() => {});
+    } else {
+      promptQueue.push({ text, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
+    }
+  }
+  if (!S.serverBusy && promptQueue.length){ updateQueueIndicator(); drainQueue(); }
 }
 export function addPending(file, text, attachments){
   const tx = String(text || '');

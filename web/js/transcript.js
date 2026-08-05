@@ -3,7 +3,7 @@
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
-import { loadPending, removePending, resendPending } from './composer.js';
+import { loadPending, removePending, armPending } from './composer.js';
 
 const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
 const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
@@ -138,13 +138,13 @@ export function renderThread(t){
         if (el){
           if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
           el.classList.add('cx-queued');
-          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода <button class="cx-queued-send" type="button" title="Отправить сейчас">▶ Отправить</button><button class="cx-queued-x" type="button" title="Убрать">✕</button></div>');
-          const send = el.querySelector('.cx-queued-send'); if (send) send.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); resendPending(it.text || '', it.atts || []); });   // очередь стирается при перезаходе → даём дослать вручную (без авто-дублей)
-          const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // ручное снятие зависшего промта
+          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ пережил перезаход — досылаю автоматически <button class="cx-queued-x" type="button" title="Отменить">✕</button></div>');
+          const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // отменить авто-дослку (снять до arm)
         }
       }
     }
   } catch {}
+  setTimeout(() => { try { if (S.currentFile === t.file) armPending(t.file); } catch {} }, 900);   // авто-дослать пережившие перезаход промты (после 1-го tailTick — чтобы верно понять, идёт ход или свободно)
   if (S.pendingCompactNote){               // результат /compact переживает перерисовку сессии (иначе нота стиралась re-render'ом → «пустой» итог)
     const consN = document.querySelector('.cx-console');
     if (consN) appendHTML(consN, '<div class="cx-note cx-compact-done">' + esc(S.pendingCompactNote) + '</div>');
