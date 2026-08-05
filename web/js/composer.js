@@ -294,7 +294,7 @@ export function clearQueue(){
 }
 
 function enqueuePrompt(payload){                          // отправлено во время стрима → в очередь (FIFO)
-  addPending(S.currentFile, payload.text);   // переживёт перезаход
+  addPending(S.currentFile, payload.text, payload.attachments);   // переживёт перезаход (вместе со скринами)
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
@@ -320,7 +320,7 @@ export function drainQueue(){                                     // по зав
 // (/api/chat-input). Клод прочитает его на ближайшей границе шага/хода. Бабл рисуем сразу с меткой «ожидает»
 // (снимется на событии turn). Сервер не нашёл живой ход (только что завершился) → обычный новый ход тем же баблом.
 async function steerPrompt(payload){
-  addPending(S.currentFile, payload.text);   // переживёт перезаход
+  addPending(S.currentFile, payload.text, payload.attachments);   // переживёт перезаход (вместе со скринами)
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
@@ -344,8 +344,20 @@ async function steerPrompt(payload){
 // Снимаются, когда промт долетел в транскрипт (tail) или ушёл живым ходом (runPrompt).
 const PEND_PREFIX = 'deckPending:';
 export function loadPending(file){ try { return JSON.parse(localStorage.getItem(PEND_PREFIX + file) || '[]'); } catch { return []; } }
-function savePending(file, arr){ try { if (arr && arr.length) localStorage.setItem(PEND_PREFIX + file, JSON.stringify(arr.slice(-20))); else localStorage.removeItem(PEND_PREFIX + file); } catch {} }
-export function addPending(file, text){ if (!file || !text || !String(text).trim()) return; const a = loadPending(file); a.push({ text: String(text), ts: Date.now() }); savePending(file, a); }
+function savePending(file, arr){
+  try {
+    if (!arr || !arr.length){ localStorage.removeItem(PEND_PREFIX + file); return; }
+    const slim = arr.slice(-20);
+    try { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim)); }
+    catch { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim.map(x => ({ text:x.text, ts:x.ts })))); }   // квота переполнена тяжёлыми превью → сохраняем хотя бы текст
+  } catch {}
+}
+export function addPending(file, text, attachments){
+  const tx = String(text || '');
+  const atts = (attachments || []).map(a => ({ kind:a.kind, name:a.name, preview: a.kind==='image' ? (a.preview || '') : '' }));   // превью картинок переживают перезаход (чтобы скрин не пропадал)
+  if (!file || (!tx.trim() && !atts.length)) return;
+  const a = loadPending(file); a.push({ text: tx, atts, ts: Date.now() }); savePending(file, a);
+}
 export function removePending(file, text){ if (!file) return; const t = String(text || '').trim(); savePending(file, loadPending(file).filter((x) => String(x && x.text || '').trim() !== t)); }
 
 function sendMessage(){

@@ -97,9 +97,25 @@ export function renderThread(t){
     if (pend.length){
       const cons = document.querySelector('.cx-console');
       const seen = new Set(blocks.filter((b) => b.kind === 'user').map((b) => String(b.text || '').trim()));
-      if (cons) for (const it of pend){ const tx = String(it && it.text || '').trim(); if (!tx) continue; if (seen.has(tx)){ removePending(t.file, tx); continue; } const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text })); if (el){ el.classList.add('cx-queued'); el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода</div>'); } }
+      if (cons) for (const it of pend){
+        const tx = String(it && it.text || '').trim();
+        const atts = (it && it.atts) || [];
+        if (!tx && !atts.length) continue;                       // пустой промт без вложений — пропускаем
+        if (tx && seen.has(tx)){ removePending(t.file, tx); continue; }   // уже долетел в транскрипт — не дублируем
+        const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
+        if (el){
+          if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
+          el.classList.add('cx-queued');
+          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода</div>');
+        }
+      }
     }
   } catch {}
+  if (S.pendingCompactNote){               // результат /compact переживает перерисовку сессии (иначе нота стиралась re-render'ом → «пустой» итог)
+    const consN = document.querySelector('.cx-console');
+    if (consN) appendHTML(consN, '<div class="cx-note cx-compact-done">' + esc(S.pendingCompactNote) + '</div>');
+    S.pendingCompactNote = '';
+  }
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();

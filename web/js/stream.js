@@ -205,6 +205,9 @@ export async function runPrompt(payload){
   const model = payload.model || '', effort = payload.effort || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
+  const isCompactCmd = text.trim() === '/compact';
+  let compactBefore = null;   // контекст ДО сжатия — для читаемого итога «X% → Y%, освобождено ~N токенов»
+  if (isCompactCmd){ const c = SESSION_CACHE[S.currentFile] || (S.SESSIONS || []).find(x => x.file === S.currentFile); if (c) compactBefore = { ctxPct:c.ctxPct, winTokens:c.winTokens }; }
   const emptyEl = cons.querySelector('.empty'); if (emptyEl) emptyEl.remove();   // плейсхолдер «Пустая сессия…» новой сессии — убрать при первом же промте (иначе висел над диалогом)
   stopTail();   // живой стрим сам владеет индикатором: снимаем tail-индикатор, иначе рядом с новым «работает» висел бы старый tail (дубль «Claude работает»)
   cons.querySelectorAll('.cx-run-chat').forEach(el => el.remove());   // + снять ЛЮБОЙ оставшийся индикатор (осиротевший runEl прошлого стрима) — гарантия одного «работает»
@@ -240,18 +243,21 @@ export async function runPrompt(payload){
   let liveMd = null, liveAccum = '';           // текущий текстовый блок ассистента (дельты text)
   let liveThink = null, liveThinkAccum = '';   // текущий блок размышления (дельты thinking)
   let liveToolEl = null;                       // последний живой tool-блок — чтобы событие tool_input дописало в него IN/описание
-  const addBlock = (html) => { const el = appendHTML(cons, html); if (el) cons.insertBefore(el, runEl); return el; };  // новый блок — перед индикатором
+  // Якорь вставки живых блоков: перед «ожидающим» промтом, если он есть, иначе перед индикатором. Так подкинутый
+  // (steer/очередь) промт остаётся ВНИЗУ — новые команды идут над ним, а не он «перед выполнением текущей команды».
+  const liveAnchor = () => cons.querySelector('.cx-queued') || runEl;
+  const addBlock = (html) => { const el = appendHTML(cons, html); if (el) cons.insertBefore(el, liveAnchor()); return el; };  // новый блок — над «ожидающим» промтом/индикатором
   const startNewMd = () => {
     const wrap = document.createElement('div'); wrap.className = 'cx-msg cx-asst cx-live';   // референс-стиль: без шапки «Claude» — плоский текст с точкой-маркером
     const md = document.createElement('div'); md.className = 'cx-md';
-    wrap.appendChild(md); cons.insertBefore(wrap, runEl);
+    wrap.appendChild(md); cons.insertBefore(wrap, liveAnchor());
     liveMd = md; liveAccum = '';
   };
   const startNewThink = () => {
     const wrap = document.createElement('div'); wrap.className = 'cx-msg cx-think cx-live';
     wrap.innerHTML = '<button class="cx-think-h" type="button"><span class="cx-tw">▾</span>✻ Размышление</button>';
     const body = document.createElement('div'); body.className = 'cx-think-body cx-md';
-    wrap.appendChild(body); cons.insertBefore(wrap, runEl);
+    wrap.appendChild(body); cons.insertBefore(wrap, liveAnchor());
     liveThink = body; liveThinkAccum = '';
   };
   // Дросселирование живого рендера: mdToHtml(весь накопленный текст)+innerHTML на КАЖДУЮ дельту = O(n^2) по главному
@@ -328,8 +334,18 @@ export async function runPrompt(payload){
     stopTail();
     const wasCompact = payload && typeof payload.text === 'string' && payload.text.trim() === '/compact';
     if (wasCompact){
-      // /compact завершился — перечитываем сжатый транскрипт и обновляем карточку/окно (иначе висел старый вид до ручного перезахода)
-      appendHTML(cons, '<div class="cx-note">Контекст сжат ✓ — обновляю сессию…</div>');
+      // /compact завершился — читаемый ИТОГ (сколько сжато), затем перечитываем сжатый транскрипт. Итог кладём в
+      // S.pendingCompactNote: openSession перерисует ленту и сотрёт любую ноту здесь → renderThread допишет её заново.
+      const aPct = opts && typeof opts.ctxPct === 'number' ? Math.round(opts.ctxPct * 100) : null;
+      const bPct = compactBefore && typeof compactBefore.ctxPct === 'number' ? Math.round(compactBefore.ctxPct * 100) : null;
+      const aTok = opts && typeof opts.winTokens === 'number' ? opts.winTokens : null;
+      const bTok = compactBefore && typeof compactBefore.winTokens === 'number' ? compactBefore.winTokens : null;
+      let line = '✓ Контекст сжат';
+      if (bPct != null && aPct != null) line += ` — ${bPct}% → ${aPct}%`;
+      else if (aPct != null) line += ` — теперь ${aPct}% контекста`;
+      if (bTok != null && aTok != null){ line += ` · ${kTok(bTok)} → ${kTok(aTok)}`; if (bTok > aTok) line += ` (освобождено ~${kTok(bTok - aTok)})`; }
+      else if (aTok != null) line += ` · ${kTok(aTok)} / 1M`;
+      S.pendingCompactNote = line;
       delete SESSION_CACHE[f];
       setTimeout(() => { if (S.currentFile === f) openSession(f); }, 500);
     } else if (isNewRun && S.currentFile){

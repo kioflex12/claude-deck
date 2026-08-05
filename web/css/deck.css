@@ -137,7 +137,7 @@
     /* P4: вложения — черновик над инпутом, drop-зона, превью в ленте */
     .cx-attach{ display:flex; flex-wrap:wrap; gap:7px; margin-bottom:8px; }
     .at-chip{ display:inline-flex; align-items:center; gap:6px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:3px 6px 3px 4px; max-width:220px; }
-    .at-thumb{ width:26px; height:26px; border-radius:5px; object-fit:cover; flex:none; }
+    .at-thumb{ width:26px; height:26px; border-radius:5px; object-fit:cover; flex:none; cursor:zoom-in; }
     .at-ico{ font-size:14px; flex:none; }
     .at-name{ font-size:11.5px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .at-x{ flex:none; border:0; background:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0 2px; }
@@ -152,6 +152,7 @@
     .cx-queued-tag{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warn); margin-top:2px; }
     .cx-queue{ font-family:var(--mono); font-size:11.5px; color:var(--warn); margin-left:4px; align-self:center; }
     .cx-note{ font-size:12px; color:var(--text-muted); font-style:italic; padding-left:2px; }
+    .cx-compact-done{ font-style:normal; font-weight:600; color:var(--good); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:7px 10px; margin:6px 0; }
 
     /* live-MR: закрытый MR + чипы скоупа */
     .pill.mr-closed{ color:var(--bad); border-color:var(--bad-soft); background:var(--bad-soft); }
