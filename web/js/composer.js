@@ -353,6 +353,17 @@ function savePending(file, arr){
     catch { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim.map(x => ({ text:x.text, ts:x.ts })))); }   // квота переполнена тяжёлыми превью → сохраняем хотя бы текст
   } catch {}
 }
+// Повторная отправка восстановленного «ожидающего» промта (кнопка ▶ Отправить). Промт в очереди живёт только в памяти
+// (promptQueue) и стирается stopStream при перезаходе → до этого он «умирал». Здесь оживляем: вложения восстанавливаем
+// из preview (там полный data-URL), дальше — обычная развилка sendMessage (steer в живой ход / очередь / новый ход).
+export function resendPending(text, atts){
+  if (!S.currentFile || !requireAuth()) return;
+  const attachments = (atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
+  const payload = { text: String(text || ''), mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
+  if ((S.streaming || S.serverBusy) && S.currentFile){ steerPrompt(payload); return; }   // ход ещё жив → в него
+  if (S.streaming){ enqueuePrompt(payload); return; }
+  runPrompt(payload);
+}
 export function addPending(file, text, attachments){
   const tx = String(text || '');
   const atts = (attachments || []).map(a => ({ kind:a.kind, name:a.name, preview: a.kind==='image' ? (a.preview || '') : '' }));   // превью картинок переживают перезаход (чтобы скрин не пропадал)

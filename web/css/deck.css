@@ -124,6 +124,10 @@
     .q-opt:disabled{ opacity:.55; cursor:default; }
     .q-opt-label{ font-size:12.5px; font-weight:560; }
     .q-opt-desc{ font-size:11.5px; color:var(--text-muted); }
+    .q-custom{ margin-top:7px; }
+    .q-custom-inp{ width:100%; box-sizing:border-box; font-family:var(--ui); font-size:12.5px; padding:7px 10px; border-radius:8px; border:1px dashed var(--border); background:var(--surface-2); color:var(--text); }
+    .q-custom-inp:focus{ outline:none; border-style:solid; border-color:var(--accent); }
+    .q-custom-inp::placeholder{ color:var(--text-faint); }
     .q-foot{ display:flex; }
     .q-submit{ font-family:var(--ui); font-size:12.5px; font-weight:560; padding:6px 15px; border-radius:8px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent-ink); cursor:pointer; transition:.13s; }
     .q-submit:hover:not(:disabled){ background:var(--surface); }
@@ -150,6 +154,8 @@
     /* очередь промтов во время стрима */
     .cx-msg.cx-queued{ opacity:.72; border-style:dashed; }
     .cx-queued-tag{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warn); margin-top:2px; }
+    .cx-queued-send{ margin-left:8px; padding:0 7px; font-size:11px; line-height:1.5; color:var(--accent-ink); background:var(--accent-soft); border:1px solid var(--accent); border-radius:5px; cursor:pointer; vertical-align:middle; }
+    .cx-queued-send:hover{ background:var(--surface); }
     .cx-queued-x{ margin-left:6px; padding:0 5px; font-size:11px; line-height:1.4; color:var(--text-faint); background:transparent; border:1px solid var(--border); border-radius:5px; cursor:pointer; vertical-align:middle; }
     .cx-queued-x:hover{ color:var(--bad); border-color:var(--bad); }
     .cx-queue{ font-family:var(--mono); font-size:11.5px; color:var(--warn); margin-left:4px; align-self:center; }

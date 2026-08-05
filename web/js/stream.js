@@ -121,7 +121,8 @@ export function questionCardHTML(d){
       const desc = o && o.description ? `<span class="q-opt-desc">${esc(String(o.description))}</span>` : '';
       return `<button class="q-opt" type="button" data-label="${esc(label)}"><span class="q-opt-label">${esc(label)}</span>${desc}</button>`;
     }).join('');
-    return `<div class="q-block" data-multi="${q.multiSelect ? '1' : '0'}" data-question="${esc(String(q.question || ''))}">${head}${text}${plan}<div class="q-opts">${btns}</div></div>`;
+    const custom = `<div class="q-custom"><input class="q-custom-inp" type="text" placeholder="…или впишите свой ответ / уточнение (Enter — отправить)"></div>`;
+    return `<div class="q-block" data-multi="${q.multiSelect ? '1' : '0'}" data-question="${esc(String(q.question || ''))}">${head}${text}${plan}<div class="q-opts">${btns}</div>${custom}</div>`;
   }).join('');
   return `<div class="cx-msg cx-question" data-id="${esc(d.id)}" data-single="${single ? '1' : '0'}">
     <div class="q-title"><span class="q-icon">💬</span>Вопрос от Claude</div>
@@ -136,7 +137,9 @@ function collectAnswers(el){
   el.querySelectorAll('.q-block').forEach(blk => {
     const qtext = blk.dataset.question || '';
     const sel = [...blk.querySelectorAll('.q-opt.sel')].map(b => b.dataset.label);
-    if (sel.length) answers[qtext] = sel.join(', ');   // multiSelect → лейблы через запятую
+    const ci = blk.querySelector('.q-custom-inp'); const custom = ci ? ci.value.trim() : '';   // свой ответ/уточнение — важнее сухого выбора
+    const val = [sel.join(', '), custom].filter(Boolean).join(' — ');   // выбор + свой текст, если оба; иначе что есть
+    if (val) answers[qtext] = val;
   });
   return answers;
 }
@@ -194,8 +197,10 @@ export function wireQuestion(el, d){
     const multi = blk.dataset.multi === '1';
     if (multi) b.classList.toggle('sel');
     else { blk.querySelectorAll('.q-opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel'); }
-    if (single && !multi) submitAnswers(el, d);   // единственный single-select вопрос — сразу отправляем
+    const ci = blk.querySelector('.q-custom-inp');
+    if (single && !multi && !(ci && ci.value.trim())) submitAnswers(el, d);   // single-select — сразу отправляем, НО не если пишут свой ответ (дадим дописать)
   }));
+  el.querySelectorAll('.q-custom-inp').forEach(inp => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); submitAnswers(el, d); } }));   // Enter в поле своего ответа — отправить
   const sb = el.querySelector('.q-submit'); if (sb) sb.addEventListener('click', () => submitAnswers(el, d));
 }
 

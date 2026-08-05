@@ -3,7 +3,7 @@
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
-import { loadPending, removePending } from './composer.js';
+import { loadPending, removePending, resendPending } from './composer.js';
 
 const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
 const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
@@ -138,7 +138,8 @@ export function renderThread(t){
         if (el){
           if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
           el.classList.add('cx-queued');
-          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода <button class="cx-queued-x" type="button" title="Убрать">✕</button></div>');
+          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода <button class="cx-queued-send" type="button" title="Отправить сейчас">▶ Отправить</button><button class="cx-queued-x" type="button" title="Убрать">✕</button></div>');
+          const send = el.querySelector('.cx-queued-send'); if (send) send.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); resendPending(it.text || '', it.atts || []); });   // очередь стирается при перезаходе → даём дослать вручную (без авто-дублей)
           const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // ручное снятие зависшего промта
         }
       }
