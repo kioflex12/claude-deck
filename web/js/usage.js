@@ -5,6 +5,7 @@ import { S, SESSION_CACHE } from './store.js';
 import { esc, kTok } from './util.js';
 import { modalBack } from './dialogs.js';
 import { isWorking } from './board.js';
+import { updateComposerWarnings } from './composer.js';
 
 export async function loadUsage(){
   try { const r = await fetch('/api/usage', { cache:'no-store' }); S.USAGE = await r.json(); }
@@ -28,6 +29,7 @@ export function renderUsageBar(){
   fill.style.background = pct>=80?'var(--bad)':pct>=50?'var(--warn)':'var(--good)';
   lbl.textContent = pct + '%';
   if (ind) ind.title = src==='limits' ? 'Лимиты Claude (5ч/нед) — клик для деталей' : 'Контекст сессии (лимиты недоступны) — клик для деталей';
+  updateComposerWarnings();   // лимит близок → баннер над композером
 }
 function fmtReset(iso){
   if (!iso) return '—';

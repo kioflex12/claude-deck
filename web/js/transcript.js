@@ -3,6 +3,7 @@
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
+import { loadPending, removePending } from './composer.js';
 
 export function wireConsole(){
   const cons = document.querySelector('.cx-console');
@@ -91,6 +92,14 @@ export function renderThread(t){
   document.getElementById('thread').innerHTML = blocks.length ? `<div class="cx-console">${blocks.map(blockHTML).join('')}</div>` : `<div class="empty">Сессия без текстовых сообщений.</div>`;
   wireConsole();
   S.tailCount = blocks.length;               // курсор live-tail = число уже показанных блоков
+  try {   // восстановить «ожидающие» промты, пережившие перезаход (те, которых ещё нет в транскрипте) — чтобы не пропадали «вообще»
+    const pend = loadPending(t.file);
+    if (pend.length){
+      const cons = document.querySelector('.cx-console');
+      const seen = new Set(blocks.filter((b) => b.kind === 'user').map((b) => String(b.text || '').trim()));
+      if (cons) for (const it of pend){ const tx = String(it && it.text || '').trim(); if (!tx) continue; if (seen.has(tx)){ removePending(t.file, tx); continue; } const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text })); if (el){ el.classList.add('cx-queued'); el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода</div>'); } }
+    }
+  } catch {}
   scrollBottom();                          // открываем на последних сообщениях (актуальный контекст)
   requestAnimationFrame(scrollBottom);     // повтор после раскладки (шрифты/переносы могут сдвинуть высоту)
   stopTail();

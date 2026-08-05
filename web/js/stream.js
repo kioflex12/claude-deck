@@ -10,6 +10,7 @@ import { sideHTML, wireRailTabs } from './rail.js';
 import { launchUnity } from './unity.js';
 import { wireSideActions } from './dialogs.js';
 import { openSession, renderRail, refreshRailFields } from './session.js';
+import { updateComposerWarnings, removePending } from './composer.js';
 
 // Обрыв стрима кнопкой Стоп — надёжно, независимо от детекта дисконнекта: /api/stop + локальный finish/hard-reset.
 export function userStop(){
@@ -200,6 +201,7 @@ export function wireQuestion(el, d){
 
 export async function runPrompt(payload){
   const text = payload.text || '', mode = payload.mode || 'default', attachments = payload.attachments || [];
+  try { removePending(S.currentFile, text); } catch {}   // ушёл живым ходом → в транскрипте, из pending снять
   const model = payload.model || '', effort = payload.effort || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
@@ -515,6 +517,7 @@ export function updateTailIndicator(on, turnStartTs, waiting, activity){
 
 // Обновить индикатор контекста в рейле сессии СРАЗУ (после done или из tail) — без ожидания поллинга.
 export function updateRailContext(ctxPct, winTokens){
+  updateComposerWarnings(ctxPct);   // порог контекста → баннер «сжать» над композером
   const side = document.getElementById('sessionSide'); if (!side) return;
   if (typeof ctxPct === 'number'){
     const p = Math.round(ctxPct * 100), col = ctxColor(ctxPct);
@@ -558,7 +561,7 @@ async function tailTick(file){
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
     // «ожидает» снимаем ТОЛЬКО когда сам steer-промт долетел в транскрипт (совпал user-блок) — иначе он пропадал от ЧУЖОГО
     // вывода раньше времени («фиг пойми где оказался»), а так остаётся видимым до реального подхвата.
-    if (qEl && qText && d.blocks.some(b => b.kind === 'user' && String(b.text || '').trim() === qText)) qEl.remove();
+    if (qEl && qText && d.blocks.some(b => b.kind === 'user' && String(b.text || '').trim() === qText)) { qEl.remove(); try { removePending(file, qText); } catch {} }
     S.tailStepStart = Date.now();   // новый шаг/команда → таймер индикатора считает С ЭТОГО МОМЕНТА, а не общий тайминг хода
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }

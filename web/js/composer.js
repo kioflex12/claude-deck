@@ -1,6 +1,6 @@
 // Deck — поле ввода сессии: автокомплит «/»-скиллов, поповер режима/модели/effort, вложения (пикер/drag/вставка),
 // очередь промтов во время стрима и отправка. Состояние — в store (S); запуск стрима — через stream.runPrompt.
-import { S, SKILLS_CACHE, attachDraft, promptQueue, MODE_ORDER, MODE_LABEL, ATTACH_MAX_BYTES } from './store.js';
+import { S, SESSION_CACHE, SKILLS_CACHE, attachDraft, promptQueue, MODE_ORDER, MODE_LABEL, ATTACH_MAX_BYTES } from './store.js';
 import { esc } from './util.js';
 import { toast } from './ui.js';
 import { requireAuth } from './auth.js';
@@ -78,6 +78,7 @@ export function renderComposer(t){
   };
   c.innerHTML = `
     <div class="archived-note" id="viewNote" style="max-width:820px;margin:0 auto 10px;display:none"><span></span></div>
+    <div class="cx-warn" id="cxWarn" hidden></div>
     <div class="cx-slash" id="slashBox" hidden></div>
     <div class="composer-inner" id="composerInner">
       <div class="cx-attach" id="attachBox" hidden></div>
@@ -139,9 +140,30 @@ export function renderComposer(t){
   paintMode();   // режим/модель/effort задаёт вызывающий (openSession сбрасывает на default; new/fork — выбранное в окне)
   if (!S.MODELS.length) loadModelsCatalog();   // данные для поповера «Режимы» (модели/эффорты подтягиваются)
   attachDraft.length = 0; renderAttachDraft();
+  updateComposerWarnings();
   setTimeout(()=>ta.focus(), 60);
 }
 
+// Предупреждения над полем ввода (как в расширении): контекст близок к пределу → «сжать /compact»; лимит Claude близок.
+export function updateComposerWarnings(ctxOverride){
+  const el = document.getElementById('cxWarn'); if (!el) return;
+  const cur = S.currentFile ? (SESSION_CACHE[S.currentFile] || S.SESSIONS.find(x => x.file === S.currentFile)) : null;
+  const ctx = (typeof ctxOverride === 'number') ? ctxOverride : ((cur && typeof cur.ctxPct === 'number') ? cur.ctxPct : 0);
+  const u = S.USAGE || {};
+  const u5 = u.available && u.fiveHour && u.fiveHour.utilization != null ? u.fiveHour.utilization : 0;
+  const u7 = u.available && u.sevenDay && u.sevenDay.utilization != null ? u.sevenDay.utilization : 0;
+  if (ctx >= 0.8 && S.currentFile){
+    el.className = 'cx-warn warn';
+    el.innerHTML = '<span class="cxw-txt">⚠ Контекст ' + Math.round(ctx * 100) + '% — сожмите, чтобы не терять качество</span><button class="cxw-btn" id="cxWarnCompact" type="button">Сжать /compact</button>';
+    el.hidden = false;
+    const b = document.getElementById('cxWarnCompact');
+    if (b) b.addEventListener('click', () => { const pl = { text:'/compact', mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments:[] }; if (S.streaming || S.serverBusy) enqueuePrompt(pl); else runPrompt(pl); });
+  } else if (Math.max(u5, u7) >= 85){
+    el.className = 'cx-warn lim';
+    el.innerHTML = '<span class="cxw-txt">⚠ Лимит Claude близок: 5ч ' + Math.round(u5) + '% · 7д ' + Math.round(u7) + '%. Скоро запросы могут упереться в лимит.</span>';
+    el.hidden = false;
+  } else { el.hidden = true; el.innerHTML = ''; }
+}
 export function setComposerBusy(on){
   S.streaming = on;
   const ta = document.getElementById('composer-ta'), send = document.getElementById('sendBtn'),
@@ -272,6 +294,7 @@ export function clearQueue(){
 }
 
 function enqueuePrompt(payload){                          // отправлено во время стрима → в очередь (FIFO)
+  addPending(S.currentFile, payload.text);   // переживёт перезаход
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
@@ -297,6 +320,7 @@ export function drainQueue(){                                     // по зав
 // (/api/chat-input). Клод прочитает его на ближайшей границе шага/хода. Бабл рисуем сразу с меткой «ожидает»
 // (снимется на событии turn). Сервер не нашёл живой ход (только что завершился) → обычный новый ход тем же баблом.
 async function steerPrompt(payload){
+  addPending(S.currentFile, payload.text);   // переживёт перезаход
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
@@ -315,6 +339,14 @@ async function steerPrompt(payload){
   } catch {}
   if (!ok) runPrompt(payload);   // живой ход уже завершился → обычный новый (переиспользуя уже нарисованный бабл payload.el)
 }
+
+// Персист «ожидающих» промтов (steer/очередь) по сессии — чтобы они переживали перезаход, а не терялись «вообще».
+// Снимаются, когда промт долетел в транскрипт (tail) или ушёл живым ходом (runPrompt).
+const PEND_PREFIX = 'deckPending:';
+export function loadPending(file){ try { return JSON.parse(localStorage.getItem(PEND_PREFIX + file) || '[]'); } catch { return []; } }
+function savePending(file, arr){ try { if (arr && arr.length) localStorage.setItem(PEND_PREFIX + file, JSON.stringify(arr.slice(-20))); else localStorage.removeItem(PEND_PREFIX + file); } catch {} }
+export function addPending(file, text){ if (!file || !text || !String(text).trim()) return; const a = loadPending(file); a.push({ text: String(text), ts: Date.now() }); savePending(file, a); }
+export function removePending(file, text){ if (!file) return; const t = String(text || '').trim(); savePending(file, loadPending(file).filter((x) => String(x && x.text || '').trim() !== t)); }
 
 function sendMessage(){
   const ta = document.getElementById('composer-ta'); if (!ta) return;
