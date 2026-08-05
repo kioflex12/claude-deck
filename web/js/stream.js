@@ -205,6 +205,7 @@ export async function runPrompt(payload){
   const cons = ensureConsole();
   const emptyEl = cons.querySelector('.empty'); if (emptyEl) emptyEl.remove();   // плейсхолдер «Пустая сессия…» новой сессии — убрать при первом же промте (иначе висел над диалогом)
   stopTail();   // живой стрим сам владеет индикатором: снимаем tail-индикатор, иначе рядом с новым «работает» висел бы старый tail (дубль «Claude работает»)
+  cons.querySelectorAll('.cx-run-chat').forEach(el => el.remove());   // + снять ЛЮБОЙ оставшийся индикатор (осиротевший runEl прошлого стрима) — гарантия одного «работает»
   if (queuedEl && queuedEl.parentElement){                // это был поставленный в очередь блок — снимаем метку
     queuedEl.classList.remove('cx-queued');
     const tag = queuedEl.querySelector('.cx-queued-tag'); if (tag) tag.remove();
@@ -221,6 +222,7 @@ export async function runPrompt(payload){
 
   // индикатор процесса — В ЧАТЕ: спиннер + «Claude работает… Nс», закреплён внизу консоли,
   // существует только пока идёт ИМЕННО этот стрим (создаётся здесь, снимается в finish/stopStream).
+  cons.querySelectorAll('.cx-run-chat').forEach((el) => el.remove());   // единственный индикатор: снять прежние (tail/осиротевшие) перед созданием live-runEl
   const runEl = appendHTML(cons, '<div class="cx-run-chat"><span class="cx-spin"></span><span class="cx-run-txt">Claude работает… 0с</span></div>');
   scrollBottom();
   let t0 = Date.now();
@@ -250,8 +252,20 @@ export async function runPrompt(payload){
     wrap.appendChild(body); cons.insertBefore(wrap, runEl);
     liveThink = body; liveThinkAccum = '';
   };
-  const clearLive = () => { if (liveMd && liveMd.parentElement) liveMd.parentElement.classList.remove('cx-live'); liveMd = null; };
-  const finalizeThink = () => { if (liveThink && liveThink.parentElement) liveThink.parentElement.classList.remove('cx-live'); liveThink = null; };
+  // Дросселирование живого рендера: mdToHtml(весь накопленный текст)+innerHTML на КАЖДУЮ дельту = O(n^2) по главному
+  // потоку → на длинном ответе лагает ввод в композере. Копим дельты, рендерим максимум раз в кадр (rAF).
+  let liveRafPending = false;
+  const flushLive = () => {
+    liveRafPending = false;
+    const stick = isNearBottom();
+    if (liveMd) liveMd.innerHTML = mdToHtml(liveAccum);
+    if (liveThink) liveThink.innerHTML = mdToHtml(liveThinkAccum);
+    if (stick) scrollBottom();
+  };
+  const scheduleLive = () => { if (liveRafPending) return; liveRafPending = true; requestAnimationFrame(flushLive); };
+  // Финализация блока — синхронный доrender финального текста (последние дельты могли не успеть в rAF), затем снять cx-live.
+  const clearLive = () => { if (liveMd){ liveMd.innerHTML = mdToHtml(liveAccum); if (liveMd.parentElement) liveMd.parentElement.classList.remove('cx-live'); } liveMd = null; };
+  const finalizeThink = () => { if (liveThink){ liveThink.innerHTML = mdToHtml(liveThinkAccum); if (liveThink.parentElement) liveThink.parentElement.classList.remove('cx-live'); } liveThink = null; };
 
   const isFork = !!payload.forkFile;
   const isNewRun = !!payload.newSessionCwd || isFork;   // и новая, и форк дают НОВЫЙ session_id (событие session → переключение)
@@ -350,8 +364,7 @@ export async function runPrompt(payload){
       finalizeThink();                   // размышление закончилось — начинается ответ
       if (!liveMd) startNewMd();
       liveAccum += d.delta;
-      liveMd.innerHTML = mdToHtml(liveAccum);
-      if (stick) scrollBottom();
+      scheduleLive();
     } else if (d.type === 'thinking'){
       const piece = d.delta || '';
       if (liveThink || piece.trim()){        // блок создаём только с первым НЕПУСТЫМ thinking_delta
@@ -360,8 +373,7 @@ export async function runPrompt(payload){
         clearLive();
         if (!liveThink) startNewThink();
         liveThinkAccum += piece;
-        liveThink.innerHTML = mdToHtml(liveThinkAccum);
-        if (stick) scrollBottom();
+        scheduleLive();
       }
     } else if (d.type === 'tool'){
       waiting = false; t0 = Date.now(); activity = '⚙ ' + d.name; paintRun();   // новый инструмент = новый шаг → таймер сбрасывается + показываем что за инструмент
@@ -474,6 +486,11 @@ export function updateTailIndicator(on, turnStartTs, waiting, activity){
   const cons = document.querySelector('.cx-console'); if (!cons) return;
   let ind = document.getElementById('tailInd');
   if (on){
+    // ИНВАРИАНТ «один индикатор»: tail-строку НЕ рисуем, если есть живой runEl (Deck сейчас стримит) — иначе два
+    // «Claude работает» с разными таймерами. Живой стрим владеет индикатором; оставшийся tail убираем.
+    const liveRun = cons.querySelector('.cx-run-chat:not(#tailInd)');
+    if (liveRun){ if (ind){ ind.remove(); } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } return; }
+    cons.querySelectorAll('.cx-run-chat').forEach((el) => { if (el.id !== 'tailInd') el.remove(); });   // единственный индикатор: снять осиротевший live-runEl (иначе после перезахода два «Claude работает»)
     if (!ind) ind = appendHTML(cons, '<div class="cx-run-chat" id="tailInd"><span class="cx-spin"></span><span class="cx-run-txt"></span></div>');
     else cons.appendChild(ind);            // держим индикатор внизу
     const sp = ind.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
