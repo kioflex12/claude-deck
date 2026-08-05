@@ -433,9 +433,17 @@ export async function runPrompt(payload){
       const bt = document.querySelector('#sessionBar .sb-title'); if (bt) bt.textContent = nm || 'Новая сессия';
       if (nm){ fetch('/api/session-name', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file: d.file, name: nm }) }).catch(()=>{}); }  // закрепляем имя как заголовок карточки
       S.pendingNewSession = null;   // сессия создана — pending снят
-      // новая/форкнутая сессия обрела файл → сразу показать РЕАЛЬНЫЙ рейл (clientCu из cwd, описание=промт) вместо заглушки и обновлять по ходу
-      fetch('/api/session?file=' + encodeURIComponent(d.file), { cache:'no-store' }).then(r => r.json())
-        .then(t => { if (t && !t.error && S.currentFile === d.file){ SESSION_CACHE[d.file] = t; renderRail(t); startRailRefresh(d.file); } }).catch(()=>{});
+      // новая/форкнутая сессия обрела файл → сразу показать РЕАЛЬНЫЙ рейл (clientCu из cwd, описание=промт) вместо заглушки.
+      // На init .jsonl может ещё НЕ быть на диске → /api/session отдаёт {error} и renderRail не вызывался: рейл оставался
+      // заглушкой «создаётся…» до ручного перезахода. Ретраим чтение, пока файл не появится (обычно доли секунды).
+      (async () => {
+        for (let i = 0; i < 8; i++){
+          let t = null; try { t = await (await fetch('/api/session?file=' + encodeURIComponent(d.file), { cache:'no-store' })).json(); } catch {}
+          if (S.currentFile !== d.file) return;
+          if (t && !t.error){ SESSION_CACHE[d.file] = t; renderRail(t); startRailRefresh(d.file); return; }
+          await new Promise(r => setTimeout(r, 400));
+        }
+      })();
     } else if (d.type === 'start'){
       if (d.streamId) S.currentStreamId = d.streamId;   // для гарантированного /api/stop
     } else if (d.type === 'turn'){
