@@ -7,6 +7,7 @@ import { loadPending, removePending } from './composer.js';
 
 const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
 const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
+const PENDING_TTL_MS = 10 * 60 * 1000;   // «ожидающий» промт старше 10 мин считаем протухшим и не восстанавливаем
 
 export function wireConsole(){
   const cons = document.querySelector('.cx-console');
@@ -130,13 +131,15 @@ export function renderThread(t){
       if (cons) for (const it of pend){
         const tx = String(it && it.text || '').trim();
         const atts = (it && it.atts) || [];
-        if (!tx && !atts.length) continue;                       // пустой промт без вложений — пропускаем
+        if (!tx && !atts.length){ removePending(t.file, it && it.text || ''); continue; }   // пустой промт без вложений — чистим и пропускаем
+        if (it && it.ts && (Date.now() - it.ts) > PENDING_TTL_MS){ removePending(t.file, it.text || ''); continue; }   // протух (не доставлен за PENDING_TTL_MS) — не воскрешаем «зомби»-бабл
         if (tx && seen.has(tx)){ removePending(t.file, tx); continue; }   // уже долетел в транскрипт — не дублируем
         const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
         if (el){
           if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
           el.classList.add('cx-queued');
-          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода</div>');
+          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидал отправки — восстановлен после перезахода <button class="cx-queued-x" type="button" title="Убрать">✕</button></div>');
+          const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // ручное снятие зависшего промта
         }
       }
     }

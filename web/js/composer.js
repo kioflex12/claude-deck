@@ -337,7 +337,8 @@ async function steerPrompt(payload){
     const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, prompt: payload.text, attachments: slim }) });
     const d = await r.json(); ok = !!(d && d.ok);
   } catch {}
-  if (!ok) runPrompt(payload);   // живой ход уже завершился → обычный новый (переиспользуя уже нарисованный бабл payload.el)
+  if (ok){ try { removePending(S.currentFile, payload.text); } catch {} }   // сервер принял промт в живой ход → доставлен, из pending снимаем СРАЗУ. Иначе бабл «восстановлен» воскресал бы при каждом перезаходе навсегда: steered-сообщение в транскрипте может не совпасть по тексту (обёртка/формат), и match-снятие не срабатывало
+  else runPrompt(payload);   // живой ход уже завершился → обычный новый (переиспользуя уже нарисованный бабл payload.el)
 }
 
 // Персист «ожидающих» промтов (steer/очередь) по сессии — чтобы они переживали перезаход, а не терялись «вообще».
