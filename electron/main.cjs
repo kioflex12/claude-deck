@@ -428,7 +428,10 @@ ipcMain.handle('deck:pickPath', async (_e, opts) => {
 });
 // Установить загруженное обновление и перезапуститься — кнопка «Перезапустить и установить» из окна обновлений.
 ipcMain.handle('deck:quitAndInstall', () => {
-  try { app.isQuitting = true; setImmediate(() => autoUpdater.quitAndInstall()); return { ok: true }; }
+  // (true,true): isSilent — ставим апдейт БЕЗ мастера (assisted-инсталлятор oneClick:false иначе показал бы окно выбора
+  // папки на КАЖДОМ обновлении); isForceRunAfter — перезапустить приложение после. Мастер с выбором папки остаётся только
+  // при ПЕРВОЙ ручной установке (пользователь сам запускает .exe без /S).
+  try { app.isQuitting = true; setImmediate(() => autoUpdater.quitAndInstall(true, true)); return { ok: true }; }
   catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });
 

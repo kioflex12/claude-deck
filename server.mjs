@@ -22,7 +22,7 @@ import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
 import { apiChatPrepare, apiChat, apiChatInput, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
 import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest, apiJiraComment, apiCreateMr, apiTriggerBuild, apiEnvStatus } from './services.mjs';
-import { apiConfig, apiImportTokens, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout, autoImportOnFirstRun } from './auth.mjs';
+import { apiConfig, apiImportTokens, apiConfigExport, apiConfigImport, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout, autoImportOnFirstRun } from './auth.mjs';
 
 // -------- статика web/ (D4c: клиент разбит на ES-модули + deck.css). Path-safe: только из web/. --------
 const WEB_DIR = path.join(HERE, 'web');
@@ -114,6 +114,8 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/health') { apiHealth(res); return; }
   if (u.pathname === '/api/env-status') { apiEnvStatus(res).catch((e) => sendJSON(res, { configured: false, envs: [], error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/config/test') { apiConfigTest(req, res).catch((e) => sendJSON(res, { ok: false, message: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/config/export') { apiConfigExport(req, res).catch((e) => sendJSON(res, { error: String(e && e.message || e) }, 500)); return; }
+  if (u.pathname === '/api/config/import') { apiConfigImport(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/config/import-tokens') { apiImportTokens(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/config') { apiConfig(req, res); return; }
   if (u.pathname === '/api/auth') { apiAuth(res); return; }

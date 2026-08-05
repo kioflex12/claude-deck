@@ -7,7 +7,7 @@ import os from 'node:os';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import {
   HERE, getClaudeBin, sendJSON, readJsonBody, writeJsonAtomic,
-  loadConfig, saveConfig, configFile, loadProjects, tokenFile, writeTokenSecure, applyConfig, getElectron, parseEnvFile,
+  loadConfig, saveConfig, configFile, loadProjects, tokenFile, writeTokenSecure, readTokenSecure, applyConfig, getElectron, parseEnvFile,
   WO_STATES_DIR, PROJECTS_DIR, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, JIRA_ENABLED, TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN,
 } from './core.mjs';
 import { _summaryCache } from './sessions.mjs';
@@ -182,6 +182,31 @@ export async function apiImportTokens(req, res) {
   let body = {}; try { body = await readJsonBody(req, 4096); } catch {}
   const { result, sources } = runImport(body);
   sendJSON(res, { ok: true, electron: !!getElectron(), result, sources, config: configView() });
+}
+// Экспорт настроек в переносимый bundle (для быстрой раздачи на другой ПК): хосты, пути, envHosts + токены (по умолчанию).
+// Файл содержит секреты — раздаётся вручную и осознанно. Гейт localhost+токен уже защищает эндпоинт.
+export async function apiConfigExport(req, res) {
+  let body = {}; try { body = await readJsonBody(req, 1024); } catch {}
+  const withTokens = body.includeTokens !== false;
+  const c = loadConfig();
+  const b = { _deckSettings: 1, jiraHost: c.jiraHost || '', jiraEmail: c.jiraEmail || '', teamcityHost: c.teamcityHost || '', gitlabHost: c.gitlabHost || '', woStatesDir: c.woStatesDir || '', clientUnityParent: c.clientUnityParent || '', unityEditorsDir: c.unityEditorsDir || '', unityHubPath: c.unityHubPath || '', claudeProjectsDir: c.claudeProjectsDir || '', envHosts: c.envHosts || '' };
+  if (withTokens) b.tokens = { jira: readTokenSecure('jira') || '', teamcity: readTokenSecure('teamcity') || '', gitlab: readTokenSecure('gitlab') || '' };
+  sendJSON(res, b);
+}
+// Импорт bundle настроек: применяет хосты/пути + пишет токены (safeStorage). Один клик — вся конфигурация коллеги.
+export async function apiConfigImport(req, res) {
+  let b = {}; try { b = await readJsonBody(req, 64 * 1024); } catch { sendJSON(res, { ok: false, error: 'bad body' }, 400); return; }
+  if (!b || typeof b !== 'object' || !b._deckSettings) { sendJSON(res, { ok: false, error: 'не похоже на файл настроек Deck' }); return; }
+  const cur = loadConfig();
+  for (const k of ['jiraHost', 'jiraEmail', 'teamcityHost', 'gitlabHost', 'woStatesDir', 'clientUnityParent', 'unityEditorsDir', 'unityHubPath', 'claudeProjectsDir', 'envHosts'])
+    if (typeof b[k] === 'string' && b[k].trim()) cur[k] = b[k].trim();
+  try { writeJsonAtomic(configFile(), cur); } catch {}
+  const tk = (b.tokens && typeof b.tokens === 'object') ? b.tokens : {};
+  const tokResult = {};
+  for (const svc of ['jira', 'teamcity', 'gitlab']) if (typeof tk[svc] === 'string' && tk[svc].trim()) { const r = writeTokenSecure(svc, tk[svc].trim()); tokResult[svc] = (r && r.ok) ? 'ok' : (r && r.standalone) ? 'standalone' : 'error'; }
+  applyConfig();
+  _summaryCache.clear(); _jiraCache.clear(); _tcCache.clear(); _buildActiveCache.clear(); _mrCache.clear();
+  sendJSON(res, { ok: true, electron: !!getElectron(), tokResult, config: configView() });
 }
 // Первый запуск (конфиг пуст) → тихо подтягиваем всё из системы/сессий БЕЗ кнопки. Ничего не перетираем (overwrite:false),
 // поэтому повторные запуски с уже настроенным конфигом сюда не заходят. Best-effort — сбой не роняет старт.

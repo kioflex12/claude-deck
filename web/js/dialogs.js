@@ -443,7 +443,13 @@ export async function openSettingsModal(){
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Настройки</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
       <div class="ns-summary" id="setSummary"></div>
-      <div class="ns-actions" style="justify-content:flex-start;margin:2px 0 4px"><button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env / ~/.claude.json / MCP-конфигов">⤵ Подтянуть токены</button></div>
+      <div class="ns-actions" style="justify-content:flex-start;margin:2px 0 4px;flex-wrap:wrap;gap:6px">
+        <button class="btn-ghost" id="setImport" type="button" title="Автоимпорт из .env / ~/.claude.json / MCP / системных переменных">⤵ Подтянуть токены</button>
+        <button class="btn-ghost" id="setExportBtn" type="button" title="Сохранить настройки (хосты, пути, токены) в файл для переноса на другой ПК">⬆ Экспорт в файл</button>
+        <button class="btn-ghost" id="setImportFileBtn" type="button" title="Загрузить настройки из файла, полученного с настроенного ПК">⬇ Импорт из файла</button>
+        <input type="file" id="setImportFile" accept=".json,application/json" hidden>
+      </div>
+      <div class="um-note" style="margin:0 0 6px;color:var(--text-faint)">Перенос на другой ПК: на настроенном — «Экспорт в файл», на новом — «Импорт из файла» (заполнит всё разом). Файл содержит токены — передавай безопасно.</div>
       <div class="um-note" id="setImportRes" style="margin:0 0 8px"></div>
       ${row('setEnv')}${row('setWo')}${row('setProj')}
       <div class="ns-grouphd">Jira — колонка «Статусы» и живые статусы задач</div>
@@ -506,6 +512,20 @@ export async function openSettingsModal(){
   }
   Object.keys(FIELDS).forEach(wireRow);
   updSummary();
+  // Синхронизация полей формы со свежим конфигом (после «Подтянуть» / импорта файла): токены → «✓ задан», хосты/пути → значения.
+  const syncFromConfig = (c)=>{
+    if (!c) return;
+    const applyTok = (id, on)=>{ if (on && !st[id].set){ st[id].set = true; repaint(id); } };
+    applyTok('setJt', c.jira && c.jira.tokenSet); applyTok('setTt', c.teamcity && c.teamcity.tokenSet); applyTok('setGt', c.gitlab && c.gitlab.tokenSet);
+    const applyVal = (id, v)=>{ if (v==null) return; st[id].value = v; repaint(id); };
+    applyVal('setWo', c.woStatesDir); applyVal('setProj', c.claudeProjectsDir);
+    if (c.jira){ applyVal('setJh', c.jira.host); applyVal('setJe', c.jira.email); }
+    if (c.teamcity) applyVal('setTh', c.teamcity.host);
+    if (c.gitlab) applyVal('setGh', c.gitlab.host);
+    if (c.unity){ applyVal('setCup', c.unity.clientUnityParent); applyVal('setUed', c.unity.editorsDir); applyVal('setUhub', c.unity.hubPath); }
+    const eh = back.querySelector('#setEnvHosts'); if (eh && typeof c.envHosts==='string') eh.value = c.envHosts;
+    updSummary(); renderServicesGate(c);
+  };
   // «Проверить подключение»: бьём тест-эндпоинт значениями ИЗ ПОЛЕЙ (можно проверить до сохранения; пустой токен в
   // поле → сервер возьмёт сохранённый). Отличает неверный хост (404/нет связи) от учётки (401/403) от рабочего (200).
   async function testSvc(svc){
@@ -536,18 +556,28 @@ export async function openSettingsModal(){
     box.innerHTML = (any ? 'Импортировано → ' : 'Ничего нового не импортировано → ') + esc(lines.join(' · '));
     if (!any && groups.every(([,k])=> res[k]==='notfound')) box.textContent = 'Источников с токенами не найдено — укажи путь к .env выше и жми снова, либо введи вручную.';
     toast(any ? 'Токены подтянуты' : 'Импорт: нового не найдено');
-    // синхронизируем поля со свежим конфигом: токены → «✓ задан», хосты/пути → значения (перерисовкой строки)
-    const c = r.config || {};
-    const applyTok = (id, on)=>{ if (on && !st[id].set){ st[id].set = true; repaint(id); } };
-    applyTok('setJt', c.jira && c.jira.tokenSet); applyTok('setTt', c.teamcity && c.teamcity.tokenSet); applyTok('setGt', c.gitlab && c.gitlab.tokenSet);
-    const applyVal = (id, v)=>{ if (v==null) return; st[id].value = v; repaint(id); };
-    applyVal('setWo', c.woStatesDir);
-    if (c.jira){ applyVal('setJh', c.jira.host); applyVal('setJe', c.jira.email); }
-    if (c.teamcity) applyVal('setTh', c.teamcity.host);
-    if (c.gitlab) applyVal('setGh', c.gitlab.host);
-    updSummary();
-    renderServicesGate(c);   // красная плашка сервисов гаснет по мере авторизации
+    syncFromConfig(r.config || {});
     if (typeof pollSessions === 'function') await pollSessions();   // подтянулся WO_STATES_DIR/Jira → доска получит стадии
+    if (typeof loadUsage === 'function') loadUsage();
+  });
+  // Экспорт настроек в файл (для переноса на другой ПК).
+  back.querySelector('#setExportBtn').addEventListener('click', async ()=>{
+    let b; try { b = await (await fetch('/api/config/export', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ includeTokens:true }) })).json(); } catch { toast('Ошибка экспорта'); return; }
+    try { const blob = new Blob([JSON.stringify(b, null, 2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'deck-settings.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 2000); toast('Настройки → deck-settings.json (содержит токены — передавай безопасно)'); }
+    catch { toast('Не удалось сохранить файл'); }
+  });
+  // Импорт настроек из файла.
+  const impInput = back.querySelector('#setImportFile');
+  const impBtn = back.querySelector('#setImportFileBtn'); if (impBtn && impInput) impBtn.addEventListener('click', ()=> impInput.click());
+  if (impInput) impInput.addEventListener('change', async ()=>{
+    const f = impInput.files && impInput.files[0]; if (!f) return;
+    let b; try { b = JSON.parse(await f.text()); } catch { toast('Файл не читается (не JSON)'); impInput.value=''; return; }
+    let r; try { r = await (await fetch('/api/config/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b) })).json(); } catch { toast('Ошибка импорта'); impInput.value=''; return; }
+    impInput.value='';
+    if (!r || !r.ok){ toast('Импорт не удался: ' + ((r&&r.error)||'')); return; }
+    syncFromConfig(r.config || {});
+    toast('Настройки импортированы');
+    if (typeof pollSessions === 'function') await pollSessions();
     if (typeof loadUsage === 'function') loadUsage();
   });
   back.querySelector('#setSave').addEventListener('click', async ()=>{

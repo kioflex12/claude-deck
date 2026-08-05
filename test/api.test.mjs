@@ -264,3 +264,11 @@ test('/api/stop?file=... рвёт активный ход по ключу сес
   assert.equal(aborted, true, 'AbortController найден по ключу сессии и прерван');
   assert.equal(mod.activeStreams.has('sx_stoptest'), false, 'запись активного хода снята');
 });
+
+test('/api/config/export → 200, bundle с _deckSettings и полями хостов (includeTokens:false → без токенов)', async () => {
+  const { status, body } = await postJson('/api/config/export', { includeTokens: false });
+  assert.equal(status, 200);
+  assert.equal(body._deckSettings, 1, 'маркер bundle');
+  for (const k of ['jiraHost', 'teamcityHost', 'gitlabHost', 'woStatesDir']) assert.ok(k in body, 'поле ' + k);
+  assert.equal(body.tokens, undefined, 'includeTokens:false → токенов в bundle нет');
+});
