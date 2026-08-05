@@ -461,7 +461,7 @@ export async function runPrompt(payload){
 
 export function stopTail(){ S.serverBusy = false; if (S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer = null; } if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; } const ind = document.getElementById('tailInd'); if (ind) ind.remove(); }
 
-export function startTail(file){ stopTail(); S.tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
+export function startTail(file){ stopTail(); S.tailStepStart = 0; S.tailTimer = setInterval(() => tailTick(file), 4000); tailTick(file); }
 
 // Живой рефреш рейла: по мере работы над контекстом ветка/MR/сборки/Jira меняются — периодически перечитываем
 // состояние сессии и обновляем секции (MR/сборки/Jira/ветка) на месте, не трогая теги/скролл/композер.
@@ -552,8 +552,14 @@ async function tailTick(file){
   if (Array.isArray(d.blocks) && d.blocks.length){
     const cons = ensureConsole();
     const ind = document.getElementById('tailInd');
+    const qEl = cons.querySelector('.cx-queued');
+    const qMd = qEl && qEl.querySelector('.cx-md');
+    const qText = qMd ? (qMd.textContent || '').trim() : '';
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el && ind) cons.insertBefore(el, ind); }
-    cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });   // steer-промт подхвачен ходом (пошли новые блоки) → снимаем «⏳ ожидает» (SSE-события turn тут нет)
+    // «ожидает» снимаем ТОЛЬКО когда сам steer-промт долетел в транскрипт (совпал user-блок) — иначе он пропадал от ЧУЖОГО
+    // вывода раньше времени («фиг пойми где оказался»), а так остаётся видимым до реального подхвата.
+    if (qEl && qText && d.blocks.some(b => b.kind === 'user' && String(b.text || '').trim() === qText)) qEl.remove();
+    S.tailStepStart = Date.now();   // новый шаг/команда → таймер индикатора считает С ЭТОГО МОМЕНТА, а не общий тайминг хода
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }
   updateRailContext(d.ctxPct, d.winTokens);          // контекст рейла — сразу из tail, не ждём поллинг
@@ -562,7 +568,8 @@ async function tailTick(file){
   // на долгих инструментах (индикатор мигал «то есть, то нет») и остаётся свежим ~20с после Стопа (индикатор всплывал призраком).
   const working = !!d.serverActive;
   S.serverBusy = working;   // новый промт при живом сервер-ходе, но оборванном SSE → sendMessage должен steer'ить, а не плодить 2-й ход (дубль «работает»)
-  updateTailIndicator(working || pending, d.turnStartTs, pending, d.activity);   // висит вопрос/аппрув → «ожидает»; ход жив → «работает <активность>»; иначе скрыт
+  updateTailIndicator(working || pending, S.tailStepStart || d.turnStartTs, pending, d.activity);   // таймер — от текущего шага (S.tailStepStart), не от старта хода; вопрос/аппрув → «ожидает»
+  { const c2 = document.querySelector('.cx-console'); const q2 = c2 && c2.querySelector('.cx-queued'); const i2 = document.getElementById('tailInd'); if (c2 && q2 && i2) c2.insertBefore(q2, i2); }   // «ожидает» ВСЕГДА внизу — над индикатором, чтобы было на виду, а не терялось в прокрутке
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)
   if (stick) scrollBottom();               // доскролл ПОСЛЕ появления индикатора/карточек (иначе прячется под фолдом)
   if (!working && !pending){                // ход на сервере завершён и ничего не ждём → прекращаем опрос (не крутим по mtime и не показываем ложную занятость)
