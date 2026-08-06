@@ -44,48 +44,35 @@ test('composer.js: renderComposer + paintMode + slash + attach + cycleMode', asy
   assert.deepEqual(w.errors, [], 'сломанная ссылка в composer.js: ' + w.errors.join(' | '));
 });
 
-test('armPending: реконсиль ожидающих — свободно → новым ходом; занято → один push; провал push → повтор новым ходом', async () => {
+test('armPending: занято → ждём (без пуша/дублей); свободно → новым ходом, без дублей между тиками', async () => {
   localStorage.clear(); promptQueue.length = 0;
-  S.currentFile = 'freconcile'; S.pendingHandled = new Set();
-  S.sessionMode = 'default'; S.sessionModel = ''; S.sessionEffort = '';
-
-  // 1) свободно (serverBusy=false): pending помечается handled и уходит новым ходом (drainQueue сразу вынимает из
-  // очереди и планирует runPrompt — поэтому наблюдаем по pendingHandled, а не по длине очереди). Повторный тик не дублит.
-  S.serverBusy = false;
-  addPending('freconcile', 'первый', []);
-  armPending('freconcile');
-  S.currentFile = null;   // гасим отложенный drainQueue→runPrompt (его setTimeout выходит, если currentFile снят)
-  assert.equal(S.pendingHandled.has('freconcile\nпервый'), true, 'свободно → промт обработан (ушёл новым ходом)');
-  S.currentFile = 'freconcile';
-  armPending('freconcile');
-  S.currentFile = null;
-  assert.equal(promptQueue.length, 0, 'повторный тик не поставил дубль в очередь (pendingHandled удержал)');
-  await new Promise(r=>setTimeout(r,80));   // дождаться, пока отложенные drainQueue-таймеры увидят currentFile=null и выйдут
-  S.currentFile = 'freconcile';
-
-  // 2) занято (serverBusy=true): пушим в живой канал РОВНО один раз; ok=true → pending НЕ снимаем (снимет транскрипт)
-  localStorage.clear(); promptQueue.length = 0;
-  S.currentFile = 'fbusy'; S.pendingHandled = new Set(); S.serverBusy = true;
-  let pushes = 0;
+  S.sessionMode = 'default'; S.sessionModel = ''; S.sessionEffort = ''; S.streaming = false;
+  let pushes = 0;   // armPending НЕ должен слать /api/chat-input ни при каких условиях (пуш — только в steerPrompt при отправке)
   setFetch(async () => { pushes++; return { ok:true, status:200, json: async () => ({ ok:true }), text: async () => '', headers:{ get(){ return null; } } }; });
-  addPending('fbusy', 'в живой ход', []);
-  armPending('fbusy'); await new Promise(r=>setTimeout(r,10));
-  armPending('fbusy'); await new Promise(r=>setTimeout(r,10));
-  assert.equal(pushes, 1, 'занято → один push на текст, повтор тика не дублирует');
-  assert.equal(promptQueue.length, 0, 'занято → в очередь новый ход не ставим');
-  assert.equal(loadPending('fbusy').length, 1, 'pending держим до появления промта в транскрипте (не снимаем по ok push)');
 
-  // 3) провал push (ход завершился между снимком и POST): handled снимается → следующий тик отдаёт новым ходом
-  localStorage.clear(); promptQueue.length = 0;
-  S.currentFile = 'ffail'; S.pendingHandled = new Set(); S.serverBusy = true;
-  setFetch(async () => ({ ok:true, status:200, json: async () => ({ ok:false }), text: async () => '', headers:{ get(){ return null; } } }));
-  addPending('ffail', 'не долетело', []);
-  armPending('ffail'); await new Promise(r=>setTimeout(r,10));
-  assert.equal(S.pendingHandled.has('ffail\nне долетело'), false, 'провал push снял метку handled → повтор возможен');
-  S.serverBusy = false;                       // ход завершился
-  armPending('ffail');
-  assert.equal(S.pendingHandled.has('ffail\nне долетело'), true, 'после провала push и завершения хода промт обработан новым ходом (не потерян)');
-  S.currentFile = null;                        // гасим отложенный runPrompt
-  await new Promise(r=>setTimeout(r,80));
+  // 1) занято (serverBusy=true): реконсилер НИЧЕГО не делает — промт уже докинут steerPrompt'ом при отправке; повторный
+  // push на каждом перезаходе давал бы дубли выполнения. Ждём, pending остаётся видимым.
+  S.currentFile = 'fbusy'; S.pendingHandled = new Set(); S.serverBusy = true;
+  addPending('fbusy', 'в живой ход', []);
+  armPending('fbusy'); armPending('fbusy'); await new Promise(r=>setTimeout(r,10));
+  assert.equal(pushes, 0, 'занято → armPending не пушит в канал (дубли исключены)');
+  assert.equal(promptQueue.length, 0, 'занято → в очередь не ставим (ждём простоя)');
+  assert.equal(loadPending('fbusy').length, 1, 'pending держим — снимется по появлению в транскрипте');
+
+  // 2) свободно (serverBusy=false): промт уходит новым ходом (drainQueue сразу вынимает и планирует runPrompt →
+  // наблюдаем по pendingHandled). Повторный тик не дублирует.
+  promptQueue.length = 0;
+  S.currentFile = 'fidle'; S.pendingHandled = new Set(); S.serverBusy = false;
+  addPending('fidle', 'новым ходом', []);
+  armPending('fidle');
+  S.currentFile = null;   // гасим отложенный drainQueue→runPrompt (его setTimeout выходит, если currentFile снят)
+  assert.equal(S.pendingHandled.has('fidle\nновым ходом'), true, 'свободно → промт обработан (ушёл новым ходом)');
+  S.currentFile = 'fidle';
+  armPending('fidle');
+  assert.equal(promptQueue.length, 0, 'повторный тик не поставил дубль (pendingHandled удержал)');
+  assert.equal(pushes, 0, 'доставка новым ходом не идёт через /api/chat-input');
+
+  S.currentFile = null;
+  await new Promise(r=>setTimeout(r,80));   // дождаться, пока отложенные drainQueue-таймеры увидят currentFile=null и выйдут
   promptQueue.length = 0;
 });

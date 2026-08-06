@@ -143,7 +143,7 @@ export function renderThread(t){
         if (el){
           if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
           el.classList.add('cx-queued');
-          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ пережил перезаход — досылаю автоматически <button class="cx-queued-x" type="button" title="Отменить">✕</button></div>');
+          el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидает — выполнится, как только Клод освободится <button class="cx-queued-x" type="button" title="Отменить">✕</button></div>');
           const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // отменить авто-дослку (снять до arm)
         }
       }

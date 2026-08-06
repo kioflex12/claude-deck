@@ -369,7 +369,7 @@ async function steerPrompt(payload){
   if (el){
     if (payload.attachments && payload.attachments.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(payload.attachments));
     el.classList.add('cx-queued');
-    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ ожидает — Клод прочитает на ближайшем шаге</div>');
+    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ отправлено в текущий ход — выполнится на его границе</div>');
     const runEl = cons.querySelector('.cx-run-chat'); if (runEl) cons.insertBefore(el, runEl);
   }
   payload.el = el;
@@ -380,8 +380,11 @@ async function steerPrompt(payload){
     const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, prompt: payload.text, attachments: slim }) });
     const d = await r.json(); ok = !!(d && d.ok);
   } catch {}
-  if (ok){ try { removePending(S.currentFile, payload.text); } catch {} }   // сервер принял промт в живой ход → доставлен, из pending снимаем СРАЗУ. Иначе бабл «восстановлен» воскресал бы при каждом перезаходе навсегда: steered-сообщение в транскрипте может не совпасть по тексту (обёртка/формат), и match-снятие не срабатывало
-  else runPrompt(payload);   // живой ход уже завершился → обычный новый (переиспользуя уже нарисованный бабл payload.el)
+  // ok → промт принят в живой ход, но pending НЕ снимаем: снимется, когда его текст появится в транскрипте (tailTick /
+  // seen-проверка renderThread при перезаходе). Иначе был бы «слепой» промежуток — при перезаходе ДО того, как CLI
+  // допишет строку в .jsonl, промт исчезал из ленты, и было непонятно, доставлен ли он. Дубля не будет: реконсилер
+  // armPending досылает новым ходом только при простое, а этот push случается ровно один раз (при отправке).
+  if (!ok) runPrompt(payload);   // живого хода нет (только что завершился) → обычный новый ход тем же баблом (снимет pending на старте)
 }
 
 // Персист «ожидающих» промтов (steer/очередь) по сессии — чтобы они переживали перезаход, а не терялись «вообще».
@@ -405,13 +408,15 @@ function savePending(file, arr){
 // параллельных ходов нет — транскрипт не задваивается; серверный single-writer — доп. страховка). Реально доставленный до
 // перезахода промт в pending уже снят (ack), поэтому авто-повтор не дублирует выполненное. preview хранит полный data-URL
 // → восстанавливаем отправляемое вложение (dataB64) из него.
-// Реконсилер «ожидающих» промтов: гоняется при перезаходе (renderThread) И на КАЖДОМ tailTick (~4с), пока промт не
-// доставлен (не появился в транскрипте — тогда его снимает tailTick по совпадению текста). Идёт ход → пушим в живой
-// канал (SDK заберёт на границе хода). Свободно → отдаём новым ходом через очередь. Дедуп по S.pendingHandled, чтобы
-// не запушить/не запустить один и тот же промт дважды между тиками. Провал push (ход завершился между снимком и POST) →
-// снимаем метку handled: на следующем тике serverBusy уже false, и промт уйдёт новым ходом (раньше просто терялся).
+// Реконсилер «ожидающих» промтов после перезахода. Гоняется из renderThread (900мс) и КАЖДОГО tailTick (~4с), пока
+// промт не доставлен (появление его текста в транскрипте снимает pending в tailTick). Правило простое и БЕЗ дублей:
+//   • идёт ход → НЕ трогаем: промт уже либо докинут в живой канал самим steerPrompt (один раз, при отправке), либо
+//     дождётся простоя. Повторный push на каждом перезаходе давал дубли выполнения — поэтому здесь push нет.
+//   • свободно → отдаём НОВЫМ ходом (очередь + drainQueue, по одному). Это безопасно: завершившийся запрос отбрасывает
+//     недочитанное из канала, так что «висящего» дубля из canal не будет. runPrompt при старте снимает pending.
+// Промт при простое виден вживую (runPrompt рисует его и стримит ответ) — пользователь видит, ЧТО и КОГДА выполняется.
 export function armPending(file){
-  if (!file || S.currentFile !== file) return;
+  if (!file || S.currentFile !== file || S.serverBusy || S.streaming) return;   // занято/стримим — ждём, не плодим ход
   const pend = loadPending(file); if (!pend.length) return;
   const cons = document.querySelector('.cx-console');
   const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && (md.textContent || '').trim() === tx) return b; } return null; };
@@ -419,21 +424,11 @@ export function armPending(file){
   for (const it of pend){
     const text = String(it.text || '');
     const key = file + '\n' + text.trim();
-    if (S.pendingHandled.has(key)) continue;   // уже пушили/поставили в очередь в этом заходе — ждём доставки, не дублируем
+    if (S.pendingHandled.has(key)) continue;   // уже поставлен в очередь в этом заходе — не дублируем между тиками
+    S.pendingHandled.add(key);
     const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
-    if (S.serverBusy){
-      S.pendingHandled.add(key);
-      const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
-      // НЕ снимаем pending по ok: снимется, когда промт РЕАЛЬНО появится в транскрипте (tailTick) — иначе при рестарте
-      // сервера до границы хода in-memory-очередь канала терялась бы вместе со снятым pending.
-      fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, prompt: text, attachments: slim }) })
-        .then(r => r.json()).then(d => { if (!(d && d.ok)) S.pendingHandled.delete(key); })   // ход уже завершился → на следующем тике уйдёт новым ходом
-        .catch(() => S.pendingHandled.delete(key));
-    } else {
-      S.pendingHandled.add(key);
-      promptQueue.push({ text, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
-      queued = true;
-    }
+    promptQueue.push({ text, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
+    queued = true;
   }
   if (queued){ updateQueueIndicator(); drainQueue(); }
 }
