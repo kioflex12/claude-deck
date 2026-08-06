@@ -29,9 +29,17 @@ export function jiraSubLabel(status){
   if (/in\s*review|ревью|на\s*ревью/.test(n)) return 'Ревью';
   return '';   // In QA / Ready To QA / testing и т.п. — то же, что колонка «На QA» → без дубля
 }
-// Колонка = статус задачи в Jira (source of truth). ЕДИНСТВЕННОЕ исключение — Build In Progress: живой билд TeamCity
-// (собирается ИЛИ в очереди) важнее любого Jira-статуса. Нет данных Jira → фолбэк на стадию dev-workflow (или свежесть).
-export function effectiveColumn(s, jiraCache){
+// Идёт ли ПРЯМО СЕЙЧАС выполнение в контексте: живой ход Claude на сервере, фоновый сабагент или стрим этого клиента.
+// Совпадает с board.isWorking по смыслу, но без клиентского streamingFile-оверрайда (его подмешивает вызывающий).
+export function liveWorking(s){ return !!(s && (s.working === true || s.serverActive === true || (s.bgRunning|0) > 0)); }
+
+// Колонка = статус задачи в Jira (source of truth), НО живое выполнение важнее: если в контексте прямо сейчас идёт ход
+// (Claude работает / сабагент в фоне) — он в «В работе» вне зависимости от Jira (задача могла быть Done/QA/Blocked, а
+// разработчик снова в ней что-то гоняет). Второе исключение — Build In Progress: живой билд TeamCity важнее Jira-статуса.
+// working — явный сигнал от вызывающего (учитывает streamingFile этого клиента); не передан → выводим из полей сессии.
+export function effectiveColumn(s, jiraCache, working){
+  if (working === undefined) working = liveWorking(s);
+  if (working) return { col:'active', blocked:false };                     // что-то выполняется сейчас → всегда «В работе»
   const j = s.wo ? jiraCache[s.wo] : null;
   let jiraCol = null, jiraBlocked = false;
   if (j && j.available && j.status){
@@ -49,8 +57,8 @@ export function effectiveColumn(s, jiraCache){
   return { col: wfCol, blocked:false };
 }
 // Статус-бар: НЕ дублирует колонку. Русский под-стадийный текст сверх колонки (или полный ярлык в «Доске»).
-export function cardStatus(s, jiraCache){
-  const e = effectiveColumn(s, jiraCache);
+export function cardStatus(s, jiraCache, working){
+  const e = effectiveColumn(s, jiraCache, working);
   let sub = '';
   if (e.col === 'qa'){
     const j = (s.wo && jiraCache[s.wo] && jiraCache[s.wo].available) ? jiraCache[s.wo] : null;

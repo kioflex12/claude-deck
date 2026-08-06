@@ -43,7 +43,7 @@ function tagsChipsHTML(s){    // пользовательские теги
 export function cardHTML(s){
   const wf = S.activeView === 'status';
   const working = isWorking(s);
-  const st = cardStatus(s, JIRA_CACHE);
+  const st = cardStatus(s, JIRA_CACHE, working);
   const blocked = st.blocked;
   // Статусы: колонка = стадия → бар ТОЛЬКО для под-стадийного уточнения (без дубля названия колонки).
   // Доска (по свежести): колонок-стадий нет → бар всегда, полный локализованный ярлык.
@@ -102,7 +102,7 @@ export function renderBoard(animate){
   const board = document.getElementById('board');
   const workflow = S.activeView==='status';
   const cols = workflow ? WF_COLUMNS : COLUMNS;
-  const keyOf = s => workflow ? effectiveColumn(s, JIRA_CACHE).col : s.column;   // 7-колоночная логика — единый резолв
+  const keyOf = s => workflow ? effectiveColumn(s, JIRA_CACHE, isWorking(s)).col : s.column;   // 7-колоночная логика — единый резолв; isWorking учитывает и стрим этого клиента (мгновенно, до поллинга)
   // поллинг перерисовывает без анимации и с сохранением прокрутки — чтобы доска не «дёргалась»
   const sx = board.scrollLeft;
   const colScroll = [...board.querySelectorAll('.col-body')].map(el=>el.scrollTop);

@@ -38,6 +38,17 @@ test('effectiveColumn: Jira — source of truth (ведёт даже без dev-
   assert.equal(effectiveColumn({ active: false }, {}).col, 'todo', 'нет Jira, не активна → Ждёт');
 });
 
+test('effectiveColumn: живое выполнение важнее любого Jira-статуса → «В работе»', () => {
+  const done = { 'WO-D': { available: true, status: 'Done' } };
+  assert.equal(effectiveColumn({ wo: 'WO-D', serverActive: true }, done).col, 'active', 'идёт ход на сервере → В работе, хоть Jira Done');
+  assert.equal(effectiveColumn({ wo: 'WO-D', working: true }, done).col, 'active', 'working → В работе поверх Done');
+  assert.equal(effectiveColumn({ wo: 'WO-B', bgRunning: 2 }, { 'WO-B': { available: true, status: 'Blocked' } }).col, 'active', 'фоновый сабагент → В работе поверх Blocked');
+  assert.equal(effectiveColumn({ wo: 'WO-Q', serverActive: true, buildActive: true }, { 'WO-Q': { available: true, status: 'In QA' } }).col, 'active', 'выполнение важнее и билда, и QA');
+  // явный working-аргумент (учитывает streamingFile клиента) перекрывает поля сессии
+  assert.equal(effectiveColumn({ wo: 'WO-D' }, done, true).col, 'active', 'working=true аргументом → В работе');
+  assert.equal(effectiveColumn({ wo: 'WO-D' }, done, false).col, 'done', 'working=false аргументом не поднимает в active');
+});
+
 test('cardStatus: под-статус без дубля колонки', () => {
   assert.deepEqual(cardStatus({ wo: 'WO-3', wfColumn: 'qa' }, { 'WO-3': { available: true, status: 'In Review' } }), { col: 'qa', blocked: false, sub: 'Ревью' });
   assert.deepEqual(cardStatus({ wo: 'WO-4', wfColumn: 'qa', wfQa: 'localcheck' }, {}), { col: 'qa', blocked: false, sub: 'Ожидает проверки' });
