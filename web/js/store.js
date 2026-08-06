@@ -40,6 +40,7 @@ export const S = {
   sessionModel: '',           // выбранная модель (пусто = дефолт)
   sessionEffort: '',          // выбранный reasoning-effort
   pendingNewSession: null,    // {cwd,name}: новая сессия создаётся первым промтом (файла ещё нет)
+  pendingHandled: new Set(),  // key file\ntext уже обработанных в этом заходе pending-промтов (дедуп push/новый ход между тиками); сбрасывается в openSession
   SESSION_SKILLS: [],         // скиллы cwd для автокомплита «/»
   slashItems: [], slashSel: 0, slashOpen: false,
 

@@ -3,7 +3,7 @@
 import { S, notifiedDone, notifiedInput, SESSION_CACHE, promptQueue } from './store.js';
 import { esc, mdToHtml, ctxColor, kTok } from './util.js';
 import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wireConsole } from './transcript.js';
-import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue, saveSessionSettings } from './composer.js';
+import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue, saveSessionSettings, armPending } from './composer.js';
 import { renderCtxTabs } from './nav.js';
 import { loadBuilds, loadMrs, loadJira, wireTags, stopAgentsPoll } from './services.js';
 import { ensureNotifyPermission, titleOf, notifyDone, notifyInput } from './notify.js';
@@ -654,6 +654,7 @@ async function tailTick(file){
   // на долгих инструментах (индикатор мигал «то есть, то нет») и остаётся свежим ~20с после Стопа (индикатор всплывал призраком).
   const working = !!d.serverActive;
   S.serverBusy = working;   // новый промт при живом сервер-ходе, но оборванном SSE → sendMessage должен steer'ить, а не плодить 2-й ход (дубль «работает»)
+  try { armPending(file); } catch {}   // реконсиль ожидающих: пуш в живой ход или (если свободно) новым ходом — ретраится каждый тик, пока промт не доставлен
   updateTailIndicator(working || pending, S.tailStepStart || d.turnStartTs, pending, d.activity, d.turnOut);   // таймер — от текущего шага (S.tailStepStart), не от старта хода; вопрос/аппрув → «ожидает»
   pinQueued();   // ВСЕ ожидающие промты — единым блоком в самом низу (над индикатором), в стабильном порядке добавления, без прыжков
   const stopBtn = document.getElementById('stopBtn'); if (stopBtn) stopBtn.disabled = !(working || pending);   // после перезахода Стоп активен, пока ход жив/ждёт (иначе кнопка мёртвая, ход не оборвать)

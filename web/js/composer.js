@@ -405,22 +405,37 @@ function savePending(file, arr){
 // параллельных ходов нет — транскрипт не задваивается; серверный single-writer — доп. страховка). Реально доставленный до
 // перезахода промт в pending уже снят (ack), поэтому авто-повтор не дублирует выполненное. preview хранит полный data-URL
 // → восстанавливаем отправляемое вложение (dataB64) из него.
+// Реконсилер «ожидающих» промтов: гоняется при перезаходе (renderThread) И на КАЖДОМ tailTick (~4с), пока промт не
+// доставлен (не появился в транскрипте — тогда его снимает tailTick по совпадению текста). Идёт ход → пушим в живой
+// канал (SDK заберёт на границе хода). Свободно → отдаём новым ходом через очередь. Дедуп по S.pendingHandled, чтобы
+// не запушить/не запустить один и тот же промт дважды между тиками. Провал push (ход завершился между снимком и POST) →
+// снимаем метку handled: на следующем тике serverBusy уже false, и промт уйдёт новым ходом (раньше просто терялся).
 export function armPending(file){
   if (!file || S.currentFile !== file) return;
   const pend = loadPending(file); if (!pend.length) return;
   const cons = document.querySelector('.cx-console');
   const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && (md.textContent || '').trim() === tx) return b; } return null; };
+  let queued = false;
   for (const it of pend){
     const text = String(it.text || '');
+    const key = file + '\n' + text.trim();
+    if (S.pendingHandled.has(key)) continue;   // уже пушили/поставили в очередь в этом заходе — ждём доставки, не дублируем
     const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
     if (S.serverBusy){
+      S.pendingHandled.add(key);
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
-      fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, prompt: text, attachments: slim }) }).then(r => r.json()).then(d => { if (d && d.ok) removePending(file, text); }).catch(() => {});
+      // НЕ снимаем pending по ok: снимется, когда промт РЕАЛЬНО появится в транскрипте (tailTick) — иначе при рестарте
+      // сервера до границы хода in-memory-очередь канала терялась бы вместе со снятым pending.
+      fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, prompt: text, attachments: slim }) })
+        .then(r => r.json()).then(d => { if (!(d && d.ok)) S.pendingHandled.delete(key); })   // ход уже завершился → на следующем тике уйдёт новым ходом
+        .catch(() => S.pendingHandled.delete(key));
     } else {
+      S.pendingHandled.add(key);
       promptQueue.push({ text, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
+      queued = true;
     }
   }
-  if (!S.serverBusy && promptQueue.length){ updateQueueIndicator(); drainQueue(); }
+  if (queued){ updateQueueIndicator(); drainQueue(); }
 }
 export function addPending(file, text, attachments){
   const tx = String(text || '');

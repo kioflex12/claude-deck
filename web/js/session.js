@@ -16,6 +16,7 @@ import { stopStream, startRailRefresh, questionCardHTML, wireQuestion, approvalC
 export async function openSession(file){
   stopStream();   // закрыть стрим прошлой сессии, если был
   S.currentFile = file;
+  S.pendingHandled = new Set();   // новый заход в контекст → заново пытаться доставить ещё не доставленные pending-промты
   if (!S.openFiles.includes(file)) S.openFiles.push(file);   // контекст попал в полосу вкладок — вернуться в него можно одним кликом
   renderCtxTabs();   // вкладка видна сразу, не после загрузки транскрипта (и остаётся, даже если загрузка упала)
   S.returnView = (S.activeView==='status' || S.activeView==='board') ? S.activeView : 'status';
