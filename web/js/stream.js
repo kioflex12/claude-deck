@@ -42,11 +42,15 @@ export function stopStream(){
   document.querySelectorAll('.cx-asst.cx-live').forEach(el => el.classList.remove('cx-live'));
 }
 
+// Счётчик токенов в строке хода — с одним знаком после запятой (20.4k → 20.5k …), чтобы динамика была видна мелкими
+// шагами (kTok округляет до целых k — счётчик «застревал» на 20k надолго). Слово tokens, как в CLI.
+function fmtTokens(n){ return (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)) + ' tokens'; }
+
 // Строка индикатора хода: что делает · сколько токенов уже сгенерировано · чем занят фоновый агент. Секунды НЕ пишем —
 // «работает Nс» бесполезно; полезна динамика токенов (видно, что не завис) и активность инструмента/агента.
 export function runLine(label, tokens){
   const parts = [ label || '✻ Claude работает' ];
-  if (tokens > 0) parts.push(kTok(tokens) + ' ток.');
+  if (tokens > 0) parts.push(fmtTokens(tokens));
   const ag = (S.liveAgents || []).filter(a => a && a.running);
   if (ag.length){
     const a = ag[0];
