@@ -286,7 +286,7 @@ function textSummary(f) {
   const baseBranchText = pickBaseBranch(branchesAll) || '';   // базовая ветка из истории gitBranch (фолбэк — targetEnv, добавляется свежим)
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
-  if (!title) title = (lastPrompt || '').split('\n')[0].slice(0, 80) || '(без заголовка)';
+  if (!title){ const firstPrompt = firstString(text, 'lastPrompt') || lastPrompt; title = firstPrompt.split('\n')[0].slice(0, 80) || '(без заголовка)'; }   // фолбэк — первый промт (стабилен), не последний (менялся каждую отправку)
   const model = prettyModel(lastRealModel(text));
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
@@ -512,7 +512,9 @@ export function apiSession(relFile) {
   const { blocks, model, cwd, branches, winTokens, msgCount, lastUserTs, maxTurnsTs } = buildSessionBlocks(text);
   let title = lastString(text, 'aiTitle');
   const lastPrompt = lastString(text, 'lastPrompt') || '';
-  if (!title) title = lastPrompt.split('\n')[0].slice(0, 80) || '(без заголовка)';
+  // Заголовок-фолбэк — из ПЕРВОГО промта, а не последнего: пока CLI не сгенерил aiTitle, заголовок по последнему
+  // промту менялся на каждой отправке (баг «имя контекста поменялось после второго промта»). Первый промт стабилен.
+  if (!title){ const firstPrompt = firstString(text, 'lastPrompt') || lastPrompt; title = firstPrompt.split('\n')[0].slice(0, 80) || '(без заголовка)'; }
   const gitBranch = pickWorkingBranch(branches);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
   // WO: рабочая ветка → заголовок → первичный WO из первого промпта

@@ -8,7 +8,7 @@ import { loadSkillsCatalog } from './skills.js';
 import { loadUsage, openUsageModal } from './usage.js';
 import { hydrateMrs, hydrateJira, startHealthPoll } from './services.js';
 import { openSession } from './session.js';
-import { setView, ensureStatusTab, openPal } from './nav.js';
+import { setView, ensureStatusTab, openPal, restoreOpenFiles } from './nav.js';
 import { workingSet, seedJiraFromSessions, startPolling, initNotifyToggle } from './notify.js';
 import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
@@ -44,7 +44,7 @@ S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.85';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.86';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -109,6 +109,7 @@ export async function load(){
     const data = await r.json();
     S.SESSIONS = Array.isArray(data.sessions) ? data.sessions : [];
   } catch (e) { S.SESSIONS = []; }
+  restoreOpenFiles();                  // вернуть полосу открытых вкладок после релоада (список сессий уже загружен)
   seedJiraFromSessions();              // Jira уже в payload → колонки верны на первом рендере
   S.prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
   renderFilters();

@@ -42,12 +42,10 @@ export function stopStream(){
   document.querySelectorAll('.cx-asst.cx-live').forEach(el => el.classList.remove('cx-live'));
 }
 
-// Строка индикатора хода: что делает · сколько идёт · сколько токенов уже сгенерировано · чем занят фоновый агент.
-// В ней обязаны постоянно меняться числа: без них долгий шаг (инструмент на минуты, сабагент) неотличим от зависания —
-// именно поэтому ход простаивал «афк» и его отменяли вручную.
-export function runLine(label, startTs, tokens){
-  const secs = Math.max(0, Math.round((Date.now() - (startTs || Date.now())) / 1000));
-  const parts = [ (label || '✻ Claude работает') + '… ' + secs + 'с' ];
+// Строка индикатора хода: что делает · сколько токенов уже сгенерировано · чем занят фоновый агент. Секунды НЕ пишем —
+// «работает Nс» бесполезно; полезна динамика токенов (видно, что не завис) и активность инструмента/агента.
+export function runLine(label, tokens){
+  const parts = [ label || '✻ Claude работает' ];
   if (tokens > 0) parts.push(kTok(tokens) + ' ток.');
   const ag = (S.liveAgents || []).filter(a => a && a.running);
   if (ag.length){
@@ -259,11 +257,12 @@ export async function runPrompt(payload){
   let tokBase = 0, charsSince = 0;
   const tokNow = () => tokBase + Math.round(charsSince / 4);
   const paintRun = () => {
+    if (!runEl) return;   // null-DOM / индикатор снят
     const el = runEl.querySelector('.cx-run-txt'); if (!el) return;
     const sp = runEl.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
-    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : runLine(activity, t0, tokNow());
+    el.textContent = waiting ? '⏳ Ожидает вашего ответа' : runLine(activity, tokNow());
   };
-  S.streamTimer = setInterval(paintRun, 1000);
+  paintRun();   // строку обновляют события стрима (дельты/инструменты/usage) — посекундный тик больше не нужен (секунды убраны)
 
   let liveMd = null, liveAccum = '';           // текущий текстовый блок ассистента (дельты text)
   let liveThink = null, liveThinkAccum = '';   // текущий блок размышления (дельты thinking)
@@ -583,16 +582,11 @@ export function updateTailIndicator(on, turnStartTs, waiting, activity, tokens){
     else cons.appendChild(ind);            // держим индикатор внизу
     const sp = ind.querySelector('.cx-spin'); if (sp) sp.style.display = waiting ? 'none' : '';
     const txt = ind.querySelector('.cx-run-txt');
-    if (waiting){   // висит вопрос/аппрув — Claude ждёт ответа, а не работает: таймер замирает, спиннер убран
-      if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }
+    if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }   // секунды убраны → посекундный тик не нужен; строку обновляет сам tailTick (раз в 4с)
+    if (waiting){   // висит вопрос/аппрув — Claude ждёт ответа, а не работает: спиннер убран
       if (txt) txt.textContent = '⏳ Ожидает вашего ответа';
-    } else {
-      const start = (turnStartTs && turnStartTs > 0) ? turnStartTs : (ind._start || Date.now());
-      ind._start = start;
-      const paint = () => { if (txt) txt.textContent = runLine(activity, start, tokens || 0); };   // «что делает» из tail (⚙ инструмент / ✻ размышляет / ✍ пишет) + секунды/токены/фоновый агент
-      paint();
-      if (S.tailCountTimer) clearInterval(S.tailCountTimer);
-      S.tailCountTimer = setInterval(paint, 1000);
+    } else if (txt){
+      txt.textContent = runLine(activity, tokens || 0);   // «что делает» из tail (⚙ инструмент / ✻ размышляет / ✍ пишет) + токены + фоновый агент
     }
   } else {
     if (S.tailCountTimer){ clearInterval(S.tailCountTimer); S.tailCountTimer = null; }

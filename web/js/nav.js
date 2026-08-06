@@ -78,9 +78,20 @@ export function backToSession(){
 
 // Полоса открытых контекстов: одновременно открытых сессий может быть несколько, переключение между ними — один клик,
 // а не «выйти на доску и найти карточку заново». Здесь же кнопка возврата из накладной вкладки туда, откуда её открыли.
+// Открытые вкладки переживают перезагрузку окна (F5 / рестарт Deck): список файлов лежит в localStorage, восстановление —
+// restoreOpenFiles() в app.load после загрузки списка сессий. Иначе после релоада полоса вкладок исчезала.
+const OPEN_KEY = 'deckOpenFiles';
+function persistOpenFiles(){ try { localStorage.setItem(OPEN_KEY, JSON.stringify(S.openFiles)); } catch {} }
+export function restoreOpenFiles(){
+  let arr = []; try { arr = JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'); } catch {}
+  if (Array.isArray(arr)) S.openFiles = arr.filter(f => typeof f === 'string' && S.SESSIONS.some(s => s.file === f));   // только ещё существующие сессии
+  renderCtxTabs();
+}
+
 export function renderCtxTabs(){
   const bar = document.getElementById('ctxTabs'); if (!bar) return;
   S.openFiles = S.openFiles.filter(f => f === S.currentFile || S.SESSIONS.some(s => s.file === f) || SESSION_CACHE[f]);
+  persistOpenFiles();
   const overlay = isOverlayView(S.activeView);
   if (!S.openFiles.length && !overlay){ bar.hidden = true; bar.innerHTML = ''; return; }
   const back = overlay

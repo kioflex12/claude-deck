@@ -216,7 +216,11 @@
     .card-foot .pill.mr-open:hover, .card-foot .pill.mr-merged:hover, .card-foot .pill.mr-closed:hover{ border-color:currentColor; filter:brightness(1.1); text-decoration:underline; }
 
     /* полоса открытых контекстов: несколько сессий открыты одновременно, переключение — клик по вкладке */
-    .ctx-tabs{ display:flex; align-items:center; gap:6px; flex:none; padding:6px 20px; background:var(--bg-elev); border-bottom:1px solid var(--border); overflow-x:auto; }
+    .ctx-tabs{ display:flex; align-items:center; gap:6px; flex:none; padding:6px 20px; background:var(--bg-elev); border-bottom:1px solid var(--border); overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--border-strong) transparent; }
+    .ctx-tabs::-webkit-scrollbar{ height:6px; }
+    .ctx-tabs::-webkit-scrollbar-track{ background:transparent; }
+    .ctx-tabs::-webkit-scrollbar-thumb{ background:var(--border-strong); border-radius:6px; }
+    .ctx-tabs::-webkit-scrollbar-thumb:hover{ background:var(--text-faint); }
     .ct-back{ flex:none; font-family:var(--ui); font-size:12px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:4px 10px; cursor:pointer; }
     .ct-back:hover{ color:var(--text); border-color:var(--accent); }
     .ct-tab{ display:inline-flex; align-items:center; gap:6px; max-width:230px; flex:none; padding:4px 6px 4px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text-muted); font-size:12.5px; cursor:pointer; transition:.13s; }

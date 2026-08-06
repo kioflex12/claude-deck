@@ -49,6 +49,11 @@ export async function openSession(file){
     }
   }
   if (S.currentFile !== file) return;
+  // Кэш транскрипта тяжёлый (блоки), поэтому переиспользуется — но поля ЖИВОСТИ (идёт ли ход) в нём застывают на момент
+  // первой загрузки. При возврате во вкладку это гасило индикатор «работает»: t.serverActive=false из старого кэша →
+  // tail не поднимался. Подмешиваем свежую живость из списка сессий (его держит актуальным поллинг).
+  const liveEntry = S.SESSIONS.find(s => s.file === file);
+  if (liveEntry){ t.serverActive = liveEntry.serverActive; t.working = liveEntry.working; t.active = liveEntry.active; t.bgRunning = liveEntry.bgRunning; }
   // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
   // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
   const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
