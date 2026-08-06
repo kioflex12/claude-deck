@@ -47,7 +47,11 @@ export function notifyDone(file, title, heading){       // одно уведом
   if (notifiedDone.has(file)) return;            // и Deck-finish, и poll-переход — одно и то же завершение
   notifiedDone.add(file);
   if (!S.notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
-  if (!document.hidden && S.currentFile === file) return;   // юзер сам смотрит эту сессию в фокусе — результат виден, не пингуем
+  // Подавляем ТОЛЬКО когда юзер реально смотрит именно эту сессию: окно в фокусе И видимо И открыт этот контекст.
+  // Раньше проверяли лишь !document.hidden — но при открытом контексте с невыключенным окном (Deck на фоне, юзер занят
+  // другим приложением) hidden=false, и завершение не пинговалось. hasFocus() ловит «окно не активно» → уведомляем.
+  const focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+  if (focused && !document.hidden && S.currentFile === file) return;
   const head = (heading || 'Claude завершил') + (title ? ' · ' + title : '');
   if (window.deckNative && window.deckNative.notify){   // Electron: через main — сработает и из свёрнутого в трей окна, клик сфокусит + откроет сессию
     window.deckNative.notify({ title: head, body: 'Открыть сессию в Deck', file });
@@ -83,13 +87,14 @@ export function seedJiraFromSessions(){
 // Открытая session-view (лента/композер/стрим) НЕ трогается — рендерим только на доске «Статусы»/«Доска».
 export async function pollSessions(force){
   if (S.polling) return; S.polling = true;
-  const onBoard = (S.activeView === 'board' || S.activeView === 'status');
-  const heavy = force || (Date.now() - S._lastHeavy >= 29000);   // force — немедленный рефреш (выход из сессии): обойти 29с-гейт
+  // ВЕСЬ цикл под try/finally: любое исключение в рендере (борд/вкладки/usage) обязано сбросить S.polling — иначе флаг
+  // застревает true, все следующие опросы early-return'ят, и фоновые завершения перестают детектиться (нет уведомлений).
   try {
+    const onBoard = (S.activeView === 'board' || S.activeView === 'status');
+    const heavy = force || (Date.now() - S._lastHeavy >= 29000);   // force — немедленный рефреш (выход из сессии): обойти 29с-гейт
     if (heavy){
       S._lastHeavy = Date.now();
-      const r = await fetch('/api/sessions', { cache:'no-store' });
-      const data = await r.json();
+      let data; try { data = await (await fetch('/api/sessions', { cache:'no-store' })).json(); } catch { return; }   // сеть моргнула — пропускаем цикл (finally снимет polling)
       if (Array.isArray(data.sessions)) S.SESSIONS = data.sessions;   // обновляем данные НА МЕСТЕ, приложение не пересоздаём
       seedJiraFromSessions();
       const nowSet = workingSet();
@@ -103,13 +108,12 @@ export async function pollSessions(force){
       }
       for (const file of S.prevWorkingFiles){ if (!nowSet.has(file)) S.pendingDone.add(file); }  // только что ушёл в простой → кандидат, проверим на следующем опросе
       S.prevWorkingFiles = nowSet;
-    }
-  } catch { S.polling = false; return; }
-  if (onBoard){ renderNow(); renderBoard(false); if (heavy){ hydrateMrs(!!force); hydrateJira(!!force); } }   // renderBoard(false) сохраняет colScroll; force → гидрация мимо кэшей (свежий MR/Jira сразу)
-  if (heavy) renderCtxTabs();                              // вкладки открытых контекстов: имя/работает/ждёт ответа — из свежих SESSIONS
-  renderUsageBar();
-  updateAttentionBadge();                                  // счётчик «Требует внимания» — из свежих SESSIONS (блокеры/упавшие сборки/проверка)
-  if (S.activeView === 'attention') renderAttention();
-  S.polling = false;
+      if (onBoard){ renderNow(); renderBoard(false); hydrateMrs(!!force); hydrateJira(!!force); }   // renderBoard(false) сохраняет colScroll; force → гидрация мимо кэшей
+      renderCtxTabs();                              // вкладки открытых контекстов: имя/работает/ждёт ответа — из свежих SESSIONS
+    } else if (onBoard){ renderNow(); renderBoard(false); }
+    renderUsageBar();
+    updateAttentionBadge();                                  // счётчик «Требует внимания» — из свежих SESSIONS (блокеры/упавшие сборки/проверка)
+    if (S.activeView === 'attention') renderAttention();
+  } finally { S.polling = false; }
 }
 export function startPolling(){ if (S.pollTimer) clearInterval(S.pollTimer); S.pollTimer = setInterval(pollSessions, 7000); }

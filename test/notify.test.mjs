@@ -32,6 +32,14 @@ test('notify.js: тумблер/кнопка/workingSet/pollSessions в null-DOM
 
   S.activeView = 'status'; S._lastHeavy = 0; S.polling = false;
   await notify.pollSessions();   // тяжёлый тик: /api/sessions → seedJira/workingSet/notify + renderNow/renderBoard/hydrate*
+  assert.equal(S.polling, false, 'S.polling сброшен после тяжёлого тика (иначе цикл застревает → фоновые завершения не пингуются)');
+
+  // исключение в рендере не должно застрять флагом polling=true (иначе все следующие опросы early-return → нет уведомлений)
+  S._lastHeavy = 0;
+  const badView = S.activeView; S.activeView = 'attention';   // renderAttention в null-DOM может кинуть — проверяем finally
+  try { await notify.pollSessions(); } catch {}
+  assert.equal(S.polling, false, 'S.polling сброшен даже если рендер бросил (try/finally)');
+  S.activeView = badView;
 
   await new Promise((r) => setTimeout(r, 60));
   w.stop();
