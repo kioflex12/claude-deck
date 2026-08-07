@@ -243,12 +243,22 @@ test('/api/pending-approvals возвращает висящие аппрувы 
 test('/api/chat-input докидывает промт в живой ход по ключу сессии; нет живого → ok:false', async () => {
   let got = null;
   mod.activeStreams.set('sx_steer', { ac: { abort() {} }, key: 'sess-steer', push: (m) => { got = m; return true; } });
-  const r = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', prompt: 'дальше' }) });
+  const r = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', pid: 'pid-1', prompt: 'дальше' }) });
   const b = await r.json();
   assert.equal(r.status, 200);
   assert.equal(b.ok, true, 'нашёл живой ход по ключу → запушено');
-  assert.ok(got && got.message && Array.isArray(got.message.content), 'push получил SDKUserMessage');
+  assert.ok(got && got.pid === 'pid-1' && got.message && Array.isArray(got.message.message.content), 'push получил { message: SDKUserMessage, pid }');
   mod.activeStreams.delete('sx_steer');
+
+  // тот же pid, но уже помечен доставленным → сервер вернёт dup и НЕ пушит (exactly-once)
+  mod.markPid('sess-steer', 'pid-1');
+  let got2 = false;
+  mod.activeStreams.set('sx_steer2', { ac: { abort() {} }, key: 'sess-steer', push: () => { got2 = true; return true; } });
+  const rd = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/sess-steer.jsonl', pid: 'pid-1', prompt: 'дальше' }) });
+  const bd = await rd.json();
+  assert.equal(bd.dup, true, 'уже доставленный pid → dup');
+  assert.equal(got2, false, 'dup не пушится в канал');
+  mod.activeStreams.delete('sx_steer2');
 
   const r2 = await fetch(base + addTk('/api/chat-input'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'proj/no-such.jsonl', prompt: 'x' }) });
   const b2 = await r2.json();

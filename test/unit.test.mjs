@@ -149,18 +149,23 @@ test('buildUserMessage: текст+вложения → SDKUserMessage с мас
   assert.ok(img.message.content.some((b) => b.type === 'image'), 'картинка → image-блок');
 });
 
-test('makeInputChannel: gen отдаёт первое, ждёт push, осушает очередь перед end', async () => {
-  const ch = makeInputChannel({ n: 1 });
+test('makeInputChannel: gen отдаёт message, ждёт push, осушает очередь; pid — дедуп + onConsume', async () => {
+  const consumed = [];
+  const ch = makeInputChannel({ message: { n: 1 }, pid: 'a' });
+  ch.setOnConsume((p) => consumed.push(p));
   const it = ch.gen();
-  assert.deepEqual((await it.next()).value, { n: 1 }, 'первое сообщение');
+  assert.deepEqual((await it.next()).value, { n: 1 }, 'первое сообщение (это item.message)');
   const p = it.next();                     // очередь пуста → ждёт
-  assert.equal(ch.push({ n: 2 }), true, 'push в открытый канал → true');
+  assert.equal(ch.push({ message: { n: 2 }, pid: 'b' }), true, 'push в открытый канал → true');
   assert.deepEqual((await p).value, { n: 2 }, 'push разбудил ожидание');
-  ch.push({ n: 3 });                        // лежит в очереди
+  assert.equal(ch.push({ message: { n: 9 }, pid: 'b' }), true, 'дубль pid принят (true), но в очередь не встал');
+  ch.push({ message: { n: 3 }, pid: 'c' });   // лежит в очереди
   ch.end();
-  assert.equal(ch.push({ n: 4 }), false, 'после end push отвергнут');
-  assert.deepEqual((await it.next()).value, { n: 3 }, 'очередь осушается перед закрытием');
+  assert.equal(ch.push({ message: { n: 4 }, pid: 'd' }), false, 'после end push отвергнут');
+  assert.deepEqual((await it.next()).value, { n: 3 }, 'очередь осушается перед закрытием (дубль b не всплыл)');
   assert.equal((await it.next()).done, true, 'осушено → gen завершается');
+  assert.deepEqual(consumed, ['a', 'b', 'c'], 'onConsume(pid) вызван в момент выдачи каждого сообщения, дубль b — один раз');
+  assert.equal(ch.hasPid('a'), true, 'hasPid помнит виденные pid');
 });
 
 test('isBaseBranch: базовые ветки → true, рабочая/пустая', () => {

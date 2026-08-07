@@ -146,6 +146,17 @@ export const pendingApprovalsByKey = new Map(); // sessionKey -> Set(approvalId)
 export const pendingQuestions = new Map();      // questionId -> { resolve(answers), questions, sessionKey }
 export const pendingQuestionsByKey = new Map(); // sessionKey -> Set(questionId) — для ре-сёрфейса висящих вопросов при перезаходе
 export const activeStreams = new Map();      // streamId -> AbortController (для гарантированного /api/stop)
+// Exactly-once доставка подкинутых промтов: pid отмечается ПОТРЕБЛЁННЫМ в момент, когда канал реально отдаёт сообщение
+// SDK (gen yield) — не по факту приёма POST. Любой повтор/гонка клиента (перезаход, ретрай, две ветки доставки) видит
+// pid как доставленный и не запускает его второй раз. Ключ — sessionId, значение — Set последних pid (кап FIFO).
+export const deliveredPids = new Map();       // sessionId -> Set<pid>
+export function markPid(key, pid) {
+  if (!key || !pid) return;
+  let s = deliveredPids.get(key); if (!s) { s = new Set(); deliveredPids.set(key, s); }
+  s.add(pid);
+  if (s.size > 300) { const first = s.values().next().value; s.delete(first); }   // не растём бесконечно на долгой сессии
+}
+export function hasPid(key, pid) { if (!key || !pid) return false; const s = deliveredPids.get(key); return !!(s && s.has(pid)); }
 export const sessionAllow = new Map();       // sessionId -> Set<toolName> (сессионный «Разрешить всё»)
 export const VALID_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions']);   // P3: режимы разрешений
 export const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);               // уровни reasoning-effort SDK

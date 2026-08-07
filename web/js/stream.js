@@ -225,7 +225,7 @@ export function wireQuestion(el, d){
 export async function runPrompt(payload){
   const text = payload.text || '', mode = payload.mode || 'default', attachments = payload.attachments || [];
   try { removePending(S.currentFile, text); } catch {}   // ушёл живым ходом → в транскрипте, из pending снять
-  const model = payload.model || '', effort = payload.effort || '';
+  const model = payload.model || '', effort = payload.effort || '', pid = payload.pid || '';
   const queuedEl = payload.el;
   const cons = ensureConsole();
   const isCompactCmd = text.trim() === '/compact';
@@ -320,10 +320,10 @@ export async function runPrompt(payload){
     try {
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
       const body = isFork
-        ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim }
+        ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim, pid }
         : payload.newSessionCwd
-        ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, name: payload.pendingName || '', attachments: slim }
-        : { prompt: text, mode, model, effort, sessionFile: S.currentFile, attachments: slim };
+        ? { prompt: text, mode, model, effort, newSession: true, cwd: payload.newSessionCwd, name: payload.pendingName || '', attachments: slim, pid }
+        : { prompt: text, mode, model, effort, sessionFile: S.currentFile, attachments: slim, pid };
       const r = await fetch('/api/chat-prepare', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.token) throw new Error(d && d.error ? d.error : 'stage failed');
@@ -336,7 +336,7 @@ export async function runPrompt(payload){
       S.streamingFile = null; drainQueue(); return;
     }
   } else {
-    streamUrl = '/api/chat?file=' + encodeURIComponent(S.currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode) + '&model=' + encodeURIComponent(model) + '&effort=' + encodeURIComponent(effort);
+    streamUrl = '/api/chat?file=' + encodeURIComponent(S.currentFile) + '&prompt=' + encodeURIComponent(text) + '&mode=' + encodeURIComponent(mode) + '&model=' + encodeURIComponent(model) + '&effort=' + encodeURIComponent(effort) + '&pid=' + encodeURIComponent(pid);
   }
   const es = new EventSource(streamUrl);
   S.currentES = es;
@@ -353,11 +353,9 @@ export async function runPrompt(payload){
   const finish = (note, opts) => {
     if (finished) return; finished = true;
     teardownLive();                      // снять индикатор «работает» из чата + погасить таймер/ES/live-блоки
-    // Сам сжимающий запрос уходит с ПОЛНЫМ окном (вход = весь контекст) — его usage не отражает объём ПОСЛЕ сжатия.
-    // Показать его в рейле = полная красная полоса на только что сжатой сессии. Такой замер игнорируем.
-    const compactOwnUsage = isCompactCmd && opts && typeof opts.winTokens === 'number' && compactBefore
-      && typeof compactBefore.winTokens === 'number' && opts.winTokens >= compactBefore.winTokens * 0.8;
-    if (opts && typeof opts.ctxPct === 'number' && !compactOwnUsage) updateRailContext(opts.ctxPct, opts.winTokens);   // контекст в рейле — СРАЗУ по завершении, не ждём поллинг
+    // Контекст-бар/предупреждение НЕ трогаем сырым usage хода: у длинного/предсжатого хода это даёт ложную «полную»
+    // полосу, которая после перезахода исчезает (там compact-aware чтение). Обновит авторитетное чтение ниже
+    // (session-tail sync, оно же зовёт updateComposerWarnings) либо openSession (для compact).
     if (note) appendHTML(cons, '<div class="cx-note">' + esc(note) + '</div>');
     if (opts && opts.maxTurns){   // упёрлись в лимит шагов → кнопка продолжить ход (resume той же сессии)
       const cbEl = appendHTML(cons, '<div class="cx-note"><button class="q-submit" type="button" id="continueBtn">▶ Продолжить</button></div>');
@@ -381,6 +379,8 @@ export async function runPrompt(payload){
       const bPct = compactBefore && typeof compactBefore.ctxPct === 'number' ? Math.round(compactBefore.ctxPct * 100) : null;
       const aTok = opts && typeof opts.winTokens === 'number' ? opts.winTokens : null;
       const bTok = compactBefore && typeof compactBefore.winTokens === 'number' ? compactBefore.winTokens : null;
+      // Замер «после» от самого /compact — это вход сжимающего запроса (весь контекст), новый объём им не измерить.
+      const compactOwnUsage = aTok != null && bTok != null && aTok >= bTok * 0.8;
       let line = '✓ Контекст сжат';
       if (compactOwnUsage){
         // Замер после сжатия — это вход самого сжимающего запроса (весь контекст), новый объём им не измеришь.
@@ -414,7 +414,7 @@ export async function runPrompt(payload){
       // При Стопе НЕ перезапускаем tail: ход оборван, иначе tail всплыл бы призраком «работает» (баг «после Стопа появилось-исчезло»).
       setTimeout(async () => {
         if (S.currentFile !== f || S.streaming) return;
-        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; if (dd.serverActive) startTail(f); } catch {}
+        try { const r = await fetch('/api/session-tail?file=' + encodeURIComponent(f) + '&after=0', { cache:'no-store' }); const dd = await r.json(); if (typeof dd.count === 'number') S.tailCount = dd.count; updateRailContext(dd.ctxPct, dd.winTokens); if (dd.serverActive) startTail(f); } catch {}   // контекст-бар — из АВТОРИТЕТНОГО compact-aware чтения (не из сырого пика хода → нет «случайно заполнился»)
       }, 600);
     }
     if (opts && opts.stopped) clearQueue();          // Стоп → чистим очередь (не сыпем дальше)
@@ -498,7 +498,8 @@ export async function runPrompt(payload){
     } else if (d.type === 'turn'){
       // граница ХОДА в живой сессии (steering): предыдущий промт отработал, стрим НЕ рвём. Обновляем контекст,
       // сбрасываем индикатор шага и снимаем «ожидает» с подкинутых промтов (их ход сейчас начнётся).
-      updateRailContext(d.ctxPct, d.winTokens);
+      // Контекст-бар из сырого usage хода не обновляем (ложные пики → «случайно заполнился»); его ведёт авторитетное
+      // compact-aware чтение (tailTick / session-sync). Здесь только сбрасываем индикатор шага и счётчик токенов.
       waiting = false; activity = ''; t0 = Date.now(); tokBase = 0; charsSince = 0; paintRun();
       clearLive(); finalizeThink();
       cons.querySelectorAll('.cx-queued').forEach(el => { el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); });
@@ -512,6 +513,14 @@ export async function runPrompt(payload){
       if (f && S.currentFile === f){ startTail(f); S.serverBusy = true; }   // serverBusy ПОСЛЕ startTail (startTail→stopTail его сбрасывает) — гейт для composer держится до первого tailTick
     } else if (d.type === 'error'){
       finish('Ошибка: ' + (d.message || 'unknown'));   // ошибка стрима — очередь не двигаем
+    } else if (d.type === 'done' && d.subtype === 'dup'){
+      // Сервер: этот pid уже доставлен в сессию (exactly-once) → новый ход НЕ запускался. Гасим индикатор без ноты
+      // «завершено» и снимаем дубль-бабл: реальный промт с этим текстом уже есть в ленте раньше.
+      finished = true; teardownLive();
+      S.streamingFile = null; setComposerBusy(false);
+      if (queuedEl && queuedEl.parentElement) queuedEl.remove();
+      try { removePending(S.currentFile, text); } catch {}
+      drainQueue();
     } else if (d.type === 'done'){
       // Терминальное состояние хода ВСЕГДА видимо (не пустота): лимит шагов → причина + «Продолжить»; ошибка; иначе «завершено».
       const maxTurns = d.subtype === 'error_max_turns';

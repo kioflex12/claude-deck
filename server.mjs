@@ -174,4 +174,4 @@ if (_isMain) startServer(Number(process.env.PORT) || 4317);
 export { isBaseBranch, pickWorkingBranch, pickBaseBranch, classifyUserBlock, buildSessionBlocks, briefArg, woOf, columnByAge } from './text.mjs';
 export { wfInfo, scopeInfo } from './sessions.mjs';
 export { isReadOnlyTool, buildUserMessage, makeInputChannel } from './chat.mjs';
-export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams, SESSION_TOKEN } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop, токен-гейта
+export { pendingQuestions, pendingQuestionsByKey, pendingApprovals, pendingApprovalsByKey, activeStreams, markPid, hasPid, deliveredPids, SESSION_TOKEN } from './core.mjs';   // для тестов /api/answer, /api/pending-questions, /api/pending-approvals, /api/stop, токен-гейта

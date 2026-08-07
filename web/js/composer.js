@@ -337,13 +337,14 @@ export function clearQueue(){
 }
 
 function enqueuePrompt(payload){                          // отправлено во время стрима → в очередь (FIFO)
-  addPending(S.currentFile, payload.text, payload.attachments);   // переживёт перезаход (вместе со скринами)
+  if (!payload.pid) payload.pid = newPid();
+  addPending(S.currentFile, payload.text, payload.attachments, payload.pid);   // переживёт перезаход (вместе со скринами)
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
     if (payload.attachments && payload.attachments.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(payload.attachments));
     el.classList.add('cx-queued');
-    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">в очереди</div>');
+    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">в ожидании</div>');
     const runEl = cons.querySelector('.cx-run-chat'); if (runEl) cons.insertBefore(el, runEl);
   }
   payload.el = el;
@@ -363,28 +364,28 @@ export function drainQueue(){                                     // по зав
 // (/api/chat-input). Клод прочитает его на ближайшей границе шага/хода. Бабл рисуем сразу с меткой «ожидает»
 // (снимется на событии turn). Сервер не нашёл живой ход (только что завершился) → обычный новый ход тем же баблом.
 async function steerPrompt(payload){
-  addPending(S.currentFile, payload.text, payload.attachments);   // переживёт перезаход (вместе со скринами)
+  if (!payload.pid) payload.pid = newPid();
+  addPending(S.currentFile, payload.text, payload.attachments, payload.pid);   // переживёт перезаход (вместе со скринами)
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
     if (payload.attachments && payload.attachments.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(payload.attachments));
     el.classList.add('cx-queued');
-    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">⏳ отправлено в текущий ход — выполнится на его границе</div>');
+    el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">в ожидании</div>');
     const runEl = cons.querySelector('.cx-run-chat'); if (runEl) cons.insertBefore(el, runEl);
   }
   payload.el = el;
   scrollBottom();
   const slim = (payload.attachments || []).map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
-  let ok = false;
+  let ok = false, dup = false;
   try {
-    const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, prompt: payload.text, attachments: slim }) });
-    const d = await r.json(); ok = !!(d && d.ok);
+    const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, pid: payload.pid, prompt: payload.text, attachments: slim }) });
+    const d = await r.json(); ok = !!(d && d.ok); dup = !!(d && d.dup);
   } catch {}
-  // ok → промт принят в живой ход, но pending НЕ снимаем: снимется, когда его текст появится в транскрипте (tailTick /
-  // seen-проверка renderThread при перезаходе). Иначе был бы «слепой» промежуток — при перезаходе ДО того, как CLI
-  // допишет строку в .jsonl, промт исчезал из ленты, и было непонятно, доставлен ли он. Дубля не будет: реконсилер
-  // armPending досылает новым ходом только при простое, а этот push случается ровно один раз (при отправке).
-  if (!ok) runPrompt(payload);   // живого хода нет (только что завершился) → обычный новый ход тем же баблом (снимет pending на старте)
+  // pending снимается по появлению текста в транскрипте (tailTick / renderThread) — до этого промт виден как «в ожидании»,
+  // нет «слепого» окна. Дубля нет: доставка идемпотентна по pid на сервере (exactly-once), сколько бы раз ни повторили.
+  if (dup && el){ el.remove(); try { removePending(S.currentFile, payload.text); } catch {} }   // сервер: этот pid уже доставлен → бабл лишний, снимаем
+  else if (!ok) runPrompt(payload);   // живого хода нет (только что завершился) → обычный новый ход тем же баблом (снимет pending на старте)
 }
 
 // Персист «ожидающих» промтов (steer/очередь) по сессии — чтобы они переживали перезаход, а не терялись «вообще».
@@ -396,7 +397,7 @@ function savePending(file, arr){
     if (!arr || !arr.length){ localStorage.removeItem(PEND_PREFIX + file); return; }
     const slim = arr.slice(-20);
     try { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim)); }
-    catch { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim.map(x => ({ text:x.text, ts:x.ts })))); }   // квота переполнена тяжёлыми превью → сохраняем хотя бы текст
+    catch { localStorage.setItem(PEND_PREFIX + file, JSON.stringify(slim.map(x => ({ text:x.text, ts:x.ts, pid:x.pid })))); }   // квота переполнена тяжёлыми превью → сохраняем хотя бы текст+pid
   } catch {}
 }
 // Повторная отправка восстановленного «ожидающего» промта (кнопка ▶ Отправить). Промт в очереди живёт только в памяти
@@ -408,15 +409,17 @@ function savePending(file, arr){
 // параллельных ходов нет — транскрипт не задваивается; серверный single-writer — доп. страховка). Реально доставленный до
 // перезахода промт в pending уже снят (ack), поэтому авто-повтор не дублирует выполненное. preview хранит полный data-URL
 // → восстанавливаем отправляемое вложение (dataB64) из него.
-// Реконсилер «ожидающих» промтов после перезахода. Гоняется из renderThread (900мс) и КАЖДОГО tailTick (~4с), пока
-// промт не доставлен (появление его текста в транскрипте снимает pending в tailTick). Правило простое и БЕЗ дублей:
-//   • идёт ход → НЕ трогаем: промт уже либо докинут в живой канал самим steerPrompt (один раз, при отправке), либо
-//     дождётся простоя. Повторный push на каждом перезаходе давал дубли выполнения — поэтому здесь push нет.
-//   • свободно → отдаём НОВЫМ ходом (очередь + drainQueue, по одному). Это безопасно: завершившийся запрос отбрасывает
-//     недочитанное из канала, так что «висящего» дубля из canal не будет. runPrompt при старте снимает pending.
-// Промт при простое виден вживую (runPrompt рисует его и стримит ответ) — пользователь видит, ЧТО и КОГДА выполняется.
+// Реконсилер «ожидающих» промтов. Гоняется из renderThread (900мс) и КАЖДОГО tailTick (~4с), пока промт не доставлен
+// (появление его текста в транскрипте снимает pending). Доставка идемпотентна по pid на сервере (exactly-once), поэтому
+// повтор при каждом перезаходе безопасен:
+//   • идёт ход → докидываем в ЖИВОЙ канал (/api/chat-input, pid). Сервер: pid уже доставлен → {dup} (снимаем pending);
+//     иначе примет и отметит при реальной выдаче SDK. Мгновенное «подкидывание в текущий ход» без риска дубля.
+//   • свободно → отдаём НОВЫМ ходом (очередь + drainQueue, по одному). runPrompt несёт pid; сервер, если промт уже
+//     доставлен, вернёт {done,subtype:dup} — новый ход не запустится (гасит «выполнился ещё раз»).
+// S.pendingHandled — анти-спам В ПРЕДЕЛАХ одного захода (не долбить сервер каждые 4с одним и тем же); exactly-once
+// обеспечивает СЕРВЕР, клиентский набор лишь снижает лишние запросы.
 export function armPending(file){
-  if (!file || S.currentFile !== file || S.serverBusy || S.streaming) return;   // занято/стримим — ждём, не плодим ход
+  if (!file || S.currentFile !== file || S.streaming) return;   // Deck сам стримит — reconcile не нужен
   const pend = loadPending(file); if (!pend.length) return;
   const cons = document.querySelector('.cx-console');
   const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && (md.textContent || '').trim() === tx) return b; } return null; };
@@ -424,21 +427,35 @@ export function armPending(file){
   for (const it of pend){
     const text = String(it.text || '');
     const key = file + '\n' + text.trim();
-    if (S.pendingHandled.has(key)) continue;   // уже поставлен в очередь в этом заходе — не дублируем между тиками
-    S.pendingHandled.add(key);
+    if (S.pendingHandled.has(key)) continue;   // уже отправляли в этом заходе — ждём доставки, не спамим (дедуп добьёт сервер)
+    const pid = it.pid || newPid();
     const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
-    promptQueue.push({ text, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
-    queued = true;
+    if (S.serverBusy){
+      S.pendingHandled.add(key);
+      const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
+      fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, pid, prompt: text, attachments: slim }) })
+        .then(r => r.json())
+        .then(d => { if (d && d.dup){ removePending(file, text); const b = bubbleFor(text.trim()); if (b) b.remove(); } })   // уже доставлен → снять
+        .catch(() => S.pendingHandled.delete(key));   // сеть моргнула — повторим на следующем тике
+    } else {
+      S.pendingHandled.add(key);
+      promptQueue.push({ text, pid, mode:S.sessionMode, model:S.sessionModel, effort:S.sessionEffort, attachments, el: bubbleFor(text.trim()) });
+      queued = true;
+    }
   }
   if (queued){ updateQueueIndicator(); drainQueue(); }
 }
-export function addPending(file, text, attachments){
+export function addPending(file, text, attachments, pid){
   const tx = String(text || '');
   const atts = (attachments || []).map(a => ({ kind:a.kind, name:a.name, preview: a.kind==='image' ? (a.preview || '') : '' }));   // превью картинок переживают перезаход (чтобы скрин не пропадал)
   if (!file || (!tx.trim() && !atts.length)) return;
-  const a = loadPending(file); a.push({ text: tx, atts, ts: Date.now() }); savePending(file, a);
+  const a = loadPending(file); a.push({ text: tx, atts, ts: Date.now(), pid: pid || newPid() }); savePending(file, a);   // pid — для exactly-once доставки после перезахода
 }
 export function removePending(file, text){ if (!file) return; const t = String(text || '').trim(); savePending(file, loadPending(file).filter((x) => String(x && x.text || '').trim() !== t)); }
+
+// Уникальный id промта — сквозной ключ exactly-once доставки: сервер по нему гарантирует ровно один запуск, сколько бы
+// раз клиент ни повторил доставку (перезаход, ретрай, живой канал + новый ход). Math.random/Date.now — это браузер.
+export function newPid(){ return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
 function sendMessage(){
   const ta = document.getElementById('composer-ta'); if (!ta) return;
@@ -451,7 +468,7 @@ function sendMessage(){
   saveDraft(S.currentFile, '');                           // промт ушёл — черновик снят (иначе вернулся бы при следующем заходе)
   attachDraft.length = 0; renderAttachDraft();            // черновик вложений очищаем
   const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = true;
-  const payload = { text, mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
+  const payload = { text, pid: newPid(), mode: S.sessionMode, model: S.sessionModel, effort: S.sessionEffort, attachments };
   if (!S.currentFile && S.pendingNewSession){ payload.newSessionCwd = S.pendingNewSession.cwd; payload.pendingName = S.pendingNewSession.name; }  // первый промт → создать именованную сессию
   if ((S.streaming || S.serverBusy) && S.currentFile){ steerPrompt(payload); return; }   // жив ход (SSE ИЛИ серверный, если канал оборвался) → докидываем в него (steering); НЕ плодим 2-й ход = не будет дубля «Claude работает»
   if (S.streaming){ enqueuePrompt(payload); return; }       // стрим новой (файла ещё нет) → в очередь до появления сессии

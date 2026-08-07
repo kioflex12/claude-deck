@@ -7,6 +7,7 @@ import {
   sendJSON, readJsonBody, dbgLog, CTX_LIMIT,
   VALID_MODES, VALID_EFFORTS, READ_ONLY_TOOLS, USER_INPUT_TOOLS, EDIT_TOOLS, PROJECTS_DIR,
   pendingApprovals, pendingApprovalsByKey, pendingQuestions, pendingQuestionsByKey, activeStreams, sessionAllow, stagedRequests,
+  deliveredPids, markPid, hasPid,
   setRunStatus,
 } from './core.mjs';
 import { firstString, toolCmd, toolDesc } from './text.mjs';
@@ -51,18 +52,28 @@ export function buildUserMessage(text, attachments) {
   for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType || 'image/png', data: im.dataB64 } });
   return { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null };
 }
-// Async-канал ввода: gen() отдаёт очередь по мере наполнения; push добавляет сообщение (разбудив ожидание),
+// Async-канал ввода: элементы — { message, pid }. gen() отдаёт очередь по мере наполнения и в момент ВЫДАЧИ сообщения
+// SDK зовёт onConsume(pid) — это и есть точка «промт реально пошёл в работу» (для exactly-once дедупа). push добавляет
+// элемент (разбудив ожидание); дубль pid, уже виденный этим каналом, тихо игнорируется (return true — «принято»).
 // end() закрывает поток (gen завершится, когда очередь опустеет → query штатно завершится).
 export function makeInputChannel(first) {
   const queue = first ? [first] : [];
-  let wake = null, ended = false;
+  const seen = new Set(); if (first && first.pid) seen.add(first.pid);
+  let wake = null, ended = false, onConsume = null;
   return {
-    push(msg) { if (ended) return false; queue.push(msg); if (wake) { const w = wake; wake = null; w(); } return true; },   // false → канал закрыт (гонка с завершением) → клиент фолбэкнется на новый ход
+    setOnConsume(fn) { onConsume = fn; },
+    hasPid(pid) { return !!pid && seen.has(pid); },
+    push(item) {
+      if (ended) return false;                                  // канал закрыт (гонка с завершением) → клиент фолбэкнется на новый ход
+      if (item && item.pid && seen.has(item.pid)) return true;   // этот pid канал уже принял — не дублируем в очереди
+      if (item && item.pid) seen.add(item.pid);
+      queue.push(item); if (wake) { const w = wake; wake = null; w(); } return true;
+    },
     end() { ended = true; if (wake) { const w = wake; wake = null; w(); } },
     pending() { return queue.length; },
     async *gen() {
       while (true) {
-        if (queue.length) { yield queue.shift(); continue; }   // сначала осушаем очередь (даже если end уже вызван)
+        if (queue.length) { const it = queue.shift(); if (it && it.pid && onConsume) { try { onConsume(it.pid); } catch {} } yield it.message; continue; }   // осушаем очередь; отметка pid — в момент реальной выдачи
         if (ended) return;
         await new Promise((r) => { wake = r; });                // ждём push/end
       }
@@ -85,13 +96,14 @@ export async function apiChatPrepare(req, res) {
   const fork = body.fork === true;                     // форк: resume + forkSession — новый id с контекстом исходной
   const cwd = String(body.cwd || '');
   const name = String(body.name || '').slice(0, 120);  // заданное пользователем имя новой сессии — сервер закрепит его при создании (устойчивее клиентского POST: без гонки и без расхождения rel)
+  const pid = String(body.pid || '').slice(0, 40);     // exactly-once id промта (дедуп между путями доставки)
   let bytes = 0;
   for (const a of attachments) bytes += (a && a.dataB64 ? a.dataB64.length : 0) + (a && a.text ? a.text.length : 0);
   if (bytes > STAGE_MAX_BYTES) { sendJSON(res, { error: 'attachments too large (~18MB limit)' }, 413); return; }
   const now = Date.now();
   for (const [k, v] of stagedRequests) if (now - v.ts > 5 * 60 * 1000) stagedRequests.delete(k);   // sweep старьё
   const token = 'st_' + now.toString(36) + Math.random().toString(36).slice(2, 10);
-  stagedRequests.set(token, { sessionFile, prompt, mode, model, effort, attachments, newSession, cwd, fork, name, ts: now });
+  stagedRequests.set(token, { sessionFile, prompt, mode, model, effort, attachments, newSession, cwd, fork, name, pid, ts: now });
   sendJSON(res, { token });
 }
 
@@ -109,7 +121,7 @@ export async function apiChat(req, res, u) {
   const heartbeat = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 15000);
 
   // Источник запроса: одноразовый token (P4-стадирование / новая сессия) ИЛИ прямые query-параметры (P1/P3)
-  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '', newName = '';
+  let relFile = '', prompt = '', mode = 'default', attachments = [], isNew = false, newCwd = '', isFork = false, model = '', effort = '', newName = '', pid = '';
   const token = u.searchParams.get('token');
   if (token) {
     const staged = stagedRequests.get(token);
@@ -124,11 +136,13 @@ export async function apiChat(req, res, u) {
     isFork = staged.fork === true;                                  // форк: resume исходной + forkSession
     newCwd = staged.cwd || '';
     newName = staged.name || '';
+    pid = staged.pid || '';
   } else {
     relFile = u.searchParams.get('file') || '';
     prompt = u.searchParams.get('prompt') || '';
     mode = u.searchParams.get('mode') || 'default';                 // P3: режим разрешений из чата (shift-tab)
     model = u.searchParams.get('model') || ''; effort = u.searchParams.get('effort') || '';
+    pid = u.searchParams.get('pid') || '';
   }
   if (!VALID_MODES.has(mode)) mode = 'default';                     // неизвестное → безопасный default
   if (effort && !VALID_EFFORTS.has(effort)) effort = '';            // неизвестный effort → по умолчанию
@@ -156,10 +170,17 @@ export async function apiChat(req, res, u) {
   // этот SSE событием 'steered' — клиент перейдёт на tail и увидит продолжение. Push не прошёл (канал закрывается) →
   // падаем на обычный новый ход ниже. Клиентский гейт (S.serverBusy при перезаходе) закрывает окно до первого tailTick,
   // это — серверная страховка на остаточную гонку.
+  // Exactly-once: этот промт уже потреблён в ЭТОЙ сессии (доставлен ранее — напр. живым каналом) → второй ход не плодим.
+  // Гасит дубль «перезашёл → выполнился сразу → потом ещё раз»: доставка живым каналом отметила pid, новый ход его видит.
+  if (!isNew && sessionId && pid && hasPid(sessionId, pid)) {
+    dbgLog('chat DUP-PID session=' + sessionId + ' pid=' + pid + ' — пропускаем новый ход');
+    clearInterval(heartbeat); send({ type: 'done', subtype: 'dup', isError: false }); try { res.end(); } catch {} return;
+  }
+
   if (!isNew && sessionId) {
     for (const e of activeStreams.values()) {
       if (e && e.key === sessionId && typeof e.push === 'function') {
-        const steered = e.push(buildUserMessage(prompt, attachments)) === true;
+        const steered = e.push({ message: buildUserMessage(prompt, attachments), pid }) === true;
         dbgLog('chat SINGLE-WRITER session=' + sessionId + ' steered=' + steered);
         if (steered) { clearInterval(heartbeat); send({ type: 'steered' }); try { res.end(); } catch {} return; }
         break;   // нашли живой поток, но канал закрывается — обычный новый ход
@@ -167,7 +188,8 @@ export async function apiChat(req, res, u) {
     }
   }
 
-  const channel = makeInputChannel(buildUserMessage(prompt, attachments));   // steering: первый промт + канал для подкидываемых
+  const channel = makeInputChannel({ message: buildUserMessage(prompt, attachments), pid });   // steering: первый промт (+pid) + канал для подкидываемых
+  channel.setOnConsume((p) => { if (sessionKey) markPid(sessionKey, p); });   // pid отмечается доставленным в момент реальной выдачи сообщения SDK
   const ac = new AbortController();
   let closed = false;
   const streamId = 'sx_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -353,10 +375,12 @@ export async function apiChatInput(req, res, u) {
   const key = file ? path.basename(file).replace(/\.jsonl$/, '') : '';
   const prompt = String(body.prompt || '');
   const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 20) : [];
+  const pid = String(body.pid || '').slice(0, 40);
   if (!prompt.trim() && !attachments.length) { sendJSON(res, { ok: false, reason: 'empty' }); return; }
+  if (pid && key && hasPid(key, pid)) { sendJSON(res, { ok: true, dup: true }); return; }   // уже доставлен в эту сессию → не дублируем (клиент снимет pending)
   let pushed = false;
-  if (key) for (const e of activeStreams.values()) { if (e && e.key === key && typeof e.push === 'function') { pushed = e.push(buildUserMessage(prompt, attachments)) === true; break; } }
-  sendJSON(res, { ok: pushed });
+  if (key) for (const e of activeStreams.values()) { if (e && e.key === key && typeof e.push === 'function') { pushed = e.push({ message: buildUserMessage(prompt, attachments), pid }) === true; break; } }
+  sendJSON(res, { ok: pushed });   // pid отметится доставленным при реальной выдаче каналом (onConsume), не здесь
 }
 
 // Явный обрыв хода: по streamId (живой стрим) ИЛИ по файлу сессии (после перезахода streamId у клиента потерян, но ход
