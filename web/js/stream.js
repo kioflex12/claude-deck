@@ -518,7 +518,7 @@ export async function runPrompt(payload){
       // «завершено» и снимаем дубль-бабл: реальный промт с этим текстом уже есть в ленте раньше.
       finished = true; teardownLive();
       S.streamingFile = null; setComposerBusy(false);
-      if (queuedEl && queuedEl.parentElement) queuedEl.remove();
+      if (queuedEl){ queuedEl.classList.remove('cx-queued'); const qt = queuedEl.querySelector('.cx-queued-tag'); if (qt) qt.remove(); }   // дубль → бабл финализируем (остаётся видимым сообщением), не удаляем
       try { removePending(S.currentFile, text); } catch {}
       drainQueue();
     } else if (d.type === 'done'){

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { watchBrokenRefs, makeEl } from './dom-stub.mjs';
 import { S } from '../web/js/store.js';
 import { renderThread, blockHTML, appendHTML } from '../web/js/transcript.js';
+import { addShown, loadShown } from '../web/js/composer.js';
 
 test('transcript.js: blockHTML всех видов + renderThread + appendHTML в null-DOM', async () => {
   const w = watchBrokenRefs();
@@ -45,4 +46,29 @@ test('transcript.js: blockHTML всех видов + renderThread + appendHTML �
   await new Promise((r) => setTimeout(r, 20));
   w.stop();
   assert.deepEqual(w.errors, [], 'сломанная ссылка в transcript.js: ' + w.errors.join(' | '));
+});
+
+test('addShown: лог подкинутых промтов — дедуп по pid; хранит текст/скрины', () => {
+  localStorage.clear();
+  addShown('fx', 'подкинутый', [{ kind:'image', name:'s.png', preview:'data:,' }], 'p1');
+  addShown('fx', 'подкинутый', [], 'p1');                 // тот же pid → не дублируем
+  addShown('fx', 'второй', [], 'p2');
+  const log = loadShown('fx');
+  assert.equal(log.length, 2, 'дедуп по pid: p1 один раз, p2 добавлен');
+  assert.equal(log[0].pid, 'p1'); assert.equal(log[0].atts.length, 1, 'скрин сохранён в логе показа');
+  assert.equal(loadShown('other').length, 0, 'лог по ключу файла');
+  localStorage.clear();
+});
+
+test('renderThread со shown-логом подкинутых промтов не падает и не теряет лог (null-DOM)', async () => {
+  const w = watchBrokenRefs();
+  localStorage.clear();
+  addShown('finj', 'мой подкинутый промт', [], 'pid-x');   // steered, в .jsonl не попал
+  addShown('finj', 'этот уже в транскрипте', [], 'pid-y');
+  assert.doesNotThrow(() => renderThread({ file:'finj', active:false, blocks:[ { kind:'user', text:'этот уже в транскрипте' }, { kind:'assistant', text:'ответ' } ] }));
+  assert.equal(loadShown('finj').length, 2, 'лог показа не стирается рендером (это персистентная история подкинутого)');
+  localStorage.clear();
+  await new Promise((r) => setTimeout(r, 20));
+  w.stop();
+  assert.deepEqual(w.errors, [], 'сломанная ссылка: ' + w.errors.join(' | '));
 });

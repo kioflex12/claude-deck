@@ -366,6 +366,7 @@ export function drainQueue(){                                     // по зав
 async function steerPrompt(payload){
   if (!payload.pid) payload.pid = newPid();
   addPending(S.currentFile, payload.text, payload.attachments, payload.pid);   // переживёт перезаход (вместе со скринами)
+  addShown(S.currentFile, payload.text, payload.attachments, payload.pid);      // подкинутый промт SDK может не записать в .jsonl → держим свою запись для показа
   const cons = ensureConsole();
   const el = appendHTML(cons, blockHTML({ kind:'user', text: payload.text }));
   if (el){
@@ -384,7 +385,7 @@ async function steerPrompt(payload){
   } catch {}
   // pending снимается по появлению текста в транскрипте (tailTick / renderThread) — до этого промт виден как «в ожидании»,
   // нет «слепого» окна. Дубля нет: доставка идемпотентна по pid на сервере (exactly-once), сколько бы раз ни повторили.
-  if (dup && el){ el.remove(); try { removePending(S.currentFile, payload.text); } catch {} }   // сервер: этот pid уже доставлен → бабл лишний, снимаем
+  if (dup){ finalizeQueuedBubble(el); try { removePending(S.currentFile, payload.text); } catch {} }   // сервер: pid уже доставлен → бабл финализируем (остаётся как обычное сообщение), не удаляем
   else if (!ok) runPrompt(payload);   // живого хода нет (только что завершился) → обычный новый ход тем же баблом (снимет pending на старте)
 }
 
@@ -432,10 +433,11 @@ export function armPending(file){
     const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
     if (S.serverBusy){
       S.pendingHandled.add(key);
+      addShown(file, text, attachments, pid);   // подкидываем в живой ход → фиксируем для показа (SDK может не записать в .jsonl)
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
       fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, pid, prompt: text, attachments: slim }) })
         .then(r => r.json())
-        .then(d => { if (d && d.dup){ removePending(file, text); const b = bubbleFor(text.trim()); if (b) b.remove(); } })   // уже доставлен → снять
+        .then(d => { if (d && d.dup){ removePending(file, text); finalizeQueuedBubble(bubbleFor(text.trim())); } })   // уже доставлен → финализируем бабл (не удаляем)
         .catch(() => S.pendingHandled.delete(key));   // сеть моргнула — повторим на следующем тике
     } else {
       S.pendingHandled.add(key);
@@ -452,6 +454,23 @@ export function addPending(file, text, attachments, pid){
   const a = loadPending(file); a.push({ text: tx, atts, ts: Date.now(), pid: pid || newPid() }); savePending(file, a);   // pid — для exactly-once доставки после перезахода
 }
 export function removePending(file, text){ if (!file) return; const t = String(text || '').trim(); savePending(file, loadPending(file).filter((x) => String(x && x.text || '').trim() !== t)); }
+
+// Персистентный лог ПОДКИНУТЫХ (steered) промтов для показа. Их SDK не всегда пишет в .jsonl (streaming-input), поэтому
+// после перезахода в транскрипте их нет — единственная надёжная запись клиентская. Держим текст/скрины/pid, рендерим
+// в ленте, если такого текста нет в транскрипте (renderThread). Так пользователь ВСЕГДА видит, что промт был подкинут.
+const SHOWN_PREFIX = 'deckShown:';
+export function loadShown(file){ try { return JSON.parse(localStorage.getItem(SHOWN_PREFIX + file) || '[]'); } catch { return []; } }
+export function addShown(file, text, attachments, pid){
+  const tx = String(text || ''); const atts = (attachments || []).map(a => ({ kind:a.kind, name:a.name, preview: a.kind==='image' ? (a.preview || '') : '' }));
+  if (!file || (!tx.trim() && !atts.length)) return;
+  const a = loadShown(file);
+  if (pid && a.some(x => x.pid === pid)) return;   // уже записан
+  a.push({ text: tx, atts, ts: Date.now(), pid: pid || '' });
+  try { localStorage.setItem(SHOWN_PREFIX + file, JSON.stringify(a.slice(-50))); }
+  catch { try { localStorage.setItem(SHOWN_PREFIX + file, JSON.stringify(a.slice(-50).map(x => ({ text:x.text, ts:x.ts, pid:x.pid })))); } catch {} }   // квота → хотя бы текст
+}
+// Финализировать «ожидающий» бабл в обычное сообщение (подкинутый промт доставлен): снять метку/класс ожидания.
+export function finalizeQueuedBubble(el){ if (!el) return; el.classList.remove('cx-queued'); const t = el.querySelector('.cx-queued-tag'); if (t) t.remove(); }
 
 // Уникальный id промта — сквозной ключ exactly-once доставки: сервер по нему гарантирует ровно один запуск, сколько бы
 // раз клиент ни повторил доставку (перезаход, ретрай, живой канал + новый ход). Math.random/Date.now — это браузер.

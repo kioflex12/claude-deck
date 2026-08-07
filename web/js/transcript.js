@@ -3,7 +3,7 @@
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
-import { loadPending, removePending, armPending } from './composer.js';
+import { loadPending, removePending, armPending, loadShown } from './composer.js';
 
 const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
 const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
@@ -145,6 +145,26 @@ export function renderThread(t){
           el.classList.add('cx-queued');
           el.insertAdjacentHTML('beforeend', '<div class="cx-queued-tag">в ожидании <button class="cx-queued-x" type="button" title="Отменить">✕</button></div>');
           const x = el.querySelector('.cx-queued-x'); if (x) x.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); removePending(t.file, it.text || ''); });   // отменить авто-дослку (снять до arm)
+        }
+      }
+    }
+  } catch {}
+  try {   // ПОДКИНУТЫЕ (steered) промты, которых нет в транскрипте (SDK их не записал) и нет среди «в ожидании» — показать
+    // как обычные доставленные сообщения, чтобы пользователь видел, что промт реально был подкинут (а не пропал).
+    const shown = loadShown(t.file);
+    if (shown.length){
+      const cons = document.querySelector('.cx-console');
+      const inTranscript = new Set(blocks.filter((b) => b.kind === 'user').map((b) => String(b.text || '').trim()));
+      const pendingTexts = new Set(loadPending(t.file).map((x) => String(x && x.text || '').trim()));
+      if (cons) for (const it of shown){
+        const tx = String(it && it.text || '').trim();
+        const atts = (it && it.atts) || [];
+        if (!tx && !atts.length) continue;
+        if (tx && (inTranscript.has(tx) || pendingTexts.has(tx))) continue;   // уже показан транскриптом или «в ожидании»-баблом
+        const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
+        if (el){
+          if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));
+          el.insertAdjacentHTML('beforeend', '<div class="cx-injected-tag">подкинуто</div>');   // метка: промт доставлен подкидыванием (в истории CLI его может не быть)
         }
       }
     }
