@@ -36,6 +36,7 @@ test('session.js: открытие сессии + композер + стрим 
     { kind:'tool', name:'Read', arg:'x', result:'y' },
   ] };
 
+  S.paneMode = true;                          // тестируем классический рендер сессии (в проде это путь iframe-пани воркспейса)
   await session.openSession('f1');            // sideHTML/renderThread/renderComposer/wiring/loadBuilds/loadMrs/loadJira/loadSkills
   composer.renderComposer(S.SESSIONS[0]);
   composer.paintMode();

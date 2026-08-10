@@ -8,7 +8,7 @@ import { loadSkillsCatalog } from './skills.js';
 import { loadUsage, openUsageModal } from './usage.js';
 import { hydrateMrs, hydrateJira, startHealthPoll } from './services.js';
 import { openSession } from './session.js';
-import { setView, ensureStatusTab, openPal, restoreOpenFiles } from './nav.js';
+import { setView, ensureStatusTab, openPal } from './nav.js';
 import { workingSet, seedJiraFromSessions, startPolling, initNotifyToggle } from './notify.js';
 import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
@@ -47,10 +47,11 @@ S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (def
 // Дескриптор пани лежит в localStorage['deckPane:<id>']; сюда приходит только id через ?pane=.
 const PANE_ID = (new URLSearchParams(location.search)).get('pane') || '';
 export const PANE_MODE = !!PANE_ID;
+S.paneMode = PANE_MODE;   // читает session.js: в пане openSession рисует сессию классически, в верхнем окне — маршрутизирует в воркспейс
 if (PANE_MODE) document.documentElement.classList.add('pane-mode');
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.93';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.94';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -143,7 +144,6 @@ export async function load(){
     const data = await r.json();
     S.SESSIONS = Array.isArray(data.sessions) ? data.sessions : [];
   } catch (e) { S.SESSIONS = []; }
-  restoreOpenFiles();                  // вернуть полосу открытых вкладок после релоада (список сессий уже загружен)
   seedJiraFromSessions();              // Jira уже в payload → колонки верны на первом рендере
   S.prevWorkingFiles = workingSet();     // базовая линия: на старте «завершения» не шлём
   renderFilters();

@@ -84,8 +84,19 @@ export function addWorkspaceSession(desc){
 // Дескриптор в форме, которую читает pane-режим iframe (см. app.js bootPane).
 function descForIframe(desc){
   if (desc.kind === 'file') return { kind:'file', file: desc.file, title: desc.title || '' };
-  return { kind:'new', cwd: desc.cwd, name: desc.name || '', mode: desc.mode || 'default', model: desc.model || '', effort: desc.effort || '', prompt: desc.prompt || '', title: desc.title || desc.name || '' };
+  return { kind:'new', cwd: desc.cwd, name: desc.name || '', mode: desc.mode || 'default', model: desc.model || '', effort: desc.effort || '', prompt: desc.prompt || '', forkFile: desc.forkFile || '', title: desc.title || desc.name || '' };
 }
+
+// Открыть СУЩЕСТВУЮЩУЮ сессию в воркспейсе (единая точка для карточек/палитры/уведомлений верхнего окна). Если уже
+// открыта вкладкой — активируем её, иначе добавляем в последнюю группу. Дубликатов одной сессии не плодим.
+export function openWorkspaceForFile(file, title){
+  if (!file) return;
+  const hit = tabByFile(file);
+  if (hit){ WS.lastLeaf = hit.leaf.id; saveWS(); gotoWorkspace(); activate(hit.leaf, hit.i); return; }
+  const s = (S.SESSIONS || []).find(x => x.file === file);
+  addWorkspaceSession({ kind:'file', file, title: title || (s && s.title) || 'сессия' });
+}
+function tabByFile(file){ let r = null; walk(WS.root, n => { if (n.t === 'leaf'){ const i = n.tabs.findIndex(t => t.file === file); if (i >= 0) r = { leaf:n, i }; } }); return r; }
 
 function gotoWorkspace(){
   const tab = document.querySelector('.tab[data-v="workspace"]');

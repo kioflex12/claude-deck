@@ -52,9 +52,10 @@ function buildDevWorkflowPrompt(f){
   return p;
 }
 
-// opts.target: 'classic' (по умолчанию — открыть в основном экране) | 'workspace' (открыть паней в воркспейсе).
+// Новая сессия всегда открывается паней в воркспейсе (единый дом сессий). target='classic' оставлен как аварийный
+// путь, но по умолчанию — воркспейс.
 export async function openNewSessionDialog(dlgOpts={}){
-  const target = dlgOpts.target === 'workspace' ? 'workspace' : 'classic';
+  const target = dlgOpts.target === 'classic' ? 'classic' : 'workspace';
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
@@ -198,7 +199,7 @@ function openPendingNewSession(cwd, name, mode, model, effort){
 export function openNewSessionInDir(cwd, name){
   if (!cwd || !requireAuth()) return;
   const nm = name || (String(cwd).split(/[\\/]/).filter(Boolean).pop() || 'сессия');
-  openPendingNewSession(cwd, nm, S.sessionMode || 'default', S.sessionModel || '', S.sessionEffort || '');
+  addWorkspaceSession({ kind:'new', cwd, name: nm, mode: S.sessionMode || 'default', model: S.sessionModel || '', effort: S.sessionEffort || '', title: nm });
 }
 // Форк / режим-запуск остаются с промтом (продолжение контекста или собранный первый промт скилла): создаём и сразу
 // отправляем. opts.name закрепляется как заголовок карточки, opts.model/effort — настройки первого запроса.
@@ -233,7 +234,8 @@ function openNewSession(cwd, prompt, mode, forkFile, opts={}){
 // сам bootPane через openSession — сюда не попадают.
 export function startDescriptorSession(desc){
   if (!desc || desc.kind !== 'new') return;
-  if (desc.prompt) openNewSession(desc.cwd, desc.prompt, desc.mode || 'default', null, { name: desc.name || '', model: desc.model || '', effort: desc.effort || '' });
+  if (desc.forkFile) openNewSession(desc.cwd, desc.prompt || '', desc.mode || 'default', desc.forkFile, { name: desc.name || '', model: desc.model || '', effort: desc.effort || '' });
+  else if (desc.prompt) openNewSession(desc.cwd, desc.prompt, desc.mode || 'default', null, { name: desc.name || '', model: desc.model || '', effort: desc.effort || '' });
   else openPendingNewSession(desc.cwd, desc.name || 'сессия', desc.mode || 'default', desc.model || '', desc.effort || '');
 }
 
@@ -318,7 +320,8 @@ export function openForkDialog(t){
     const mode = back.querySelector('#forkMode').value;
     if (!prompt){ back.querySelector('#forkPrompt').focus(); return; }
     back.classList.remove('open');
-    openNewSession(t.cwd, prompt, mode, t.file);   // forkFile = исходная сессия
+    const nm = 'Форк: ' + (t.title || t.file);
+    addWorkspaceSession({ kind:'new', cwd: t.cwd, name: nm, mode, prompt, forkFile: t.file, title: nm });   // форк тоже открываем паней в воркспейсе
   });
   back.classList.add('open');
   setTimeout(()=>{ const p = back.querySelector('#forkPrompt'); if (p) p.focus(); }, 60);

@@ -12,8 +12,12 @@ import { sideHTML, wireRailTabs, scopeChipsHTML } from './rail.js';
 import { renderThread, appendHTML } from './transcript.js';
 import { renderComposer, loadSkills, applySessionSettings } from './composer.js';
 import { stopStream, startRailRefresh, questionCardHTML, wireQuestion, approvalCardHTML, wireApproval } from './stream.js';
+import { openWorkspaceForFile } from './workspace.js';
 
 export async function openSession(file){
+  // Верхнее окно: сессии живут в воркспейсе (сплит-лейаут), а не в одиночном экране — маршрутизируем туда. В pane-режиме
+  // (этот же Deck в iframe воркспейса, S.paneMode=true) openSession работает классически: именно он и рисует сессию внутри пани.
+  if (!S.paneMode){ openWorkspaceForFile(file); return; }
   stopStream();   // закрыть стрим прошлой сессии, если был
   S.currentFile = file;
   S.pendingHandled = new Set();   // новый заход в контекст → заново пытаться доставить ещё не доставленные pending-промты
