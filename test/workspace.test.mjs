@@ -24,6 +24,11 @@ test('workspace.js: пустой воркспейс + добавление се�
   assert.equal(ws.root.tabs.length, 2, 'две вкладки в группе');
   assert.ok(ws.lastLeaf, 'запомнена последняя сфокусированная группа (в неё падает следующая сессия)');
 
+  addWorkspaceSession({ kind:'file', file:'a.jsonl', title:'A' });   // уже открыта → фокус, а не дубль
+  const ws2 = JSON.parse(localStorage.getItem('deckWorkspace') || 'null');
+  const tabs2 = []; (function walk(n){ if(!n) return; if(n.t==='leaf') n.tabs.forEach(t=>tabs2.push(t.file)); else { walk(n.a); walk(n.b); } })(ws2.root);
+  assert.equal(tabs2.filter(f => f==='a.jsonl').length, 1, 'повторное открытие той же сессии не плодит дубль');
+
   await new Promise((r) => setTimeout(r, 20));
   w.stop();
   assert.deepEqual(w.errors, [], 'сломанная ссылка в workspace.js: ' + w.errors.join(' | '));

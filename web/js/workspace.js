@@ -35,6 +35,7 @@ function loadWS(){
   // восстановить счётчик id выше всех сохранённых, чтобы новые id не коллизились
   let max = 0; walk(WS.root, n => { const m = String(n.id||'').match(/(\d+)$/); if (m) max = Math.max(max, +m[1]); if (n.t==='leaf') n.tabs.forEach(t=>{ const mm=String(t.id||'').match(/(\d+)$/); if (mm) max=Math.max(max,+mm[1]); }); });
   seq = max + 1;
+  removeDuplicateTabs();   // подчистить сохранённые дубли одной сессии (могли накопиться до фикса дедупа)
 }
 function saveWS(){ try { localStorage.setItem(WS_KEY, JSON.stringify(WS)); } catch {} }
 const leafId = () => 'L' + (seq++);
@@ -64,10 +65,29 @@ function collapseLeaf(leaf){
   if (WS.lastLeaf === leaf.id) WS.lastLeaf = (firstLeaf(sib) || {}).id || null;
 }
 
+// Убрать дубли одной сессии: если один файл открыт в нескольких вкладках, оставляем первую, остальные закрываем.
+// Возвращает true, если что-то удалили. Layer/DOM могут ещё не существовать (зов на loadWS) — тогда чистим только модель.
+function removeDuplicateTabs(){
+  const seen = new Set(); const dupes = [];
+  walk(WS.root, n => { if (n.t === 'leaf') n.tabs.forEach(t => { if (t.file){ if (seen.has(t.file)) dupes.push(t.id); else seen.add(t.file); } }); });
+  if (!dupes.length) return false;
+  for (const id of dupes){
+    const leaf = leafOfTab(id); if (leaf){ const i = leaf.tabs.findIndex(t => t.id === id); if (i >= 0){ leaf.tabs.splice(i, 1); if (leaf.active >= leaf.tabs.length) leaf.active = Math.max(0, leaf.tabs.length - 1); if (!leaf.tabs.length) collapseLeaf(leaf); } }
+    delDesc(id); mounted.delete(id);
+    const f = layer && layer.querySelector(`.ws-frame[data-tab="${cssq(id)}"]`); if (f) f.remove();
+  }
+  saveWS();
+  return true;
+}
+
 // ── добавление / открытие сессии ────────────────────────────────────────────
 // Открыть сессию в воркспейсе. desc — дескриптор пани: {kind:'file',file,title} для существующей сессии либо
 // {kind:'new',cwd,name,mode,model,effort,prompt?,forkFile?,title} для новой (prompt задан → сразу запуск скилла).
 export function addWorkspaceSession(desc){
+  if (desc.kind === 'file' && desc.file){   // уже открыта такой же сессией → фокус на неё, не плодим дубль
+    const hit = tabByFile(desc.file);
+    if (hit){ WS.lastLeaf = hit.leaf.id; saveWS(); gotoWorkspace(); activate(hit.leaf, hit.i); return; }
+  }
   const id = tabId();
   const tab = { id, kind: desc.kind, file: desc.file || '', title: desc.title || desc.name || 'сессия' };
   writeDesc(id, descForIframe(desc));
@@ -308,7 +328,12 @@ if (typeof window !== 'undefined' && window.addEventListener) window.addEventLis
 });
 // Новая сессия обрела файл (первый промт создал .jsonl) → фиксируем в дереве и дескрипторе, чтобы перезаход iframe
 // перецепился к реальной сессии. iframe НЕ перезагружаем — сессия в нём уже открыта.
-function onPaneFile(tid, file, title){ const t = tabById(tid); if (!t) return; t.kind='file'; t.file=file; if (title) t.title=title; writeDesc(tid, { kind:'file', file, title: t.title }); saveWS(); updateTabTitle(tid); }
+function onPaneFile(tid, file, title){
+  const t = tabById(tid); if (!t) return;
+  t.kind = 'file'; t.file = file; if (title) t.title = title;
+  writeDesc(tid, { kind: 'file', file, title: t.title }); saveWS(); updateTabTitle(tid);
+  if (removeDuplicateTabs()) renderWorkspace();   // новая сессия резолвнулась в уже открытый файл → схлопнуть дубль
+}
 function onPaneTitle(tid, title){ const t = tabById(tid); if (!t || !title) return; t.title = title; const d = readDesc(tid) || {}; d.title = title; writeDesc(tid, d); saveWS(); updateTabTitle(tid); }
 function onPaneFocus(tid){ const leaf = leafOfTab(tid); if (!leaf) return; if (WS.lastLeaf !== leaf.id){ WS.lastLeaf = leaf.id; saveWS(); markFocus(); } }
 function updateTabTitle(tid){ const el = document.querySelector(`.ws-tab[data-tab="${cssq(tid)}"] .ws-tt`); if (el){ const t = tabById(tid); el.textContent = t ? (t.title||'сессия') : ''; } }
