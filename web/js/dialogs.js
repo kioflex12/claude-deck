@@ -16,6 +16,7 @@ import { pollSessions } from './notify.js';
 import { loadUsage } from './usage.js';
 import { loadEnvStatus } from './attention.js';
 import { loadModelsCatalog, UI_BUILD } from './app.js';
+import { addWorkspaceSession } from './workspace.js';
 
 export function modalBack(id){
   let back = document.getElementById(id);
@@ -51,7 +52,9 @@ function buildDevWorkflowPrompt(f){
   return p;
 }
 
-export async function openNewSessionDialog(){
+// opts.target: 'classic' (по умолчанию — открыть в основном экране) | 'workspace' (открыть паней в воркспейсе).
+export async function openNewSessionDialog(dlgOpts={}){
+  const target = dlgOpts.target === 'workspace' ? 'workspace' : 'classic';
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
   const back = modalBack('nsBack');
@@ -136,7 +139,8 @@ export async function openNewSessionDialog(){
     if (createMode === 'normal'){
       if (!name){ nameEl.focus(); return; }
       back.classList.remove('open');
-      openPendingNewSession(cwd, name, mode, model, effort);
+      if (target === 'workspace') addWorkspaceSession({ kind:'new', cwd, name, mode, model, effort, title:name });
+      else openPendingNewSession(cwd, name, mode, model, effort);
       return;
     }
     const task = (back.querySelector('#nsTask').value || '').trim();
@@ -156,7 +160,9 @@ export async function openNewSessionDialog(){
       autoName = `Dev-workflow ${task}`;
     }
     back.classList.remove('open');
-    openNewSession(cwd, prompt, mode, null, { name: name || autoName, model, effort });
+    const finalName = name || autoName;
+    if (target === 'workspace') addWorkspaceSession({ kind:'new', cwd, name: finalName, mode, model, effort, prompt, title: finalName });
+    else openNewSession(cwd, prompt, mode, null, { name: finalName, model, effort });
   };
   startEl.addEventListener('click', submit);
   nameEl.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } });
@@ -220,6 +226,15 @@ function openNewSession(cwd, prompt, mode, forkFile, opts={}){
   runPrompt(forkFile
     ? { text: prompt, mode, model: S.sessionModel, effort: S.sessionEffort, attachments: [], forkFile }
     : { text: prompt, mode, model: S.sessionModel, effort: S.sessionEffort, attachments: [], newSessionCwd: cwd, pendingName: opts.name || '' });
+}
+
+// Pane-режим (iframe воркспейса) с дескриптором НОВОЙ сессии: либо сразу запускаем собранный первый промт (bugfix/
+// dev-workflow), либо открываем пустую сессию и ждём промт (обычный режим). Существующие сессии (kind:'file') открывает
+// сам bootPane через openSession — сюда не попадают.
+export function startDescriptorSession(desc){
+  if (!desc || desc.kind !== 'new') return;
+  if (desc.prompt) openNewSession(desc.cwd, desc.prompt, desc.mode || 'default', null, { name: desc.name || '', model: desc.model || '', effort: desc.effort || '' });
+  else openPendingNewSession(desc.cwd, desc.name || 'сессия', desc.mode || 'default', desc.model || '', desc.effort || '');
 }
 
 export function wireSideActions(t){

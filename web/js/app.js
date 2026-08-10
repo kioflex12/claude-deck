@@ -1,6 +1,6 @@
 // Deck — тонкий entry: head-консты и хелперы-ссылки, глобальные document-листенеры (внешние ссылки + копирование кода),
 // оркестрация загрузки доски (load) и init-хвост. Кластеры вынесены в модули (nav/notify/auth/projects/dialogs/…).
-import { S, normMode } from './store.js';
+import { S, normMode, SESSION_CACHE } from './store.js';
 import { toast, openExternal, openLocalResource } from './ui.js';
 import { renderBoard, renderNow, renderFilters } from './board.js';
 import { loadMcpCatalog } from './mcp.js';
@@ -12,7 +12,7 @@ import { setView, ensureStatusTab, openPal, restoreOpenFiles } from './nav.js';
 import { workingSet, seedJiraFromSessions, startPolling, initNotifyToggle } from './notify.js';
 import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
-import { openSettingsModal, openUpdatesModal, renderUpdateStatus } from './dialogs.js';
+import { openSettingsModal, openUpdatesModal, renderUpdateStatus, startDescriptorSession } from './dialogs.js';
 import { startAttentionPoll, updateAttentionBadge } from './attention.js';
 
 // S1: единый токен-гейт для /api/. Токен сервер инжектит в <meta name="deck-token"> index.html (кросс-ориджин HTML не
@@ -43,8 +43,14 @@ S.sessionModel = localStorage.getItem('deckModel') || '';
 S.sessionEffort = localStorage.getItem('deckEffort') || '';
 S.sessionMode = normMode(localStorage.getItem('deckMode'));   // режим (default/acceptEdits/plan/bypass) — сохранённый выбор, а не сброс на default каждый раз; невалидное → default
 
+// Pane-режим: этот же Deck внутри iframe воркспейса показывает ОДНУ сессию без топбара/доски (см. workspace.js).
+// Дескриптор пани лежит в localStorage['deckPane:<id>']; сюда приходит только id через ?pane=.
+const PANE_ID = (new URLSearchParams(location.search)).get('pane') || '';
+export const PANE_MODE = !!PANE_ID;
+if (PANE_MODE) document.documentElement.classList.add('pane-mode');
+
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.92';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.93';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -98,7 +104,35 @@ document.addEventListener('click', (e) => {
 }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ const ov = document.getElementById('imgLightbox'); if (ov) ov.classList.remove('open'); } });
 
+// Загрузка одной сессии в iframe-пане: без доски/поллинг-уведомлений, только экран сессии. Родителю (воркспейсу)
+// докладываем реальный файл, когда новая сессия его обретёт, и фокус — для «следующая сессия в последнюю группу».
+async function bootPane(){
+  S.notifyEnabled = false;   // уведомления о завершении шлёт только верхнее окно, не каждая паня
+  let desc = null; try { desc = JSON.parse(localStorage.getItem('deckPane:' + PANE_ID) || 'null'); } catch {}
+  try { const r = await fetch('/api/sessions', { cache:'no-store' }); const d = await r.json(); S.SESSIONS = Array.isArray(d.sessions) ? d.sessions : []; } catch { S.SESSIONS = []; }
+  loadAuth();
+  if (!desc){ document.getElementById('thread').innerHTML = '<div class="empty">Паня не найдена — закройте вкладку.</div>'; return; }
+  if (desc.kind === 'file' && desc.file) openSession(desc.file);
+  else startDescriptorSession(desc);
+  // Поллинг /api/sessions в пане не нужен: доска скрыта, а живость сессии ведёт SSE-стрим и tail. Одной загрузки
+  // списка выше достаточно, чтобы openSession подмешал live-поля и поднял tail. Уведомления шлёт только верхнее окно.
+  startPaneReporter();
+}
+function startPaneReporter(){
+  const post = m => { try { if (window.parent && window.parent !== window) window.parent.postMessage(m, location.origin); } catch {} };
+  let lastFile = null, lastTitle = null;
+  setInterval(() => {
+    const f = S.currentFile;
+    if (!f) return;
+    const title = (SESSION_CACHE[f] && SESSION_CACHE[f].title) || (document.querySelector('#sessionBar .sb-title') || {}).textContent || '';
+    if (f !== lastFile){ lastFile = f; lastTitle = title; try { localStorage.setItem('deckPane:' + PANE_ID, JSON.stringify({ kind:'file', file:f, title })); } catch {}; post({ type:'deck-pane-file', pane: PANE_ID, file: f, title }); }
+    else if (title && title !== lastTitle){ lastTitle = title; post({ type:'deck-pane-title', pane: PANE_ID, title }); }
+  }, 700);
+  document.addEventListener('mousedown', () => post({ type:'deck-pane-focus', pane: PANE_ID }), true);
+}
+
 export async function load(){
+  if (PANE_MODE) return bootPane();
   // Мгновенный каркас ДО данных: топбар уже привязан (wireTopbar), сразу показываем борд и кнопки (пустыми) —
   // иначе на холодном старте после апдейта интерфейс «мёртв», пока грузится /api/sessions.
   renderFilters();
@@ -140,16 +174,17 @@ function wireTopbar(){
   const pb = document.getElementById('projBtn'); if (pb) pb.addEventListener('click', (e) => { e.stopPropagation(); toggleProjMenu(); });
 }
 
-ensureStatusTab();
-initNotifyToggle();
-wireTopbar();
-loadAuth();
-loadServicesGate();
-// Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
-if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
-// Electron: открыть окно «Обновления» из меню/трея + принимать статусы автоапдейтера.
-if (window.deckNative && window.deckNative.onOpenUpdates) window.deckNative.onOpenUpdates(openUpdatesModal);
-// Electron: Ctrl/Cmd+K через нативный аксельратор меню (физическое сочетание может не дойти до document-listener).
-if (window.deckNative && window.deckNative.onOpenPalette) window.deckNative.onOpenPalette(() => openPal());
-if (window.deckNative && window.deckNative.onUpdateStatus) window.deckNative.onUpdateStatus(renderUpdateStatus);
+if (!PANE_MODE){
+  ensureStatusTab();
+  initNotifyToggle();
+  wireTopbar();
+  loadServicesGate();
+  // Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
+  if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
+  // Electron: открыть окно «Обновления» из меню/трея + принимать статусы автоапдейтера.
+  if (window.deckNative && window.deckNative.onOpenUpdates) window.deckNative.onOpenUpdates(openUpdatesModal);
+  // Electron: Ctrl/Cmd+K через нативный аксельратор меню (физическое сочетание может не дойти до document-listener).
+  if (window.deckNative && window.deckNative.onOpenPalette) window.deckNative.onOpenPalette(() => openPal());
+  if (window.deckNative && window.deckNative.onUpdateStatus) window.deckNative.onUpdateStatus(renderUpdateStatus);
+}
 load();

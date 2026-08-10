@@ -580,3 +580,55 @@
     .cx-warn .cxw-txt{ flex:1; min-width:0; }
     .cx-warn .cxw-btn{ flex:none; font-family:var(--mono); font-size:12px; padding:3px 10px; border-radius:7px; border:1px solid currentColor; background:transparent; color:inherit; cursor:pointer; }
     .cx-warn .cxw-btn:hover{ background:var(--warn); color:#111; }
+
+    /* ── Воркспейс: сплит-лейаут живых сессий (workspace.js) ── */
+    #viewWorkspace{ padding:8px; gap:0; box-sizing:border-box; }
+    #viewWorkspace > *{ flex:1; min-width:0; min-height:0; }
+    .ws-split{ display:flex; min-width:0; min-height:0; }
+    .ws-row{ flex-direction:row; } .ws-col{ flex-direction:column; }
+    .ws-split > .ws-leaf, .ws-split > .ws-split{ min-width:0; min-height:0; overflow:hidden; }
+    .ws-divider{ flex:0 0 auto; background:transparent; }
+    .ws-div-v{ width:8px; cursor:col-resize; } .ws-div-h{ height:8px; cursor:row-resize; }
+    .ws-divider:hover{ background:color-mix(in srgb, var(--accent) 40%, transparent); }
+    .ws-leaf{ display:flex; flex-direction:column; min-width:0; min-height:0; border:1px solid var(--border); border-radius:9px; overflow:hidden; background:var(--bg); }
+    .ws-leaf.focus{ border-color:var(--accent); }
+    .ws-tabs{ display:flex; align-items:center; gap:2px; padding:4px; background:var(--surface); border-bottom:1px solid var(--border); overflow-x:auto; scrollbar-width:thin; }
+    .ws-tabs::-webkit-scrollbar{ height:6px; } .ws-tabs::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+    .ws-tab{ display:flex; align-items:center; gap:6px; max-width:190px; padding:5px 8px; border-radius:6px; font-size:12px; color:var(--text-faint); cursor:pointer; white-space:nowrap; user-select:none; }
+    .ws-tab:hover{ color:var(--text); }
+    .ws-tab.on{ background:var(--bg); color:var(--text); box-shadow:0 0 0 1px var(--border) inset; }
+    .ws-tt{ overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+    .ws-tx{ border:0; background:transparent; color:inherit; cursor:pointer; opacity:.45; font-size:11px; line-height:1; }
+    .ws-tx:hover{ opacity:1; }
+    .ws-add{ border:0; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 7px; }
+    .ws-add:hover{ color:var(--text); }
+    .ws-body{ position:relative; flex:1; min-height:0; }
+    .ws-cell{ position:absolute; inset:0; }
+    .ws-frame{ width:100%; height:100%; border:0; display:block; background:var(--bg); }
+    .ws-dz{ position:absolute; inset:0; pointer-events:none; display:none; z-index:5; }
+    .ws-dz.on{ display:block; }
+    .ws-dz-hi{ position:absolute; background:color-mix(in srgb, var(--accent) 20%, transparent); border:2px solid var(--accent); border-radius:7px; }
+    .ws-dz.z-center .ws-dz-hi{ inset:8px; }
+    .ws-dz.z-left  .ws-dz-hi{ left:0; top:0; bottom:0; width:50%; }
+    .ws-dz.z-right .ws-dz-hi{ right:0; top:0; bottom:0; width:50%; }
+    .ws-dz.z-top   .ws-dz-hi{ left:0; right:0; top:0; height:50%; }
+    .ws-dz.z-bottom .ws-dz-hi{ left:0; right:0; bottom:0; height:50%; }
+    .ws-dragging .ws-frame{ pointer-events:none; }   /* тащим вкладку — iframe'ы прозрачны, чтобы dragover доходил до зон докинга под ними */
+    .ws-empty{ display:flex; flex:1; align-items:center; justify-content:center; }
+    .ws-empty-in{ max-width:460px; text-align:center; }
+    .ws-empty-t{ font-size:16px; font-weight:700; color:var(--text); }
+    .ws-empty-s{ margin:8px 0 18px; font-size:13px; color:var(--text-faint); line-height:1.5; }
+    .ws-empty-btns{ display:flex; gap:10px; justify-content:center; }
+    .ws-btn{ height:34px; padding:0 16px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-weight:600; font-size:13px; cursor:pointer; }
+    .ws-btn:hover{ border-color:var(--accent); }
+    .ws-btn-p{ border-color:var(--accent); background:var(--accent); color:#fff; }
+    .wsp-list{ max-height:50vh; overflow:auto; display:flex; flex-direction:column; gap:4px; }
+    .wsp-item{ display:flex; flex-direction:column; gap:2px; padding:8px 10px; border-radius:8px; border:1px solid var(--border); cursor:pointer; }
+    .wsp-item:hover{ border-color:var(--accent); background:var(--surface); }
+    .wsp-t{ font-size:13px; color:var(--text); } .wsp-s{ font-size:11.5px; color:var(--text-faint); }
+    .wsp-empty{ padding:14px; text-align:center; color:var(--text-faint); font-size:13px; }
+
+    /* Pane-режим: тот же Deck в iframe воркспейса — прячем весь хром, показываем только экран сессии. */
+    .pane-mode .topbar, .pane-mode #ctxTabs, .pane-mode #authGate, .pane-mode #svcGate, .pane-mode .session-bar .back{ display:none !important; }
+    .pane-mode #viewBoard, .pane-mode #viewSkills, .pane-mode #viewMcp, .pane-mode #viewAttention, .pane-mode #viewWorkspace{ display:none !important; }   /* до открытия сессии не мигаем доской */
+    .pane-mode #viewSession{ border:0; }

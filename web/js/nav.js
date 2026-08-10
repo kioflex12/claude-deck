@@ -11,6 +11,7 @@ import { renderSkills } from './skills.js';
 import { renderMcp } from './mcp.js';
 import { loadUnityInstances } from './unity.js';
 import { renderAttention } from './attention.js';
+import { renderWorkspace } from './workspace.js';
 
 function palIndex(){
   const idx = [];
@@ -54,10 +55,11 @@ export function setView(v){
   document.getElementById('viewSkills').style.display = v==='skills' ? 'flex' : 'none';
   document.getElementById('viewMcp').style.display = v==='mcp' ? 'flex' : 'none';
   document.getElementById('viewAttention').style.display = v==='attention' ? 'block' : 'none';
+  const vw = document.getElementById('viewWorkspace'); if (vw) vw.style.display = v==='workspace' ? 'flex' : 'none';
   document.getElementById('viewSession').style.display = 'none';
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
-  if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else if (v==='attention') renderAttention(); else renderBoard(true);
+  if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else if (v==='attention') renderAttention(); else if (v==='workspace') renderWorkspace(); else renderBoard(true);
   renderCtxTabs();
   if (boardish && leavingSession) pollSessions(true);   // форс-рефреш: свежий список сессий + live MR/Jira сразу после выхода из контекста (не ждём 7с-поллинг)
 }
