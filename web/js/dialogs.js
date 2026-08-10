@@ -24,6 +24,33 @@ export function modalBack(id){
   return back;
 }
 
+// Клиентские копии (cuN → рабочая копия client-N, как в аргументах /bugfix-*) и сквады — для форм режимов.
+const CLIENT_COPIES = [1, 2, 3, 4];
+const SQUADS = Array.from({ length: 30 }, (_, i) => i + 1);
+
+// Собрать первый промт для режима bugfix: /bugfix-<env> <задача> <target>, где target = client-N [server] | server.
+function buildBugfixPrompt(f){
+  const parts = [];
+  if (f.client) parts.push('client-' + f.client);
+  if (f.server) parts.push('server');
+  const target = parts.join(' ');
+  let p = `/bugfix-${f.env} ${f.task} ${target}`.trim();
+  if (f.desc) p += `\n\nОписание бага от разработчика: ${f.desc}`;
+  return p;
+}
+// Собрать первый промт для режима dev-workflow: /dev-workflow start <задача> + блок готовых ответов, чтобы оркестратор
+// не переспрашивал scope/копию/окружение (иначе он задал бы их через AskUserQuestion).
+function buildDevWorkflowPrompt(f){
+  let p = `/dev-workflow start ${f.task}`;
+  const ans = [];
+  if (f.scope) ans.push(`scope: ${f.scope}`);
+  if (f.client) ans.push(`клиентская копия: cu${f.client} (client-unity-${f.client})`);
+  if (f.env) ans.push(`окружение: ${f.env}`);
+  if (ans.length) p += `\n\nПараметры для старта (используй их, не переспрашивай):\n- ` + ans.join('\n- ');
+  if (f.desc) p += `\n\nКонтекст задачи: ${f.desc}`;
+  return p;
+}
+
 export async function openNewSessionDialog(){
   if (!requireAuth()) return;                             // новая сессия требует логина в Claude
   if (!S.MODELS.length) await loadModelsCatalog();          // модели/эффорты для селектов
@@ -35,8 +62,16 @@ export async function openNewSessionDialog(){
   const modeOpts = MODE_ORDER.map(m=>`<option value="${m}"${m==='default'?' selected':''}>${MODE_LABEL[m]}</option>`).join('');
   const modelOpts = (S.MODELS.length?S.MODELS:[{value:'',label:'по умолчанию'}]).map(m=>`<option value="${esc(m.value)}"${m.value===S.sessionModel?' selected':''}>${esc(m.label)}</option>`).join('');
   const effOpts = (S.EFFORTS.length?S.EFFORTS:[{value:'',label:'по умолчанию'}]).map(e=>`<option value="${esc(e.value)}"${e.value===S.sessionEffort?' selected':''}>${esc(e.label)}</option>`).join('');
+  const clientOpts = CLIENT_COPIES.map(n=>`<option value="${n}">cu${n} (client-unity-${n})</option>`).join('');
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Новая сессия</span><button class="dm-x" type="button">✕</button></div>
     <div class="dm-body">
+      <label class="ns-lbl">Режим создания</label>
+      <div class="ns-seg" id="nsCreateMode">
+        <button type="button" class="ns-seg-b on" data-cm="normal">Обычный</button>
+        <button type="button" class="ns-seg-b" data-cm="bugfix">Bugfix</button>
+        <button type="button" class="ns-seg-b" data-cm="devworkflow">Dev-workflow</button>
+      </div>
+      <div id="nsModeFields"></div>
       <label class="ns-lbl">Рабочая папка (cwd)</label>
       <select id="nsCwd" class="ns-inp">${opts || '<option value="">нет известных папок</option>'}</select>
       <label class="ns-lbl">Имя сессии (так будет называться карточка)</label>
@@ -47,24 +82,86 @@ export async function openNewSessionDialog(){
       <select id="nsEffort" class="ns-inp">${effOpts}</select>
       <label class="ns-lbl">Режим разрешений</label>
       <select id="nsMode" class="ns-inp">${modeOpts}</select>
-      <div class="um-note">Сессия откроется пустой — промты пишешь уже в ней. Настройки применятся к первому запросу.</div>
+      <div class="um-note" id="nsNote">Сессия откроется пустой — промты пишешь уже в ней. Настройки применятся к первому запросу.</div>
       <div class="ns-actions"><button id="nsStart" class="ns-start" type="button">Создать</button></div>
     </div></div>`;
   back.querySelector('.dm-x').addEventListener('click', ()=>back.classList.remove('open'));
+
+  let createMode = 'normal';
+  const fieldsEl = back.querySelector('#nsModeFields');
+  const nameEl = back.querySelector('#nsName');
+  const noteEl = back.querySelector('#nsNote');
+  const startEl = back.querySelector('#nsStart');
+  const renderModeFields = ()=>{
+    if (createMode === 'normal'){ fieldsEl.innerHTML = ''; nameEl.previousElementSibling.textContent = 'Имя сессии (так будет называться карточка)'; noteEl.textContent = 'Сессия откроется пустой — промты пишешь уже в ней. Настройки применятся к первому запросу.'; startEl.textContent = 'Создать'; return; }
+    const isBug = createMode === 'bugfix';
+    const envHtml = isBug
+      ? `<select id="nsEnv" class="ns-inp"><option value="preprod">preprod</option><option value="preupdate">preupdate</option></select>`
+      : `<select id="nsEnv" class="ns-inp"><option value="preprod">preprod</option><option value="preupdate">preupdate</option>${SQUADS.map(n=>`<option value="squad-${n}">squad-${n}</option>`).join('')}</select>`;
+    const scopeHtml = isBug ? '' : `
+      <label class="ns-lbl">Scope</label>
+      <select id="nsScope" class="ns-inp"><option value="client">Клиент</option><option value="backend">Бекенд</option><option value="full">Оба</option></select>`;
+    const serverHtml = isBug ? `<label class="ns-check"><input type="checkbox" id="nsServer"> + серверная часть</label>` : '';
+    fieldsEl.innerHTML = `
+      <label class="ns-lbl">Задача (WO-XXXX или ссылка на Jira)</label>
+      <input id="nsTask" class="ns-inp" type="text" placeholder="напр. WO-13834" autocomplete="off">
+      <label class="ns-lbl">Окружение</label>
+      ${envHtml}
+      ${scopeHtml}
+      <label class="ns-lbl">Клиентская копия</label>
+      <select id="nsClient" class="ns-inp">${clientOpts}</select>
+      ${serverHtml}
+      <label class="ns-lbl">Описание ${isBug ? 'бага' : 'задачи'} (необязательно)</label>
+      <textarea id="nsDesc" class="ns-inp" rows="3" placeholder="что воспроизводится / что нужно сделать…"></textarea>`;
+    nameEl.previousElementSibling.textContent = 'Имя сессии (необязательно — по умолчанию по задаче)';
+    noteEl.textContent = isBug
+      ? 'Контекст запустится сразу: соберём первый промт /bugfix-<окружение> и начнём починку.'
+      : 'Контекст запустится сразу: соберём первый промт /dev-workflow start и начнём работу.';
+    startEl.textContent = 'Создать и запустить';
+  };
+  back.querySelector('#nsCreateMode').addEventListener('click', e=>{
+    const b = e.target.closest('.ns-seg-b'); if (!b) return;
+    createMode = b.dataset.cm;
+    back.querySelectorAll('.ns-seg-b').forEach(x=>x.classList.toggle('on', x===b));
+    renderModeFields();
+  });
+
   const submit = ()=>{
     const cwd = back.querySelector('#nsCwd').value;
-    const name = back.querySelector('#nsName').value.trim();
+    const name = nameEl.value.trim();
     const mode = back.querySelector('#nsMode').value;
     const model = back.querySelector('#nsModel').value;
     const effort = back.querySelector('#nsEffort').value;
-    if (!cwd || !name){ back.querySelector('#nsName').focus(); return; }
+    if (!cwd){ toast('Не выбрана рабочая папка'); return; }
+    if (createMode === 'normal'){
+      if (!name){ nameEl.focus(); return; }
+      back.classList.remove('open');
+      openPendingNewSession(cwd, name, mode, model, effort);
+      return;
+    }
+    const task = (back.querySelector('#nsTask').value || '').trim();
+    if (!task){ back.querySelector('#nsTask').focus(); return; }
+    const env = back.querySelector('#nsEnv').value;
+    const client = back.querySelector('#nsClient').value;
+    const desc = (back.querySelector('#nsDesc').value || '').trim();
+    let prompt, autoName;
+    if (createMode === 'bugfix'){
+      const server = back.querySelector('#nsServer').checked;
+      if (!client && !server){ toast('Выберите клиентскую копию или серверную часть'); return; }
+      prompt = buildBugfixPrompt({ env, task, client, server, desc });
+      autoName = `Багфикс ${task} · ${env}`;
+    } else {
+      const scope = back.querySelector('#nsScope').value;
+      prompt = buildDevWorkflowPrompt({ task, env, client, scope, desc });
+      autoName = `Dev-workflow ${task}`;
+    }
     back.classList.remove('open');
-    openPendingNewSession(cwd, name, mode, model, effort);
+    openNewSession(cwd, prompt, mode, null, { name: name || autoName, model, effort });
   };
-  back.querySelector('#nsStart').addEventListener('click', submit);
-  back.querySelector('#nsName').addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } });
+  startEl.addEventListener('click', submit);
+  nameEl.addEventListener('keydown', e=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } });
   back.classList.add('open');
-  setTimeout(()=>{ const p = back.querySelector('#nsName'); if (p) p.focus(); }, 60);
+  setTimeout(()=>{ if (nameEl) nameEl.focus(); }, 60);
 }
 // Пустая именованная сессия: файла ещё нет — создастся первым промтом; имя закрепится в session-событии.
 function openPendingNewSession(cwd, name, mode, model, effort){
@@ -97,10 +194,12 @@ export function openNewSessionInDir(cwd, name){
   const nm = name || (String(cwd).split(/[\\/]/).filter(Boolean).pop() || 'сессия');
   openPendingNewSession(cwd, nm, S.sessionMode || 'default', S.sessionModel || '', S.sessionEffort || '');
 }
-// Форк остаётся с промтом (продолжение контекста): создаём и сразу отправляем.
-function openNewSession(cwd, prompt, mode, forkFile){
+// Форк / режим-запуск остаются с промтом (продолжение контекста или собранный первый промт скилла): создаём и сразу
+// отправляем. opts.name закрепляется как заголовок карточки, opts.model/effort — настройки первого запроса.
+function openNewSession(cwd, prompt, mode, forkFile, opts={}){
   stopStream();
   S.currentFile = null; S.pendingNewSession = null;
+  S.sessionMode = mode || 'default'; S.sessionModel = opts.model || S.sessionModel || ''; S.sessionEffort = opts.effort || S.sessionEffort || '';
   S.returnView = (S.activeView==='status'||S.activeView==='board') ? S.activeView : 'status';
   document.getElementById('viewBoard').style.display='none';
   document.getElementById('viewSkills').style.display='none';
@@ -108,17 +207,19 @@ function openNewSession(cwd, prompt, mode, forkFile){
   document.getElementById('viewSession').style.display='flex';
   document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
+  const title = opts.name || (forkFile ? 'Форк сессии…' : 'Новая сессия…');
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
-  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${forkFile?'Форк сессии…':'Новая сессия…'}</span>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(title)}</span>`;
   document.getElementById('backBtn').addEventListener('click', ()=>setView(S.returnView));
   document.getElementById('sessionSide').innerHTML = '<div class="sec"><div class="rail-hint">Новая сессия создаётся…</div></div>';
   document.getElementById('thread').innerHTML = '<div class="cx-console"></div>';
   wireConsole();
-  S.sessionMode = mode;
-  renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title:'Новая сессия', project: proj });
+  renderComposer({ cwd, model:'—', ctxPct:0, wo:'', title: opts.name || 'Новая сессия', project: proj });
   paintMode();
   loadSkills(cwd);
-  runPrompt(forkFile ? { text: prompt, mode, attachments: [], forkFile } : { text: prompt, mode, attachments: [], newSessionCwd: cwd });
+  runPrompt(forkFile
+    ? { text: prompt, mode, model: S.sessionModel, effort: S.sessionEffort, attachments: [], forkFile }
+    : { text: prompt, mode, model: S.sessionModel, effort: S.sessionEffort, attachments: [], newSessionCwd: cwd, pendingName: opts.name || '' });
 }
 
 export function wireSideActions(t){

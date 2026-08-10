@@ -358,6 +358,12 @@
     .ns-start{ height:34px; padding:0 16px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-weight:600; font-size:13px; cursor:pointer; }
     .ns-start:hover{ filter:brightness(1.06); }
     .ns-start.dm-danger{ border-color:var(--bad); background:var(--bad); }
+    .ns-seg{ display:flex; gap:4px; background:var(--surface); border:1px solid var(--border); border-radius:9px; padding:3px; }
+    .ns-seg-b{ flex:1; height:30px; border:0; border-radius:7px; background:transparent; color:var(--text-faint); font-family:var(--ui); font-size:12.5px; font-weight:600; cursor:pointer; }
+    .ns-seg-b:hover{ color:var(--text); }
+    .ns-seg-b.on{ background:var(--accent); color:#fff; }
+    .ns-check{ display:flex; align-items:center; gap:8px; margin-top:9px; font-size:13px; color:var(--text); cursor:pointer; }
+    .ns-check input{ width:15px; height:15px; accent-color:var(--accent); }
     .dm-cancel{ height:34px; }
     .dm-text{ font-size:13.5px; color:var(--text); margin-bottom:8px; }
     .btn-ghost.btn-danger{ color:var(--bad); }
