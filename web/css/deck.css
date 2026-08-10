@@ -86,7 +86,11 @@
     .cx-think.cx-live .cx-think-body::after{ content:'▍'; color:var(--text-muted); margin-left:1px; animation:cxBlink 1s steps(2,start) infinite; }
     @keyframes cxBlink{ 50%{ opacity:0; } }
     /* P2: карточка аппрува инструмента */
-    .cx-approval{ background:var(--surface); border:1px solid var(--warn); border-left:3px solid var(--warn); border-radius:9px; padding:11px 13px; gap:9px; }
+    .cx-approval{ position:relative; background:var(--surface); border:1px solid var(--warn); border-left:3px solid var(--warn); border-radius:9px; padding:11px 13px; gap:9px; }
+    .cx-cancel{ position:absolute; top:7px; right:8px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid var(--border); border-radius:6px; background:var(--bg-elev); color:var(--text-faint); font-size:12px; line-height:1; cursor:pointer; }
+    .cx-cancel:hover{ color:var(--bad); border-color:var(--bad); }
+    .cx-cancel:disabled{ opacity:.4; cursor:default; }
+    .cx-input-cancelled{ opacity:.75; }
     .cx-approval.ap-resolved{ border-color:var(--border); border-left-color:var(--border-strong); opacity:.85; }
     .ap-head{ font-size:13px; color:var(--text); display:flex; align-items:center; gap:7px; }
     .ap-head b{ font-family:var(--mono); color:var(--accent-ink); }
@@ -109,7 +113,7 @@
     .ap-result.ap-r-deny{ color:var(--bad); }
 
     /* карточка вопроса к пользователю (AskUserQuestion/ExitPlanMode) — акцентная рамка, режим не отвечает за юзера */
-    .cx-question{ background:var(--surface); border:1px solid var(--accent); border-left:3px solid var(--accent); border-radius:9px; padding:11px 13px; gap:9px; }
+    .cx-question{ position:relative; background:var(--surface); border:1px solid var(--accent); border-left:3px solid var(--accent); border-radius:9px; padding:11px 13px; gap:9px; }
     .cx-question.q-resolved{ border-color:var(--border); border-left-color:var(--border-strong); opacity:.9; }
     .q-title{ font-size:13px; font-weight:600; color:var(--text); display:flex; align-items:center; gap:7px; }
     .q-icon{ font-size:14px; }

@@ -238,11 +238,11 @@ export async function apiChat(req, res, u) {
         else finalize({ behavior: 'deny', message: 'Запрещено пользователем' });
       };
       pendingApprovals.set(id, { decide, tool: toolName, input, sessionKey: key });   // tool/input — для ре-сёрфейса карточки при перезаходе
-      const sig = opts && opts.signal;
-      if (sig) {
-        if (sig.aborted) decide('deny');
-        else sig.addEventListener('abort', () => { if (pendingApprovals.has(id)) decide('deny'); }, { once: true });
-      }
+      // Отпускаем аппрув пустым (deny) ТОЛЬКО на НАШ Стоп (ac.abort), не на пер-хуковый opts.signal: последний SDK может
+      // оборвать по своему таймауту → тогда мутирующее ложно «запрещалось» само. Ждём решения человека бесконечно, пока
+      // он не ответит или не остановит сессию явно.
+      if (ac.signal.aborted) decide('deny');
+      else ac.signal.addEventListener('abort', () => { if (pendingApprovals.has(id)) decide('deny'); }, { once: true });
     });
   };
 
@@ -258,11 +258,11 @@ export async function apiChat(req, res, u) {
     send({ type: 'question', id, questions });
     return new Promise((resolve) => {
       pendingQuestions.set(id, { questions, sessionKey: key, resolve: (answers) => { cleanup(); resolve(buildOutput(answers)); } });
-      const sig = opts && opts.signal;
-      if (sig) {
-        if (sig.aborted) { cleanup(); resolve({}); }
-        else sig.addEventListener('abort', () => { if (pendingQuestions.has(id)) { cleanup(); resolve({}); } }, { once: true });
-      }
+      // Резолвим пустым («dismissed») ТОЛЬКО на НАШ Стоп (ac.abort), не на пер-хуковый opts.signal: SDK обрывал его по
+      // своему таймауту → вопрос ложно «отклонялся сам» (No answer came back → dismissed), и последующий ответ уже ничего
+      // не давал. Теперь вопрос ждёт /api/answer бесконечно; отменить можно только Стопом (крестик на карточке).
+      if (ac.signal.aborted) { cleanup(); resolve({}); }
+      else ac.signal.addEventListener('abort', () => { if (pendingQuestions.has(id)) { cleanup(); resolve({}); } }, { once: true });
     });
   };
   const askQuestionHook = async (input, _toolUseId, opts) => {

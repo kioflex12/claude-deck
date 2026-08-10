@@ -99,6 +99,7 @@ function approvalPreview(tool, input){
 
 export function approvalCardHTML(d){
   return `<div class="cx-msg cx-approval" data-id="${esc(d.id)}">
+    <button class="cx-cancel" type="button" title="Отменить — остановить сессию">✕</button>
     <div class="ap-head"><span class="ap-icon">🔐</span>Разрешить инструмент <b>${esc(d.tool)}</b>?</div>
     <div class="ap-body">${approvalPreview(d.tool, d.input)}</div>
     <div class="ap-btns">
@@ -110,8 +111,19 @@ export function approvalCardHTML(d){
   </div>`;
 }
 
+// Отмена карточки ввода (вопрос/аппрув): просто останавливаем текущую сессию (Стоп). Сервер на ac.abort отпускает
+// висящий вопрос/аппрув и обрывает ход — «бесконечное ожидание» прекращается по воле пользователя.
+function cancelInputCard(el){
+  userStop();
+  if (!el) return;
+  el.classList.add('cx-input-cancelled');
+  el.querySelectorAll('button').forEach(b => b.disabled = true);
+  const note = document.createElement('div'); note.className = 'cx-note'; note.textContent = 'Отменено — сессия остановлена';
+  el.appendChild(note);
+}
 export function wireApproval(el, d){
   if (!el) return;
+  const cx = el.querySelector('.cx-cancel'); if (cx) cx.addEventListener('click', () => cancelInputCard(el));
   el.querySelectorAll('.ap-btn').forEach(b => b.addEventListener('click', async () => {
     const decision = b.dataset.d;
     el.querySelectorAll('.ap-btn').forEach(x => x.disabled = true);
@@ -143,6 +155,7 @@ export function questionCardHTML(d){
     return `<div class="q-block" data-multi="${q.multiSelect ? '1' : '0'}" data-question="${esc(String(q.question || ''))}">${head}${text}${plan}<div class="q-opts">${btns}</div>${custom}</div>`;
   }).join('');
   return `<div class="cx-msg cx-question" data-id="${esc(d.id)}" data-single="${single ? '1' : '0'}">
+    <button class="cx-cancel" type="button" title="Отменить — остановить сессию">✕</button>
     <div class="q-title"><span class="q-icon">💬</span>Вопрос от Claude</div>
     ${qs}
     <div class="q-foot"><button class="q-submit" type="button">Ответить</button></div>
@@ -208,6 +221,7 @@ async function submitAnswers(el, d){
 
 export function wireQuestion(el, d){
   if (!el) return;
+  const cx = el.querySelector('.cx-cancel'); if (cx) cx.addEventListener('click', () => cancelInputCard(el));
   const single = el.dataset.single === '1';
   el.querySelectorAll('.q-opt').forEach(b => b.addEventListener('click', () => {
     if (el.classList.contains('q-resolved')) return;
