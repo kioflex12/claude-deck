@@ -18,6 +18,7 @@
 import { S, SESSION_CACHE } from './store.js';
 import { esc } from './util.js';
 import { openNewSessionDialog } from './dialogs.js';
+import { setView } from './nav.js';
 
 const WS_KEY = 'deckWorkspace';
 const PANE_PREFIX = 'deckPane:';
@@ -94,10 +95,7 @@ export function openWorkspaceForFile(file, title){
   addWorkspaceSession({ kind:'file', file, title: title || (s && s.title) || 'сессия' });
 }
 
-function gotoWorkspace(){
-  const tab = document.querySelector('.tab[data-v="workspace"]');
-  if (tab) tab.click();   // nav.setView('workspace') → renderWorkspace()
-}
+function gotoWorkspace(){ setView('workspace'); }   // напрямую, не через симуляцию клика по вкладке — надёжнее
 
 // ── рендер: структура (перестраиваемая) + слой iframe'ов (постоянный) ─────────
 export function renderWorkspace(){
@@ -113,7 +111,10 @@ export function renderWorkspace(){
   struct.appendChild(renderNode(WS.root));
   host.insertBefore(struct, layer);   // структура под слоем iframe'ов
   RO.disconnect(); host.querySelectorAll('.ws-body').forEach(b => RO.observe(b));
-  if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(layoutFrames); else layoutFrames();
+  // Синхронно (getBoundingClientRect форсит рефлоу — вид уже display:flex) + rAF-подстраховка на случай, если размеры
+  // ещё не устаканились после смены display. Без синхронного вызова новая вкладка иногда не появлялась до ресайза.
+  layoutFrames();
+  if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(layoutFrames);
 }
 function ensureLayer(host){ if (layer && host.contains(layer)) return; layer = document.createElement('div'); layer.className = 'ws-frame-layer'; host.appendChild(layer); }
 
@@ -272,15 +273,29 @@ function openSessionPicker(){
   let back = document.getElementById('wsPick');
   if (!back){ back = document.createElement('div'); back.id = 'wsPick'; back.className = 'deck-modal-back'; document.body.appendChild(back); back.addEventListener('click', e => { if (e.target === back) back.classList.remove('open'); }); }
   const openIds = new Set(); walk(WS.root, n => { if (n.t==='leaf') n.tabs.forEach(t => t.file && openIds.add(t.file)); });
-  const list = (S.SESSIONS || []).filter(s => !openIds.has(s.file)).slice(0, 60)
-    .map(s => `<div class="wsp-item" data-file="${esc(s.file)}" data-title="${esc(s.title||s.project||'сессия')}"><span class="wsp-t">${esc(s.title||'—')}</span><span class="wsp-s">${esc(s.project||'')}${s.wo?' · '+esc(s.wo):''}</span></div>`).join('');
+  const avail = (S.SESSIONS || []).filter(s => !openIds.has(s.file));
   back.innerHTML = `<div class="deck-modal"><div class="dm-head"><span>Добавить сессию в воркспейс</span><button class="dm-x" type="button">✕</button></div>
-    <div class="dm-body"><div class="ns-actions" style="margin:0 0 10px"><button class="ns-start" id="wspNew" type="button">Новая сессия…</button></div>
-    <div class="wsp-list">${list || '<div class="wsp-empty">Нет других сессий</div>'}</div></div></div>`;
+    <div class="dm-body">
+      <div class="ns-actions" style="margin:0 0 10px"><button class="ns-start" id="wspNew" type="button">Новая сессия…</button></div>
+      <input id="wspSearch" class="ns-inp" type="text" placeholder="Поиск по названию / проекту / задаче…" autocomplete="off" spellcheck="false" style="margin:0 0 10px">
+      <div class="wsp-list" id="wspList"></div>
+    </div></div>`;
+  const listEl = back.querySelector('#wspList');
+  const paint = (q) => {
+    q = (q || '').trim().toLowerCase();
+    const items = avail.filter(s => !q || (`${s.title||''} ${s.project||''} ${s.wo||''} ${s.gitBranch||''}`).toLowerCase().includes(q)).slice(0, 80);
+    listEl.innerHTML = items.length
+      ? items.map(s => `<div class="wsp-item" data-file="${esc(s.file)}" data-title="${esc(s.title||s.project||'сессия')}"><span class="wsp-t">${esc(s.title||'—')}</span><span class="wsp-s">${esc(s.project||'')}${s.wo?' · '+esc(s.wo):''}</span></div>`).join('')
+      : `<div class="wsp-empty">${avail.length ? 'Ничего не найдено' : 'Нет других сессий'}</div>`;
+    listEl.querySelectorAll('.wsp-item').forEach(el => el.addEventListener('click', () => { back.classList.remove('open'); addWorkspaceSession({ kind:'file', file: el.dataset.file, title: el.dataset.title }); }));
+  };
+  paint('');
+  const srch = back.querySelector('#wspSearch');
+  srch.addEventListener('input', e => paint(e.target.value));
   back.querySelector('.dm-x').addEventListener('click', () => back.classList.remove('open'));
   back.querySelector('#wspNew').addEventListener('click', () => { back.classList.remove('open'); openNewSessionDialog({ target:'workspace' }); });
-  back.querySelectorAll('.wsp-item').forEach(el => el.addEventListener('click', () => { back.classList.remove('open'); addWorkspaceSession({ kind:'file', file: el.dataset.file, title: el.dataset.title }); }));
   back.classList.add('open');
+  setTimeout(() => srch.focus(), 60);
 }
 
 // ── сообщения из паней (iframe → родитель) ───────────────────────────────────
