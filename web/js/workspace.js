@@ -27,6 +27,9 @@ const PANE_PREFIX = 'deckPane:';
 let WS = { root: null, lastLeaf: null };
 let seq = 1;
 let layer = null;              // постоянный слой iframe'ов (не пересоздаётся при перестройке дерева)
+let dragOv = null;             // прозрачный оверлей поверх iframe'ов на время drag: ловит dragover/drop (iframe'ы их
+                               // «съедают») и рисует подсветку зоны; сами пани при этом ВИДНЫ (не гасим их в чёрное)
+let CUR_TARGET = null;         // {leafId, zone} под курсором во время drag
 const mounted = new Set();     // id вкладок, для которых iframe создан
 const RO = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(() => layoutFrames()) : { observe(){}, disconnect(){} };
 
@@ -151,7 +154,10 @@ export function renderWorkspace(){
   layoutFrames();
   if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(layoutFrames);
 }
-function ensureLayer(host){ if (layer && host.contains(layer)) return; layer = document.createElement('div'); layer.className = 'ws-frame-layer'; host.appendChild(layer); }
+function ensureLayer(host){
+  if (!(layer && host.contains(layer))){ layer = document.createElement('div'); layer.className = 'ws-frame-layer'; host.appendChild(layer); }
+  if (!(dragOv && host.contains(dragOv))){ dragOv = document.createElement('div'); dragOv.className = 'ws-dragover'; dragOv.innerHTML = '<i class="ws-dz-hi"></i>'; host.appendChild(dragOv); wireDragOverlay(dragOv); }
+}
 
 function emptyState(){
   const d = document.createElement('div'); d.className = 'ws-empty';
@@ -182,8 +188,8 @@ function makeTabButton(leaf, t){
   tb.innerHTML = `<span class="ws-tt">${esc(t.title || 'сессия')}</span><button class="ws-tx" title="Закрыть">✕</button>`;
   tb.addEventListener('click', e => { if (e.target.closest('.ws-tx')) return; activate(leaf, leaf.tabs.findIndex(x=>x.id===t.id)); });
   tb.querySelector('.ws-tx').addEventListener('click', e => { e.stopPropagation(); closeTab(leaf, t.id); });
-  tb.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; DRAG = t.id; document.getElementById('viewWorkspace').classList.add('ws-dragging'); });
-  tb.addEventListener('dragend', () => { DRAG = null; document.getElementById('viewWorkspace').classList.remove('ws-dragging'); document.querySelectorAll('.ws-dz').forEach(z=>z.className='ws-dz'); });
+  tb.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; DRAG = t.id; showDragOverlay(); });
+  tb.addEventListener('dragend', () => { DRAG = null; hideDragOverlay(); });
   return tb;
 }
 
@@ -197,9 +203,6 @@ function renderLeaf(leaf){
   add.addEventListener('click', () => { WS.lastLeaf = leaf.id; openSessionPicker(); });
   bar.appendChild(add);
   const body = document.createElement('div'); body.className = 'ws-body'; body.dataset.leaf = leaf.id;   // цель для позиционирования iframe активной вкладки
-  const dz = document.createElement('div'); dz.className = 'ws-dz'; dz.innerHTML = '<i class="ws-dz-hi"></i>';
-  body.appendChild(dz);
-  wireDrop(body, dz, leaf);
   el.append(bar, body);
   el.addEventListener('mousedown', () => { if (WS.lastLeaf !== leaf.id){ WS.lastLeaf = leaf.id; saveWS(); markFocus(); } }, true);
   return el;
@@ -263,25 +266,48 @@ function wireDivider(div, wrap, node, a, b){
   });
 }
 
-// ── докинг вкладок (drag&drop) ──────────────────────────────────────────────
+// ── докинг вкладок (drag&drop) через прозрачный оверлей ──────────────────────
 let DRAG = null;   // id перетаскиваемой вкладки
-function zoneAt(body, ev){
-  const r = body.getBoundingClientRect();
-  const x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
-  const d = { left: x, right: 1 - x, top: y, bottom: 1 - y };
-  let min = 'center', mv = 0.28;
-  for (const k of ['left','right','top','bottom']) if (d[k] < mv){ mv = d[k]; min = k; }
-  return min;
+function showDragOverlay(){ if (dragOv){ dragOv.classList.add('on'); } }
+function hideDragOverlay(){ if (dragOv){ dragOv.classList.remove('on'); const hi = dragOv.querySelector('.ws-dz-hi'); if (hi) hi.style.display = 'none'; } CUR_TARGET = null; }
+
+// Лист под курсором (оверлей перехватывает события, поэтому ищем по прямоугольникам, а не elementFromPoint).
+function leafElAt(x, y){
+  const els = document.querySelectorAll('#viewWorkspace .ws-leaf');
+  for (const el of els){ const r = el.getBoundingClientRect(); if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el; }
+  return null;
 }
-function wireDrop(body, dz, leaf){
-  body.addEventListener('dragover', e => {
+// Зона докинга по листу: над таб-баром или в центре тела → 'center' (вложить вкладкой в группу); у краёв тела → сплит.
+function zoneForLeaf(leafEl, x, y){
+  const body = leafEl.querySelector('.ws-body'); const br = body.getBoundingClientRect();
+  if (y < br.top || br.width <= 0 || br.height <= 0) return 'center';   // курсор над таб-баром → вложить в группу
+  const fx = (x - br.left) / br.width, fy = (y - br.top) / br.height;
+  const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+  let z = 'center', mv = 0.28;
+  for (const k of ['left','right','top','bottom']) if (d[k] < mv){ mv = d[k]; z = k; }
+  return z;
+}
+function wireDragOverlay(ov){
+  ov.addEventListener('dragover', e => {
     if (!DRAG) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-    dz.className = 'ws-dz on z-' + zoneAt(body, e);
+    const host = document.getElementById('viewWorkspace'); const hr = host.getBoundingClientRect();
+    const leafEl = leafElAt(e.clientX, e.clientY); const hi = ov.querySelector('.ws-dz-hi');
+    if (!leafEl){ CUR_TARGET = null; if (hi) hi.style.display = 'none'; return; }
+    const zone = zoneForLeaf(leafEl, e.clientX, e.clientY);
+    CUR_TARGET = { leafId: leafEl.dataset.leaf, zone };
+    const lr = leafEl.getBoundingClientRect(); const br = leafEl.querySelector('.ws-body').getBoundingClientRect();
+    let box;
+    if (zone === 'center') box = { left: lr.left, top: lr.top, width: lr.width, height: lr.height };
+    else if (zone === 'left') box = { left: br.left, top: br.top, width: br.width / 2, height: br.height };
+    else if (zone === 'right') box = { left: br.left + br.width / 2, top: br.top, width: br.width / 2, height: br.height };
+    else if (zone === 'top') box = { left: br.left, top: br.top, width: br.width, height: br.height / 2 };
+    else box = { left: br.left, top: br.top + br.height / 2, width: br.width, height: br.height / 2 };
+    if (hi){ hi.style.display = 'block'; hi.style.left = (box.left - hr.left) + 'px'; hi.style.top = (box.top - hr.top) + 'px'; hi.style.width = box.width + 'px'; hi.style.height = box.height + 'px'; }
   });
-  body.addEventListener('dragleave', e => { if (!body.contains(e.relatedTarget)) dz.className = 'ws-dz'; });
-  body.addEventListener('drop', e => {
-    if (!DRAG) return; e.preventDefault(); const z = zoneAt(body, e); dz.className = 'ws-dz';
-    dropTab(DRAG, leaf, z); DRAG = null;
+  ov.addEventListener('drop', e => {
+    if (!DRAG) return; e.preventDefault();
+    const tgt = CUR_TARGET, id = DRAG; hideDragOverlay(); DRAG = null;
+    if (tgt){ const leaf = findLeaf(tgt.leafId); if (leaf) dropTab(id, leaf, tgt.zone); }
   });
 }
 function dropTab(tid, targetLeaf, zone){

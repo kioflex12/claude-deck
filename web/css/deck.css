@@ -606,15 +606,9 @@
     .ws-add{ border:0; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 7px; }
     .ws-add:hover{ color:var(--text); }
     .ws-body{ position:relative; flex:1; min-height:0; }
-    .ws-dz{ position:absolute; inset:0; pointer-events:none; display:none; z-index:5; }
-    .ws-dz.on{ display:block; }
-    .ws-dz-hi{ position:absolute; background:color-mix(in srgb, var(--accent) 20%, transparent); border:2px solid var(--accent); border-radius:7px; }
-    .ws-dz.z-center .ws-dz-hi{ inset:8px; }
-    .ws-dz.z-left  .ws-dz-hi{ left:0; top:0; bottom:0; width:50%; }
-    .ws-dz.z-right .ws-dz-hi{ right:0; top:0; bottom:0; width:50%; }
-    .ws-dz.z-top   .ws-dz-hi{ left:0; right:0; top:0; height:50%; }
-    .ws-dz.z-bottom .ws-dz-hi{ left:0; right:0; bottom:0; height:50%; }
-    .ws-dragging .ws-frame{ display:none !important; }   /* тащим вкладку — прячем iframe'ы, чтобы под ними были видны зоны докинга и dragover доходил до .ws-body */
+    .ws-dragover{ position:absolute; inset:0; z-index:20; display:none; }   /* во время drag ловит dragover/drop поверх iframe'ов (те «съедают» события), сами пани ВИДНЫ (не гасим в чёрное) */
+    .ws-dragover.on{ display:block; }
+    .ws-dz-hi{ position:absolute; display:none; background:color-mix(in srgb, var(--accent) 22%, transparent); border:2px solid var(--accent); border-radius:8px; pointer-events:none; }
     .ws-empty{ display:flex; flex:1; align-items:center; justify-content:center; }
     .ws-empty-in{ max-width:460px; text-align:center; }
     .ws-empty-t{ font-size:16px; font-weight:700; color:var(--text); }
