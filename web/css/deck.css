@@ -632,3 +632,19 @@
     .pane-mode .topbar, .pane-mode #ctxTabs, .pane-mode #authGate, .pane-mode #svcGate, .pane-mode .session-bar .back{ display:none !important; }
     .pane-mode #viewBoard, .pane-mode #viewSkills, .pane-mode #viewMcp, .pane-mode #viewAttention, .pane-mode #viewWorkspace{ display:none !important; }   /* до открытия сессии не мигаем доской */
     .pane-mode #viewSession{ border:0; }
+
+    /* ── Экран сессии в узкой пане: боковой рейл — оверлей по кнопке, не в потоке ──
+       Раньше в узком вьюпорте медиазапрос (max-width:900) стекал .session-body в колонку и ронял рейл ВНИЗ, без
+       min-height:0 длинный транскрипт распирал колонку → композер уезжал за край, скролл пропадал. Теперь рейл абсолютный
+       (по умолчанию скрыт, показывается кнопкой), поэтому основная колонка всегда полной высоты: композер виден, скролл жив. */
+    .session-body{ position:relative; }
+    .session-main{ min-height:0; }
+    .transcript{ min-height:0; }
+    .session-side{ position:absolute !important; top:0; right:0; bottom:0; width:min(340px, 92%); max-height:none !important;
+      flex:none !important; border-left:1px solid var(--border) !important; border-top:0 !important;
+      transform:translateX(101%); transition:transform .16s ease; z-index:8; box-shadow:-10px 0 28px rgba(0,0,0,.32); }
+    #viewSession.side-open .session-side{ transform:translateX(0); }
+    .side-toggle{ position:absolute; top:8px; right:8px; z-index:9; width:30px; height:30px; display:flex; align-items:center; justify-content:center;
+      border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); color:var(--text-faint); cursor:pointer; opacity:.75; }
+    .side-toggle:hover{ opacity:1; color:var(--text); border-color:var(--accent); }
+    #viewSession.side-open .side-toggle{ color:var(--accent); border-color:var(--accent); opacity:1; }

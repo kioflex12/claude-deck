@@ -51,7 +51,7 @@ S.paneMode = PANE_MODE;   // читает session.js: в пане openSession р
 if (PANE_MODE) document.documentElement.classList.add('pane-mode');
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.1.94';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.1.95';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -104,6 +104,14 @@ document.addEventListener('click', (e) => {
   ov.innerHTML = '<img alt="">'; ov.firstChild.src = img.getAttribute('src'); ov.classList.add('open');
 }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ const ov = document.getElementById('imgLightbox'); if (ov) ov.classList.remove('open'); } });
+// Кнопка показа/скрытия бокового рейла сессии (в узкой пане рейл не влезает — держим оверлеем по кнопке). Состояние
+// глобальное и запоминается, чтобы при следующем открытии сессии панель была в том же виде.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest || !e.target.closest('#sideToggle')) return;
+  const v = document.getElementById('viewSession'); if (!v) return;
+  const open = v.classList.toggle('side-open');
+  try { localStorage.setItem('deckSideOpen', open ? '1' : '0'); } catch {}
+});
 
 // Загрузка одной сессии в iframe-пане: без доски/поллинг-уведомлений, только экран сессии. Родителю (воркспейсу)
 // докладываем реальный файл, когда новая сессия его обретёт, и фокус — для «следующая сессия в последнюю группу».
@@ -113,6 +121,7 @@ async function bootPane(){
   try { const r = await fetch('/api/sessions', { cache:'no-store' }); const d = await r.json(); S.SESSIONS = Array.isArray(d.sessions) ? d.sessions : []; } catch { S.SESSIONS = []; }
   loadAuth();
   if (!desc){ document.getElementById('thread').innerHTML = '<div class="empty">Паня не найдена — закройте вкладку.</div>'; return; }
+  if (localStorage.getItem('deckSideOpen') === '1'){ const v = document.getElementById('viewSession'); if (v) v.classList.add('side-open'); }
   if (desc.kind === 'file' && desc.file) openSession(desc.file);
   else startDescriptorSession(desc);
   // Поллинг /api/sessions в пане не нужен: доска скрыта, а живость сессии ведёт SSE-стрим и tail. Одной загрузки
