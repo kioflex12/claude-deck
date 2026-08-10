@@ -62,7 +62,9 @@ export async function openSession(file){
   // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
   // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
   const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
-  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title" title="Клик — переименовать контекст">${esc(t.title)}</span>${woChip}${SIDE_TOGGLE}`;
+  // Без задачи вправо толкать нечем (у чипа задачи margin-left:auto) — даём его самой кнопке, чтобы она всегда была в правом углу.
+  const toggle = t.wo ? SIDE_TOGGLE : SIDE_TOGGLE.replace('side-toggle"', 'side-toggle" style="margin-left:auto"');
+  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title" title="Клик — переименовать контекст">${esc(t.title)}</span>${woChip}${toggle}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
   const titleEl = bar.querySelector('.sb-title'); if (titleEl) titleEl.addEventListener('click', () => editTitle(file));
