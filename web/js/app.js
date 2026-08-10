@@ -14,6 +14,7 @@ import { loadAuth, loadServicesGate, onAuthChip, startLogin } from './auth.js';
 import { toggleProjMenu } from './projects.js';
 import { openSettingsModal, openUpdatesModal, renderUpdateStatus, startDescriptorSession } from './dialogs.js';
 import { startAttentionPoll, updateAttentionBadge } from './attention.js';
+import { maybeShowOnboarding } from './onboarding.js';
 
 // S1: единый токен-гейт для /api/. Токен сервер инжектит в <meta name="deck-token"> index.html (кросс-ориджин HTML не
 // прочитать → вредоносная вкладка/встраивание токен не добудет). Патчим fetch/EventSource ОДНИМ местом, чтобы дописывать
@@ -51,7 +52,7 @@ S.paneMode = PANE_MODE;   // читает session.js: в пане openSession р
 if (PANE_MODE) document.documentElement.classList.add('pane-mode');
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.2.1';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.2.2';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -165,6 +166,7 @@ export async function load(){
   updateAttentionBadge();   // Фаза-4: счётчик «Требует внимания» из уже загруженных сессий (до первого поллинга)
   startAttentionPoll();     // Фаза-4: git-скан незакоммиченных копий + периодический refresh счётчика
   loadSkillsCatalog(); // TECH-2: реальные скиллы (для вкладки и палитры)
+  maybeShowOnboarding();   // первый запуск → дружелюбный экран-приветствие (папку сессий определяем сами, без ручной настройки)
   // Тяжёлые SDK-пробы (spawn claude) — ПОСЛЕ подъёма борда, чтобы не конкурировать за старт и не морозить UI.
   setTimeout(() => {
     loadMcpCatalog();  // реальные MCP-серверы

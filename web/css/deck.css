@@ -660,3 +660,27 @@
     ::-webkit-scrollbar-thumb:hover{ background:var(--text-faint); background-clip:padding-box; border:3px solid transparent; }
     ::-webkit-scrollbar-corner{ background:transparent; }
     html{ scrollbar-color: var(--border) transparent; }
+
+    /* ── Приветственный экран первого запуска (onboarding.js) ── */
+    .onb-back{ position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; background:rgba(6,8,12,.72); backdrop-filter:blur(3px); }
+    .onb-back.open{ display:flex; }
+    .onb-card{ width:min(560px, 92vw); background:var(--bg-elev); border:1px solid var(--border); border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.5); overflow:hidden; }
+    .onb-head{ display:flex; gap:14px; align-items:center; padding:22px 24px 6px; }
+    .onb-logo{ flex:none; width:42px; height:42px; border-radius:11px; background:var(--accent); color:#fff; font-weight:800; font-size:22px; display:flex; align-items:center; justify-content:center; }
+    .onb-title{ font-size:18px; font-weight:750; color:var(--text); }
+    .onb-sub{ font-size:13px; color:var(--text-faint); margin-top:3px; line-height:1.45; }
+    .onb-body{ padding:14px 24px 4px; display:flex; flex-direction:column; gap:12px; }
+    .onb-row{ display:flex; gap:12px; align-items:flex-start; padding:12px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface); }
+    .onb-row.ok{ border-color:color-mix(in srgb, var(--good) 45%, var(--border)); }
+    .onb-ic{ flex:none; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800; background:var(--surface-2); color:var(--text-faint); }
+    .onb-row.ok .onb-ic{ background:var(--good); color:#06210f; }
+    .onb-rt{ font-size:13.5px; font-weight:650; color:var(--text); }
+    .onb-rs{ font-size:12.5px; color:var(--text-faint); margin-top:3px; line-height:1.5; }
+    .onb-rs code{ font-family:var(--mono); font-size:11.5px; background:var(--surface-2); padding:1px 6px; border-radius:5px; color:var(--text); }
+    .onb-link{ margin-top:8px; border:0; background:transparent; color:var(--accent); font-size:12.5px; cursor:pointer; padding:0; text-decoration:underline; }
+    .onb-link:disabled{ color:var(--text-faint); cursor:default; text-decoration:none; }
+    .onb-actions{ display:flex; justify-content:flex-end; gap:10px; padding:16px 24px 22px; }
+    .onb-more{ height:38px; padding:0 16px; border-radius:9px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-weight:600; font-size:13px; cursor:pointer; }
+    .onb-more:hover{ border-color:var(--accent); }
+    .onb-start{ height:38px; padding:0 22px; border-radius:9px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-weight:700; font-size:13px; cursor:pointer; }
+    .onb-start:hover{ filter:brightness(1.06); }
