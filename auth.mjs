@@ -233,21 +233,39 @@ export function autoImportOnFirstRun() {
 
 // -------- D1: авторизация Claude ИЗ приложения (без ручного терминала). Через CLI `claude auth`. --------
 let _authCache = { ts: 0, data: null };
+let _lastGood = null;                 // последнее ОПРЕДЕЛЁННО залогиненное состояние — держим его при неответе CLI
 const AUTH_TTL = 8000;
+// Статус входа. definitive:true — CLI дал JSON-ответ (можно доверять loggedIn). unknown:true — CLI не ответил
+// (ошибка/таймаут/не-JSON): это НЕ «разлогинен», а «не знаем» — трактовать как logout нельзя (иначе ложный выброс).
 function claudeAuthStatus() {
   return new Promise((resolve) => {
     execFile(getClaudeBin(), ['auth', 'status', '--json'], { timeout: 12000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
       let j = null; try { j = JSON.parse(String(stdout || '').trim()); } catch {}
-      if (j && typeof j.loggedIn === 'boolean') resolve({ loggedIn: j.loggedIn, email: j.email || null, orgName: j.orgName || null, subscriptionType: j.subscriptionType || null, authMethod: j.authMethod || null });
-      else resolve({ loggedIn: false, reason: (err && err.message) || 'no status', raw: String(stdout || '').slice(0, 200) });
+      if (j && typeof j.loggedIn === 'boolean') resolve({ loggedIn: j.loggedIn, email: j.email || null, orgName: j.orgName || null, subscriptionType: j.subscriptionType || null, authMethod: j.authMethod || null, definitive: true });
+      else resolve({ unknown: true, reason: (err && err.message) || 'no status', raw: String(stdout || '').slice(0, 200) });
     });
   });
 }
+// Есть ли на диске похожие на валидные креды (~/.claude/.credentials.json). На Windows это надёжный признак; на macOS
+// креды часто в keychain (файла нет) — тогда полагаемся на CLI/ретрай. Используется только когда CLI не ответил.
+function credsLookValid() {
+  try { const j = JSON.parse(readFileSync(credsFile(), 'utf8')); return !!(j && typeof j === 'object' && Object.keys(j).length); }
+  catch { return false; }
+}
 export async function apiAuth(res) {
   if (_authCache.data && Date.now() - _authCache.ts < AUTH_TTL) { sendJSON(res, _authCache.data); return; }
-  const data = await claudeAuthStatus();
-  _authCache = { ts: Date.now(), data };
-  sendJSON(res, data);
+  let st = await claudeAuthStatus();
+  if (st.unknown) { await new Promise((r) => setTimeout(r, 400)); st = await claudeAuthStatus(); }   // холодный старт CLI после апдейта часто отвечает со 2-й попытки
+  if (st.definitive) {
+    _authCache = { ts: Date.now(), data: st };
+    if (st.loggedIn) _lastGood = st;
+    sendJSON(res, st);
+    return;
+  }
+  // CLI так и не ответил определённо — НЕ выкидываем из аккаунта:
+  if (_lastGood && _lastGood.loggedIn) { sendJSON(res, { ..._lastGood, stale: true }); return; }   // держим прошлый залогин (не кэшируем надолго — перепроверим)
+  if (credsLookValid()) { const data = { loggedIn: true, inferred: true }; _authCache = { ts: Date.now(), data }; sendJSON(res, data); return; }   // есть валидные креды на диске → залогинен
+  sendJSON(res, { loggedIn: false, unknown: true });   // без кэша: следующий запрос перепроверит, а не залипнет на ложном logout
 }
 // Логин: спавним `claude auth login --claudeai` (пайпы → режим «вставь код»), парсим OAuth-URL из stdout,
 // отдаём клиенту (тот открывает в системном браузере). Держим процесс до ввода кода.
