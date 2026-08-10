@@ -89,4 +89,8 @@ function mdToHtml(src){
 }
 function fmtTok(n){ n = n||0; return n>=1000 ? (Math.round(n/100)/10)+'k' : String(n); }
 
-export { ctxColor, esc, escHtml, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTok };
+// Кнопка показать/скрыть боковой рейл — в баре сессии рядом с задачей. Видна только в узкой пане (CSS-медиазапрос),
+// где рейл не влезает инлайн; клик обрабатывается делегированием в app.js (#sideToggle).
+const SIDE_TOGGLE = `<button class="side-toggle" id="sideToggle" type="button" title="Показать/скрыть панель (описание, MR, сборки, Jira)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>`;
+
+export { ctxColor, esc, escHtml, pctOf, kTok, timeAgo, mdInline, mdToHtml, fmtTok, SIDE_TOGGLE };

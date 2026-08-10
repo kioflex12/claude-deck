@@ -582,8 +582,11 @@
     .cx-warn .cxw-btn:hover{ background:var(--warn); color:#111; }
 
     /* ── Воркспейс: сплит-лейаут живых сессий (workspace.js) ── */
-    #viewWorkspace{ padding:8px; gap:0; box-sizing:border-box; }
-    #viewWorkspace > *{ flex:1; min-width:0; min-height:0; }
+    #viewWorkspace{ position:relative; }
+    .ws-structure{ position:absolute; inset:0; display:flex; padding:6px; box-sizing:border-box; }   /* перестраиваемая структура (таб-бары/сплиттеры/зоны) */
+    .ws-structure > *{ flex:1; min-width:0; min-height:0; }
+    .ws-frame-layer{ position:absolute; inset:0; pointer-events:none; z-index:3; }   /* постоянный слой iframe'ов — не пересобирается, потому пани не перезагружаются */
+    .ws-frame{ position:absolute; border:0; background:var(--bg); pointer-events:auto; }   /* позиция/размер задаёт layoutFrames поверх .ws-body */
     .ws-split{ display:flex; min-width:0; min-height:0; }
     .ws-row{ flex-direction:row; } .ws-col{ flex-direction:column; }
     .ws-split > .ws-leaf, .ws-split > .ws-split{ min-width:0; min-height:0; overflow:hidden; }
@@ -603,8 +606,6 @@
     .ws-add{ border:0; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 7px; }
     .ws-add:hover{ color:var(--text); }
     .ws-body{ position:relative; flex:1; min-height:0; }
-    .ws-cell{ position:absolute; inset:0; }
-    .ws-frame{ width:100%; height:100%; border:0; display:block; background:var(--bg); }
     .ws-dz{ position:absolute; inset:0; pointer-events:none; display:none; z-index:5; }
     .ws-dz.on{ display:block; }
     .ws-dz-hi{ position:absolute; background:color-mix(in srgb, var(--accent) 20%, transparent); border:2px solid var(--accent); border-radius:7px; }
@@ -613,7 +614,7 @@
     .ws-dz.z-right .ws-dz-hi{ right:0; top:0; bottom:0; width:50%; }
     .ws-dz.z-top   .ws-dz-hi{ left:0; right:0; top:0; height:50%; }
     .ws-dz.z-bottom .ws-dz-hi{ left:0; right:0; bottom:0; height:50%; }
-    .ws-dragging .ws-frame{ pointer-events:none; }   /* тащим вкладку — iframe'ы прозрачны, чтобы dragover доходил до зон докинга под ними */
+    .ws-dragging .ws-frame{ display:none !important; }   /* тащим вкладку — прячем iframe'ы, чтобы под ними были видны зоны докинга и dragover доходил до .ws-body */
     .ws-empty{ display:flex; flex:1; align-items:center; justify-content:center; }
     .ws-empty-in{ max-width:460px; text-align:center; }
     .ws-empty-t{ font-size:16px; font-weight:700; color:var(--text); }
@@ -633,18 +634,29 @@
     .pane-mode #viewBoard, .pane-mode #viewSkills, .pane-mode #viewMcp, .pane-mode #viewAttention, .pane-mode #viewWorkspace{ display:none !important; }   /* до открытия сессии не мигаем доской */
     .pane-mode #viewSession{ border:0; }
 
-    /* ── Экран сессии в узкой пане: боковой рейл — оверлей по кнопке, не в потоке ──
-       Раньше в узком вьюпорте медиазапрос (max-width:900) стекал .session-body в колонку и ронял рейл ВНИЗ, без
-       min-height:0 длинный транскрипт распирал колонку → композер уезжал за край, скролл пропадал. Теперь рейл абсолютный
-       (по умолчанию скрыт, показывается кнопкой), поэтому основная колонка всегда полной высоты: композер виден, скролл жив. */
+    /* ── Экран сессии: боковой рейл ──
+       Широкая паня — рейл инлайн справа (как раньше в полном окне), кнопки нет. Узкая паня (места на инлайн-рейл нет) —
+       рейл становится оверлеем по кнопке возле задачи. min-height:0 на колонке/ленте — чтобы длинный транскрипт не
+       распирал колонку (иначе композер уезжал за край и пропадал скролл). */
     .session-body{ position:relative; }
     .session-main{ min-height:0; }
     .transcript{ min-height:0; }
-    .session-side{ position:absolute !important; top:0; right:0; bottom:0; width:min(340px, 92%); max-height:none !important;
-      flex:none !important; border-left:1px solid var(--border) !important; border-top:0 !important;
-      transform:translateX(101%); transition:transform .16s ease; z-index:8; box-shadow:-10px 0 28px rgba(0,0,0,.32); }
-    #viewSession.side-open .session-side{ transform:translateX(0); }
-    .side-toggle{ position:absolute; top:8px; right:8px; z-index:9; width:30px; height:30px; display:flex; align-items:center; justify-content:center;
-      border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); color:var(--text-faint); cursor:pointer; opacity:.75; }
-    .side-toggle:hover{ opacity:1; color:var(--text); border-color:var(--accent); }
-    #viewSession.side-open .side-toggle{ color:var(--accent); border-color:var(--accent); opacity:1; }
+    .session-bar .side-toggle{ display:none; width:28px; height:28px; margin-left:6px; flex:none; align-items:center; justify-content:center;
+      border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text-faint); cursor:pointer; }
+    .session-bar .side-toggle:hover{ color:var(--text); border-color:var(--accent); }
+    #viewSession.side-open .session-bar .side-toggle{ color:var(--accent); border-color:var(--accent); }
+    @media (max-width: 1024px){
+      .session-side{ position:absolute !important; top:0; right:0; bottom:0; width:min(360px, 96%); max-height:none !important;
+        flex:none !important; border-left:1px solid var(--border) !important; border-top:0 !important;
+        transform:translateX(101%); transition:transform .16s ease; z-index:8; box-shadow:-12px 0 30px rgba(0,0,0,.34); }
+      #viewSession.side-open .session-side{ transform:translateX(0); }
+      .session-bar .side-toggle{ display:inline-flex; }
+    }
+
+    /* Скроллбары под тёмную тему (дефолтные Chromium — неуместно белые). */
+    ::-webkit-scrollbar{ width:11px; height:11px; }
+    ::-webkit-scrollbar-track{ background:transparent; }
+    ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:7px; border:3px solid transparent; background-clip:padding-box; }
+    ::-webkit-scrollbar-thumb:hover{ background:var(--text-faint); background-clip:padding-box; border:3px solid transparent; }
+    ::-webkit-scrollbar-corner{ background:transparent; }
+    html{ scrollbar-color: var(--border) transparent; }

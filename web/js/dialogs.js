@@ -1,7 +1,7 @@
 // Deck — модалки/диалоги: подложка modalBack, новая сессия/форк, удаление, обновления (Electron) и экран настроек.
 // Вынесено из app.js; состояние — в store (S).
 import { S, SESSION_CACHE, MODE_ORDER, MODE_LABEL, JIRA_CACHE, MR_CACHE } from './store.js';
-import { esc } from './util.js';
+import { esc, SIDE_TOGGLE } from './util.js';
 import { toast, openExternal } from './ui.js';
 import { mrKey } from './columns.js';
 import { stopStream, runPrompt } from './stream.js';
@@ -185,7 +185,7 @@ function openPendingNewSession(cwd, name, mode, model, effort){
   document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
-  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(name)}</span>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(name)}</span>` + SIDE_TOGGLE.replace('side-toggle"', 'side-toggle" style="margin-left:auto"');
   document.getElementById('backBtn').addEventListener('click', ()=>setView(S.returnView));
   document.getElementById('sessionSide').innerHTML = `<div class="sec"><div class="rail-hint">Новая сессия «${esc(name)}» — напишите первый промпт, и она создастся.</div></div>`;
   document.getElementById('thread').innerHTML = '<div class="cx-console"><div class="empty">Пустая сессия. Напишите первый промпт ниже.</div></div>';
@@ -216,7 +216,7 @@ function openNewSession(cwd, prompt, mode, forkFile, opts={}){
   const proj = String(cwd).split(/[\\/]/).filter(Boolean).pop() || '';
   const title = opts.name || (forkFile ? 'Форк сессии…' : 'Новая сессия…');
   const backBtn = `<button class="back" id="backBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18 9 12l6-6"/></svg> Назад</button>`;
-  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(title)}</span>`;
+  document.getElementById('sessionBar').innerHTML = backBtn + `<span class="sb-wo">${esc(proj)}</span><span class="sb-title">${esc(title)}</span>` + SIDE_TOGGLE.replace('side-toggle"', 'side-toggle" style="margin-left:auto"');
   document.getElementById('backBtn').addEventListener('click', ()=>setView(S.returnView));
   document.getElementById('sessionSide').innerHTML = '<div class="sec"><div class="rail-hint">Новая сессия создаётся…</div></div>';
   document.getElementById('thread').innerHTML = '<div class="cx-console"></div>';

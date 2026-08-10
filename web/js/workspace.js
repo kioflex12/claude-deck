@@ -8,8 +8,12 @@
 //
 // Лейаут — рекурсивное бинарное дерево: узел это либо лист (таб-группа с вкладками), либо сплит (row=лево/право,
 // col=верх/низ) с долей ratio и двумя детьми. Докинг вкладки к краю листа расщепляет лист; ресайз двигает ratio.
-// iframe'ы монтируются лениво (по первой активации вкладки) и живут скрытыми (display:none) при переключении — так
-// фоновые вкладки остаются живыми, а переключение не перезагружает стрим.
+//
+// КЛЮЧЕВОЕ: iframe'ы НЕ живут внутри узлов дерева. Перемещение iframe в DOM (перенос в другого родителя при
+// перестройке дерева) браузер трактует как перезагрузку — стрим рвётся, скрины из памяти композера теряются. Поэтому
+// iframe'ы держим в ОТДЕЛЬНОМ постоянном слое (.ws-frame-layer), который при перестройке не трогается, и позиционируем
+// их абсолютно поверх «тела» соответствующего листа (.ws-body). Структуру (таб-бары, сплиттеры, зоны докинга) можно
+// перестраивать сколько угодно — iframe'ы не переносятся, значит не перезагружаются.
 
 import { S, SESSION_CACHE } from './store.js';
 import { esc } from './util.js';
@@ -21,9 +25,9 @@ const PANE_PREFIX = 'deckPane:';
 // Дерево лейаута + последняя сфокусированная группа (в неё падает следующая открытая сессия).
 let WS = { root: null, lastLeaf: null };
 let seq = 1;
-let built = false;             // дерево уже отрисовано в DOM; добавление/закрытие вкладки идёт инкрементально, без
-                               // перестройки (перестройка пересоздала бы iframe'ы = перезагрузка живых сессий соседей)
-const mounted = new Set();     // id вкладок, для которых iframe уже создан (переживает перестройку дерева)
+let layer = null;              // постоянный слой iframe'ов (не пересоздаётся при перестройке дерева)
+const mounted = new Set();     // id вкладок, для которых iframe создан
+const RO = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(() => layoutFrames()) : { observe(){}, disconnect(){} };
 
 function loadWS(){
   try { const d = JSON.parse(localStorage.getItem(WS_KEY) || 'null'); if (d && typeof d === 'object'){ WS = { root: d.root || null, lastLeaf: d.lastLeaf || null }; } } catch {}
@@ -43,12 +47,11 @@ function delDesc(id){ try { localStorage.removeItem(PANE_PREFIX + id); } catch {
 function walk(node, cb){ if (!node) return; cb(node); if (node.t === 'split'){ walk(node.a, cb); walk(node.b, cb); } }
 function findLeaf(id){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.id===id) r = n; }); return r; }
 function leafOfTab(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.tabs.some(t=>t.id===tid)) r = n; }); return r; }
+function tabById(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const t = n.tabs.find(x=>x.id===tid); if (t) r = t; } }); return r; }
+function tabByFile(file){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const i = n.tabs.findIndex(t => t.file === file); if (i >= 0) r = { leaf:n, i }; } }); return r; }
 // Родительский сплит узла + сторона ('a'|'b'); null для корня.
 function parentOf(target){ let res = null; walk(WS.root, n => { if (n.t==='split'){ if (n.a===target) res={ split:n, side:'a' }; else if (n.b===target) res={ split:n, side:'b' }; } }); return res; }
-
 function firstLeaf(node){ if (!node) return null; if (node.t==='leaf') return node; return firstLeaf(node.a) || firstLeaf(node.b); }
-
-// Заменить узел old на новый в дереве (или в корне).
 function replaceNode(oldNode, newNode){ if (WS.root === oldNode){ WS.root = newNode; return; } const p = parentOf(oldNode); if (p) p.split[p.side] = newNode; }
 
 // Убрать лист из дерева: сплит-родитель схлопывается в сестринский узел.
@@ -60,35 +63,29 @@ function collapseLeaf(leaf){
   if (WS.lastLeaf === leaf.id) WS.lastLeaf = (firstLeaf(sib) || {}).id || null;
 }
 
-// ── добавление сессии ───────────────────────────────────────────────────────
+// ── добавление / открытие сессии ────────────────────────────────────────────
 // Открыть сессию в воркспейсе. desc — дескриптор пани: {kind:'file',file,title} для существующей сессии либо
-// {kind:'new',cwd,name,mode,model,effort,prompt?,title} для новой (prompt задан → сразу запуск скилла, иначе ждёт промт).
+// {kind:'new',cwd,name,mode,model,effort,prompt?,forkFile?,title} для новой (prompt задан → сразу запуск скилла).
 export function addWorkspaceSession(desc){
   const id = tabId();
   const tab = { id, kind: desc.kind, file: desc.file || '', title: desc.title || desc.name || 'сессия' };
   writeDesc(id, descForIframe(desc));
   let leaf = WS.lastLeaf ? findLeaf(WS.lastLeaf) : null;
-  if (!leaf){ leaf = firstLeaf(WS.root); }
+  if (!leaf) leaf = firstLeaf(WS.root);
   if (!leaf){ leaf = { t:'leaf', id: leafId(), tabs: [], active: 0 }; WS.root = leaf; }
-  const fresh = !leaf.tabs.length && WS.root === leaf;   // только что созданный корневой лист — DOM ещё нет
   leaf.tabs.push(tab);
   leaf.active = leaf.tabs.length - 1;
   WS.lastLeaf = leaf.id;
   saveWS();
-  const onWs = document.querySelector('.tab[data-v="workspace"]')?.getAttribute('aria-selected') === 'true';
-  // если воркспейс уже открыт и группа отрисована — доклеиваем вкладку инкрементально (не трогаем живые iframe'ы),
-  // иначе просто переключаемся на вкладку (setView построит дерево с нуля, включая новую вкладку).
-  if (onWs && built && !fresh && appendTabDOM(leaf, tab)) return;
-  gotoWorkspace();
+  gotoWorkspace();   // переключение на вкладку воркспейса перерисует структуру (nav.setView → renderWorkspace)
 }
-// Дескриптор в форме, которую читает pane-режим iframe (см. app.js bootPane).
 function descForIframe(desc){
   if (desc.kind === 'file') return { kind:'file', file: desc.file, title: desc.title || '' };
   return { kind:'new', cwd: desc.cwd, name: desc.name || '', mode: desc.mode || 'default', model: desc.model || '', effort: desc.effort || '', prompt: desc.prompt || '', forkFile: desc.forkFile || '', title: desc.title || desc.name || '' };
 }
 
-// Открыть СУЩЕСТВУЮЩУЮ сессию в воркспейсе (единая точка для карточек/палитры/уведомлений верхнего окна). Если уже
-// открыта вкладкой — активируем её, иначе добавляем в последнюю группу. Дубликатов одной сессии не плодим.
+// Открыть СУЩЕСТВУЮЩУЮ сессию в воркспейсе (единая точка для карточек/палитры/уведомлений верхнего окна). Уже открытую —
+// активируем, иначе добавляем в последнюю группу. Дубликатов одной сессии не плодим.
 export function openWorkspaceForFile(file, title){
   if (!file) return;
   const hit = tabByFile(file);
@@ -96,26 +93,29 @@ export function openWorkspaceForFile(file, title){
   const s = (S.SESSIONS || []).find(x => x.file === file);
   addWorkspaceSession({ kind:'file', file, title: title || (s && s.title) || 'сессия' });
 }
-function tabByFile(file){ let r = null; walk(WS.root, n => { if (n.t === 'leaf'){ const i = n.tabs.findIndex(t => t.file === file); if (i >= 0) r = { leaf:n, i }; } }); return r; }
 
 function gotoWorkspace(){
   const tab = document.querySelector('.tab[data-v="workspace"]');
-  if (tab) tab.click();   // переключает вид через nav.setView
+  if (tab) tab.click();   // nav.setView('workspace') → renderWorkspace()
 }
 
-// ── рендер ────────────────────────────────────────────────────────────────
-// force=true — полная перестройка дерева (структурное изменение: докинг/схлопывание). Без force и при уже
-// построенном дереве переключение на вкладку воркспейса НЕ перестраивает DOM — только домонтирует активные iframe'ы
-// (иначе каждый заход перезагружал бы все живые сессии).
-export function renderWorkspace(force=false){
+// ── рендер: структура (перестраиваемая) + слой iframe'ов (постоянный) ─────────
+export function renderWorkspace(){
   const host = document.getElementById('viewWorkspace'); if (!host) return;
-  if (!WS.root || !firstLeaf(WS.root)){ host.innerHTML = ''; host.appendChild(emptyState()); built = false; return; }
-  if (!force && built && host.querySelector('.ws-leaf')){ mountVisible(); markFocus(); return; }
-  host.innerHTML = '';
-  host.appendChild(renderNode(WS.root));
-  built = true;
-  mountVisible();
+  host.style.position = 'relative';
+  if (!WS.root || !firstLeaf(WS.root)){
+    RO.disconnect(); if (layer){ layer.remove(); layer = null; } mounted.clear();
+    host.innerHTML = ''; host.appendChild(emptyState()); return;
+  }
+  ensureLayer(host);
+  const old = host.querySelector('.ws-structure'); if (old) old.remove();
+  const struct = document.createElement('div'); struct.className = 'ws-structure';
+  struct.appendChild(renderNode(WS.root));
+  host.insertBefore(struct, layer);   // структура под слоем iframe'ов
+  RO.disconnect(); host.querySelectorAll('.ws-body').forEach(b => RO.observe(b));
+  if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(layoutFrames); else layoutFrames();
 }
+function ensureLayer(host){ if (layer && host.contains(layer)) return; layer = document.createElement('div'); layer.className = 'ws-frame-layer'; host.appendChild(layer); }
 
 function emptyState(){
   const d = document.createElement('div'); d.className = 'ws-empty';
@@ -150,7 +150,6 @@ function makeTabButton(leaf, t){
   tb.addEventListener('dragend', () => { DRAG = null; document.getElementById('viewWorkspace').classList.remove('ws-dragging'); document.querySelectorAll('.ws-dz').forEach(z=>z.className='ws-dz'); });
   return tb;
 }
-function makeCell(t, visible){ const cell = document.createElement('div'); cell.className = 'ws-cell'; cell.dataset.tab = t.id; cell.style.display = visible ? 'block' : 'none'; return cell; }
 
 function renderLeaf(leaf){
   const el = document.createElement('div');
@@ -161,8 +160,7 @@ function renderLeaf(leaf){
   const add = document.createElement('button'); add.className = 'ws-add'; add.title = 'Добавить сессию в группу'; add.textContent = '+';
   add.addEventListener('click', () => { WS.lastLeaf = leaf.id; openSessionPicker(); });
   bar.appendChild(add);
-  const body = document.createElement('div'); body.className = 'ws-body'; body.dataset.leaf = leaf.id;
-  leaf.tabs.forEach((t, i) => body.appendChild(makeCell(t, i === leaf.active)));
+  const body = document.createElement('div'); body.className = 'ws-body'; body.dataset.leaf = leaf.id;   // цель для позиционирования iframe активной вкладки
   const dz = document.createElement('div'); dz.className = 'ws-dz'; dz.innerHTML = '<i class="ws-dz-hi"></i>';
   body.appendChild(dz);
   wireDrop(body, dz, leaf);
@@ -170,59 +168,47 @@ function renderLeaf(leaf){
   el.addEventListener('mousedown', () => { if (WS.lastLeaf !== leaf.id){ WS.lastLeaf = leaf.id; saveWS(); markFocus(); } }, true);
   return el;
 }
-// Инкрементально доклеить вкладку в уже отрисованную группу — без перестройки дерева (живые iframe'ы соседей целы).
-function appendTabDOM(leaf, tab){
-  const leafEl = document.querySelector(`.ws-leaf[data-leaf="${cssq(leaf.id)}"]`); if (!leafEl) return false;
-  const bar = leafEl.querySelector('.ws-tabs'); const body = leafEl.querySelector('.ws-body');
-  bar.insertBefore(makeTabButton(leaf, tab), bar.querySelector('.ws-add'));
-  body.insertBefore(makeCell(tab, false), body.querySelector('.ws-dz'));
-  activate(leaf, leaf.tabs.findIndex(t=>t.id===tab.id));
-  return true;
-}
 
-// Смонтировать iframe'ы для активных вкладок всех видимых листов (лениво: только для уже «раскрытых» вкладок).
-function mountVisible(){
-  walk(WS.root, n => {
-    if (n.t !== 'leaf') return;
-    n.tabs.forEach((t, i) => {
-      if (i === n.active) mounted.add(t.id);
-      if (!mounted.has(t.id)) return;
-      ensureFrame(t.id);
-    });
+// Позиционировать iframe активной вкладки каждого листа поверх его .ws-body; неактивные — спрятать. iframe'ы не
+// переносятся в DOM (живут в слое), поэтому не перезагружаются ни при перестройке дерева, ни при ресайзе.
+function layoutFrames(){
+  const host = document.getElementById('viewWorkspace'); if (!host || !layer) return;
+  const hr = host.getBoundingClientRect(); const active = new Set();
+  host.querySelectorAll('.ws-body').forEach(body => {
+    const leaf = findLeaf(body.dataset.leaf); if (!leaf || !leaf.tabs.length) return;
+    const tab = leaf.tabs[leaf.active]; if (!tab) return;
+    const f = ensureFrame(tab.id); active.add(tab.id);
+    const r = body.getBoundingClientRect();
+    f.style.display = 'block';
+    f.style.left = (r.left - hr.left) + 'px'; f.style.top = (r.top - hr.top) + 'px';
+    f.style.width = r.width + 'px'; f.style.height = r.height + 'px';
   });
+  layer.querySelectorAll('.ws-frame').forEach(f => { if (!active.has(f.dataset.tab)) f.style.display = 'none'; });
 }
 function ensureFrame(tid){
-  const cell = document.querySelector(`.ws-cell[data-tab="${cssq(tid)}"]`); if (!cell) return;
-  if (cell.querySelector('iframe')) return;
-  const f = document.createElement('iframe'); f.className = 'ws-frame'; f.src = '/?pane=' + encodeURIComponent(tid);
+  let f = layer.querySelector(`.ws-frame[data-tab="${cssq(tid)}"]`); if (f) return f;
+  f = document.createElement('iframe'); f.className = 'ws-frame'; f.dataset.tab = tid; f.src = '/?pane=' + encodeURIComponent(tid);
   f.setAttribute('allow', 'clipboard-read; clipboard-write');
-  cell.appendChild(f);
+  layer.appendChild(f); mounted.add(tid); return f;
 }
 const cssq = s => String(s).replace(/["\\]/g, '\\$&');
 
 function activate(leaf, i){
-  leaf.active = i; WS.lastLeaf = leaf.id; mounted.add(leaf.tabs[i].id); saveWS();
-  const bar = document.querySelector(`.ws-leaf[data-leaf="${cssq(leaf.id)}"] .ws-tabs`);
-  const body = document.querySelector(`.ws-leaf[data-leaf="${cssq(leaf.id)}"] .ws-body`);
-  if (bar) bar.querySelectorAll('.ws-tab').forEach((el, j) => el.classList.toggle('on', j === i));
-  if (body) body.querySelectorAll('.ws-cell').forEach(c => c.style.display = c.dataset.tab === leaf.tabs[i].id ? 'block' : 'none');
-  ensureFrame(leaf.tabs[i].id);
-  markFocus();
+  leaf.active = i; WS.lastLeaf = leaf.id; saveWS();
+  const leafEl = document.querySelector(`.ws-leaf[data-leaf="${cssq(leaf.id)}"]`);
+  if (leafEl) leafEl.querySelectorAll('.ws-tab').forEach((el, j) => el.classList.toggle('on', j === i));
+  layoutFrames(); markFocus();
 }
 function markFocus(){ document.querySelectorAll('.ws-leaf').forEach(el => el.classList.toggle('focus', el.dataset.leaf === WS.lastLeaf)); }
 
 function closeTab(leaf, tid){
   const i = leaf.tabs.findIndex(t => t.id === tid); if (i < 0) return;
-  const wasActive = leaf.active === i;
   leaf.tabs.splice(i, 1);
-  mounted.delete(tid); delDesc(tid);
-  if (!leaf.tabs.length){ collapseLeaf(leaf); saveWS(); renderWorkspace(true); return; }   // лист опустел → структурная перестройка
-  if (leaf.active >= leaf.tabs.length) leaf.active = leaf.tabs.length - 1;
-  // инкрементально: убрать кнопку+ячейку закрытой вкладки, не пересобирая дерево
-  const leafEl = document.querySelector(`.ws-leaf[data-leaf="${cssq(leaf.id)}"]`);
-  if (leafEl){ leafEl.querySelector(`.ws-tab[data-tab="${cssq(tid)}"]`)?.remove(); leafEl.querySelector(`.ws-cell[data-tab="${cssq(tid)}"]`)?.remove(); }
-  if (wasActive) activate(leaf, leaf.active);
-  saveWS();
+  delDesc(tid); mounted.delete(tid);
+  const f = layer && layer.querySelector(`.ws-frame[data-tab="${cssq(tid)}"]`); if (f) f.remove();
+  if (!leaf.tabs.length) collapseLeaf(leaf);
+  else if (leaf.active >= leaf.tabs.length) leaf.active = leaf.tabs.length - 1;
+  saveWS(); renderWorkspace();   // структуру пересобираем, но живые iframe'ы соседей в слое не трогаем → без reload
 }
 
 // ── ресайз сплита ────────────────────────────────────────────────────────
@@ -234,8 +220,9 @@ function wireDivider(div, wrap, node, a, b){
       let r = node.dir === 'col' ? (ev.clientY - rect.top) / rect.height : (ev.clientX - rect.left) / rect.width;
       r = Math.max(0.12, Math.min(0.88, r));
       node.ratio = r; a.style.flex = r + ' 1 0'; b.style.flex = (1 - r) + ' 1 0';
+      layoutFrames();   // двигаем iframe'ы вслед за ячейками
     };
-    const up = ev => { div.releasePointerCapture(e.pointerId); div.removeEventListener('pointermove', move); div.removeEventListener('pointerup', up); saveWS(); };
+    const up = () => { div.releasePointerCapture(e.pointerId); div.removeEventListener('pointermove', move); div.removeEventListener('pointerup', up); saveWS(); };
     div.addEventListener('pointermove', move); div.addEventListener('pointerup', up);
   });
 }
@@ -246,14 +233,14 @@ function zoneAt(body, ev){
   const r = body.getBoundingClientRect();
   const x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
   const d = { left: x, right: 1 - x, top: y, bottom: 1 - y };
-  let min = 'center', mv = 0.28;   // порог краевой зоны
+  let min = 'center', mv = 0.28;
   for (const k of ['left','right','top','bottom']) if (d[k] < mv){ mv = d[k]; min = k; }
   return min;
 }
 function wireDrop(body, dz, leaf){
   body.addEventListener('dragover', e => {
     if (!DRAG) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-    const z = zoneAt(body, e); dz.className = 'ws-dz on z-' + z;
+    dz.className = 'ws-dz on z-' + zoneAt(body, e);
   });
   body.addEventListener('dragleave', e => { if (!body.contains(e.relatedTarget)) dz.className = 'ws-dz'; });
   body.addEventListener('drop', e => {
@@ -264,8 +251,8 @@ function wireDrop(body, dz, leaf){
 function dropTab(tid, targetLeaf, zone){
   const srcLeaf = leafOfTab(tid); if (!srcLeaf) return;
   if (zone === 'center'){
-    if (srcLeaf === targetLeaf) return;   // в свою же группу — нет смысла
-    moveTab(tid, srcLeaf, targetLeaf); saveWS(); renderWorkspace(true); return;
+    if (srcLeaf === targetLeaf) return;
+    moveTab(tid, srcLeaf, targetLeaf); saveWS(); renderWorkspace(); return;
   }
   if (srcLeaf === targetLeaf && srcLeaf.tabs.length === 1) return;   // единственную вкладку расщеплять не во что
   const tab = takeTab(tid, srcLeaf);
@@ -275,7 +262,7 @@ function dropTab(tid, targetLeaf, zone){
   const split = { t:'split', dir, ratio: 0.5, a: sideAisNew ? newLeaf : targetLeaf, b: sideAisNew ? targetLeaf : newLeaf };
   replaceNode(targetLeaf, split);
   if (!srcLeaf.tabs.length) collapseLeaf(srcLeaf);
-  WS.lastLeaf = newLeaf.id; saveWS(); renderWorkspace(true);
+  WS.lastLeaf = newLeaf.id; saveWS(); renderWorkspace();
 }
 function takeTab(tid, leaf){ const i = leaf.tabs.findIndex(t=>t.id===tid); const [tab] = leaf.tabs.splice(i,1); if (leaf.active>=leaf.tabs.length) leaf.active=Math.max(0,leaf.tabs.length-1); return tab; }
 function moveTab(tid, src, dst){ const tab = takeTab(tid, src); dst.tabs.push(tab); dst.active = dst.tabs.length-1; if (!src.tabs.length) collapseLeaf(src); }
@@ -304,9 +291,8 @@ if (typeof window !== 'undefined' && window.addEventListener) window.addEventLis
   else if (m.type === 'deck-pane-title') onPaneTitle(m.pane, m.title);
   else if (m.type === 'deck-pane-focus') onPaneFocus(m.pane);
 });
-function tabById(tid){ let r=null; walk(WS.root, n => { if (n.t==='leaf'){ const t=n.tabs.find(x=>x.id===tid); if (t) r=t; } }); return r; }
 // Новая сессия обрела файл (первый промт создал .jsonl) → фиксируем в дереве и дескрипторе, чтобы перезаход iframe
-// перецепился к реальной сессии, а карточка/вкладка знала файл. iframe НЕ перезагружаем — сессия в нём уже открыта.
+// перецепился к реальной сессии. iframe НЕ перезагружаем — сессия в нём уже открыта.
 function onPaneFile(tid, file, title){ const t = tabById(tid); if (!t) return; t.kind='file'; t.file=file; if (title) t.title=title; writeDesc(tid, { kind:'file', file, title: t.title }); saveWS(); updateTabTitle(tid); }
 function onPaneTitle(tid, title){ const t = tabById(tid); if (!t || !title) return; t.title = title; const d = readDesc(tid) || {}; d.title = title; writeDesc(tid, d); saveWS(); updateTabTitle(tid); }
 function onPaneFocus(tid){ const leaf = leafOfTab(tid); if (!leaf) return; if (WS.lastLeaf !== leaf.id){ WS.lastLeaf = leaf.id; saveWS(); markFocus(); } }

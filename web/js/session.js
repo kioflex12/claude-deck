@@ -1,7 +1,7 @@
 // Deck — оркестратор экрана сессии: открытие сессии (openSession) собирает рейл, ленту, композер и стрим.
 // Кластер сессии/чата разнесён по rail/transcript/composer/stream; здесь — только точка сборки.
 import { S, SESSION_CACHE } from './store.js';
-import { esc } from './util.js';
+import { esc, SIDE_TOGGLE } from './util.js';
 import { openWoJira, toast } from './ui.js';
 import { isWorking, renderBoard } from './board.js';
 import { setView, renderCtxTabs } from './nav.js';
@@ -62,7 +62,7 @@ export async function openSession(file){
   // тег задачи — кликабельный чип в правом верхнем углу шапки (margin-left:auto), клик → задача в Jira.
   // Всегда JS-кликабельный (как cu-тег), Jira-URL резолвим В МОМЕНТ КЛИКА (хост мог подгрузиться после рендера).
   const woChip = t.wo ? `<span class="sb-wo-tag sb-wo-run" data-wo="${esc(t.wo)}" title="Открыть ${esc(t.wo)} в Jira">${esc(t.wo)}<span class="ext">↗</span></span>` : '';
-  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title" title="Клик — переименовать контекст">${esc(t.title)}</span>${woChip}`;
+  bar.innerHTML = backBtn + `<span class="sb-wo">${esc(t.project)}</span><span class="sb-title" title="Клик — переименовать контекст">${esc(t.title)}</span>${woChip}${SIDE_TOGGLE}`;
   document.getElementById('backBtn').addEventListener('click', () => setView(S.returnView));
   const woRun = bar.querySelector('.sb-wo-run'); if (woRun) woRun.addEventListener('click', () => openWoJira(woRun.dataset.wo));
   const titleEl = bar.querySelector('.sb-title'); if (titleEl) titleEl.addEventListener('click', () => editTitle(file));
