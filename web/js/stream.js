@@ -212,7 +212,7 @@ async function submitAnswers(el, d){
   const answers = collectAnswers(el);
   if (!Object.keys(answers).length) return;   // ничего не выбрано — ждём выбор пользователя
   el.classList.add('q-resolved');
-  el.querySelectorAll('.q-opt, .q-submit').forEach(b => b.disabled = true);
+  el.querySelectorAll('.q-opt, .q-submit, .q-custom-inp').forEach(b => b.disabled = true);   // после отправки форма ответа блокируется целиком, включая поле своего ответа
   try { await fetch('/api/answer', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: d.id, answers }) }); } catch {}
   const foot = el.querySelector('.q-foot'); if (foot) foot.remove();
   const r = el.querySelector('.q-result'); if (r){ r.hidden = false; r.textContent = 'Ответ отправлен: ' + Object.values(answers).join(' · '); }
