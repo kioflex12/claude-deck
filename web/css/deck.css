@@ -594,7 +594,7 @@
     .ws-div-v{ width:8px; cursor:col-resize; } .ws-div-h{ height:8px; cursor:row-resize; }
     .ws-divider:hover{ background:color-mix(in srgb, var(--accent) 40%, transparent); }
     .ws-leaf{ display:flex; flex-direction:column; min-width:0; min-height:0; border:1px solid var(--border); border-radius:9px; overflow:hidden; background:var(--bg); }
-    .ws-leaf.focus{ border-color:var(--accent); }
+    .ws-leaf.focus{ border-color:var(--border); }   /* без акцентной окантовки — фокус группы не должен кричать оранжевым */
     .ws-tabs{ display:flex; align-items:center; gap:2px; padding:4px; background:var(--surface); border-bottom:1px solid var(--border); overflow-x:auto; scrollbar-width:thin; }
     .ws-tabs::-webkit-scrollbar{ height:6px; } .ws-tabs::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
     .ws-tab{ display:flex; align-items:center; gap:6px; max-width:190px; padding:5px 8px; border-radius:6px; font-size:12px; color:var(--text-faint); cursor:pointer; white-space:nowrap; user-select:none; }
