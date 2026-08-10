@@ -61,7 +61,7 @@ export function sideHTML(t){
   const delBtn = `<button class="btn-ghost btn-danger" id="delSessionBtn" type="button" title="Убрать сессию из Deck (в корзину, восстановимо)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/></svg> Удалить сессию</button>`;
 
   const ctx = `
-    <div class="sec"><div class="sec-label">Описание</div><div class="desc">${esc(t.lastPrompt||t.title||'—')}</div></div>
+    <div class="sec"><div class="sec-label">Последний промт</div><div class="desc">${esc(t.lastPrompt||t.title||'—')}</div></div>
     <div class="sec">
       <div class="sec-label"><span class="ll">Сессия Claude</span><span class="st-note" style="color:${stateColor}">${stateLabel}</span></div>
       <div class="stat-grid">
