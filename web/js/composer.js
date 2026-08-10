@@ -124,7 +124,7 @@ export function renderComposer(t){
       <textarea id="composer-ta" rows="1" placeholder="Написать в сессию…  «/» — скиллы  ·  📎/вставка — файлы  ·  Enter — отправить"></textarea>
       <div class="composer-foot cx-foot">
         <div class="cx-foot-l">
-          <button class="cx-ibtn" id="attachBtn" type="button" title="Прикрепить (скоро)">${ICON.attach}</button>
+          <button class="cx-ibtn" id="attachBtn" type="button" title="Прикрепить файлы (скриншоты, дампы, логи — любой файл)">${ICON.attach}</button>
           <button class="cx-ibtn" id="skillBtn" type="button" title="Скиллы (/)">/</button>
           <button class="cx-ibtn" id="compactBtn" type="button" title="Сжать контекст сессии (/compact)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg></button>
           <button class="cx-ibtn cx-stop" id="stopBtn" type="button" title="Остановить">${ICON.stop}</button>
@@ -281,6 +281,10 @@ const TEXT_EXT = /\.(txt|md|json|ya?ml|csv|log|cs|js|mjs|ts|tsx|jsx|html|css|py|
 function readAttachment(file){
   return new Promise((resolve, reject) => {
     const isImage = /^image\//.test(file.type);
+    // Не-картинки: в Electron прикладываем как ПУТЬ (Claude прочитает файл своим Read — любой тип/размер, без заливки
+    // байтов и без лимита ~18МБ). Картинки оставляем инлайном, чтобы Claude их «видел» (скриншоты багов).
+    const path = (!isImage && window.deckNative && window.deckNative.filePath) ? window.deckNative.filePath(file) : '';
+    if (path){ resolve({ name:file.name, kind:'path', path, mediaType:file.type || '' }); return; }
     const isText = !isImage && (/^text\//.test(file.type) || TEXT_EXT.test(file.name) || file.type==='application/json');
     const fr = new FileReader();
     fr.onerror = () => reject(new Error('read fail: ' + file.name));
@@ -291,14 +295,14 @@ function readAttachment(file){
       fr.onload = () => resolve({ name:file.name, mediaType:file.type || 'text/plain', kind:'text', text:String(fr.result) });
       fr.readAsText(file);
     } else {
-      // прочее бинарное — вложим как base64-текстом упоминанием (Claude не «видит», но путь/имя есть)
+      // браузер без нативного пути: прочее бинарное вложим base64 (упоминание имени; крупные упрутся в лимит)
       fr.onload = () => { const s = String(fr.result); const b64 = s.slice(s.indexOf(',') + 1); resolve({ name:file.name, mediaType:file.type || 'application/octet-stream', kind:'binary', dataB64:b64 }); };
       fr.readAsDataURL(file);
     }
   });
 }
 
-function attachBytes(a){ return a.kind==='text' ? (a.text ? a.text.length : 0) : (a.dataB64 ? Math.floor(a.dataB64.length * 3 / 4) : 0); }
+function attachBytes(a){ if (a.kind==='path') return 0; return a.kind==='text' ? (a.text ? a.text.length : 0) : (a.dataB64 ? Math.floor(a.dataB64.length * 3 / 4) : 0); }
 
 async function addAttachments(files){
   for (const f of files){
@@ -377,7 +381,7 @@ async function steerPrompt(payload){
   }
   payload.el = el;
   scrollBottom();
-  const slim = (payload.attachments || []).map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
+  const slim = (payload.attachments || []).map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text, path:a.path }));
   let ok = false, dup = false;
   try {
     const r = await fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file: S.currentFile, pid: payload.pid, prompt: payload.text, attachments: slim }) });

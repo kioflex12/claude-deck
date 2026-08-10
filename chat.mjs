@@ -43,9 +43,12 @@ export function buildUserMessage(text, attachments) {
   const list = Array.isArray(attachments) ? attachments : [];
   const images = list.filter((a) => a && a.kind === 'image' && a.dataB64);
   const textFiles = list.filter((a) => a && a.kind === 'text' && typeof a.text === 'string');
+  const pathFiles = list.filter((a) => a && a.kind === 'path' && a.path);
   const otherFiles = list.filter((a) => a && a.kind === 'binary');
   let combinedText = text || '';
   if (textFiles.length) combinedText = textFiles.map((a) => '```' + a.name + '\n' + a.text + '\n```').join('\n\n') + (text ? '\n\n' + text : '');
+  // Прикреплённые файлы (дампы/логи/любой тип) отдаём ПУТЁМ — Claude читает их своим Read (любой размер, без заливки байтов).
+  if (pathFiles.length) combinedText += '\n\nПрикреплённые файлы (прочитай через Read при необходимости):\n' + pathFiles.map((a) => '- ' + a.path).join('\n');
   if (otherFiles.length) combinedText += '\n\n[вложения без встраивания: ' + otherFiles.map((a) => a.name).join(', ') + ']';
   const content = [];
   if (combinedText.trim()) content.push({ type: 'text', text: combinedText });

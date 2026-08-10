@@ -88,6 +88,7 @@ async function start() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      nodeIntegrationInSubFrames: true,   // preload (window.deckNative) должен работать и в iframe-панях воркспейса — открыть файл/ссылку, путь файла для вложений
       sandbox: false,
     },
   });

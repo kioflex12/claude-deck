@@ -318,7 +318,7 @@ export async function runPrompt(payload){
   let streamUrl;
   if (attachments.length || isNewRun){
     try {
-      const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
+      const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text, path:a.path }));
       const body = isFork
         ? { prompt: text, mode, model, effort, fork: true, sessionFile: payload.forkFile, attachments: slim, pid }
         : payload.newSessionCwd

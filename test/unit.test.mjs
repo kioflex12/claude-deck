@@ -147,6 +147,10 @@ test('buildUserMessage: текст+вложения → SDKUserMessage с мас
   assert.equal(m.message.content[0].text, 'привет');
   const img = buildUserMessage('', [{ kind: 'image', dataB64: 'AAA', mediaType: 'image/png' }]);
   assert.ok(img.message.content.some((b) => b.type === 'image'), 'картинка → image-блок');
+  // Файл-вложение путём (дампы/логи любого размера): путь попадает в текст промта — Claude прочитает его Read'ом.
+  const pf = buildUserMessage('глянь', [{ kind: 'path', name: 'dump.sql', path: '/tmp/dump.sql' }]);
+  const txt = pf.message.content.find((b) => b.type === 'text').text;
+  assert.ok(txt.includes('/tmp/dump.sql') && /Read/.test(txt), 'путь вложения + подсказка Read в тексте');
 });
 
 test('makeInputChannel: gen отдаёт message, ждёт push, осушает очередь; pid — дедуп + onConsume', async () => {

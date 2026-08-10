@@ -1,10 +1,13 @@
 // Минимальный безопасный мост (contextIsolation on). Deck-UI по-прежнему ходит в свой localhost-сервер;
 // сюда вынесено только то, что требует нативных прав — открыть OAuth-URL логина в системном браузере
 // и показать нативное уведомление через main (надёжно даже когда окно свёрнуто в трей).
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('deckNative', {
   isElectron: true,
+  // Абсолютный путь выбранного/брошенного файла (File.path в Electron убран — только через webUtils). Нужен, чтобы
+  // прикладывать в промт ЛЮБОЙ файл (дампы/логи) как путь для чтения, без заливки байтов и лимита размера.
+  filePath: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   openExternal: (url) => ipcRenderer.invoke('deck:openExternal', url),
   openPath: (opts) => ipcRenderer.invoke('deck:openPath', opts),   // открыть локальный файл (ссылки на .md и т.п.)
   openUnity: (opts) => ipcRenderer.invoke('deck:open-unity', opts),   // запуск Unity инстанса по cu-тегу
