@@ -262,10 +262,14 @@ export async function apiAuth(res) {
     sendJSON(res, st);
     return;
   }
-  // CLI так и не ответил определённо — НЕ выкидываем из аккаунта:
-  if (_lastGood && _lastGood.loggedIn) { sendJSON(res, { ..._lastGood, stale: true }); return; }   // держим прошлый залогин (не кэшируем надолго — перепроверим)
-  if (credsLookValid()) { const data = { loggedIn: true, inferred: true }; _authCache = { ts: Date.now(), data }; sendJSON(res, data); return; }   // есть валидные креды на диске → залогинен
-  sendJSON(res, { loggedIn: false, unknown: true });   // без кэша: следующий запрос перепроверит, а не залипнет на ложном logout
+  // CLI так и не ответил определённо — НЕ выкидываем из аккаунта. Гейт показывает ТОЛЬКО определённый loggedIn:false
+  // от CLI; неответ (холодный старт после апдейта, креды в keychain — файла нет, битый PATH к бинарю) считаем
+  // залогиненным оптимистично. Кэшируем коротко (~2.5с эффективно), чтобы быстро перепроверить и скорректировать,
+  // как только CLI прогреется и ответит определённо.
+  if (_lastGood && _lastGood.loggedIn) { sendJSON(res, { ..._lastGood, stale: true }); return; }
+  const data = credsLookValid() ? { loggedIn: true, inferred: true } : { loggedIn: true, assumed: true };
+  _authCache = { ts: Date.now() - (AUTH_TTL - 2500), data };
+  sendJSON(res, data);
 }
 // Логин: спавним `claude auth login --claudeai` (пайпы → режим «вставь код»), парсим OAuth-URL из stdout,
 // отдаём клиенту (тот открывает в системном браузере). Держим процесс до ввода кода.

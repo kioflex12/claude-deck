@@ -16,7 +16,7 @@ import { pollSessions } from './notify.js';
 import { loadUsage } from './usage.js';
 import { loadEnvStatus } from './attention.js';
 import { loadModelsCatalog, UI_BUILD } from './app.js';
-import { addWorkspaceSession } from './workspace.js';
+import { addWorkspaceSession, closeWorkspaceTabsForFile } from './workspace.js';
 
 export function modalBack(id){
   let back = document.getElementById(id);
@@ -262,7 +262,10 @@ export function openDeleteDialog(file, title){
       const d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d && d.error ? d.error : 'delete failed');
       S.SESSIONS = S.SESSIONS.filter(s=>s.file!==file); delete SESSION_CACHE[file];
-      if (S.currentFile === file){ stopStream(); setView(S.returnView); } else renderBoard(false);
+      // закрыть вкладку(и) удалённой сессии в воркспейсе: из пани — сообщением родителю, из верхнего окна — напрямую
+      if (S.paneMode){ try { if (window.parent && window.parent !== window) window.parent.postMessage({ type:'deck-pane-delete', file }, location.origin); } catch {} }
+      else closeWorkspaceTabsForFile(file);
+      if (S.currentFile === file){ stopStream(); if (!S.paneMode) setView(S.returnView); } else renderBoard(false);
       toast('Перемещено в корзину (deck-trash)');
     } catch (e){ toast('Не удалось удалить: ' + (e.message||e)); }
   });

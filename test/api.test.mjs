@@ -120,7 +120,7 @@ test('/api/config → 200, значения + jira.tokenSet, сам токен �
   assert.equal(typeof body.electron, 'boolean');
 });
 
-test('/api/auth → 200, деградирует без падения (без claude CLI → loggedIn:false)', async () => {
+test('/api/auth → 200, деградирует без падения (неопределённый ответ CLI не роняет в logout)', async () => {
   const { status, body } = await getJson('/api/auth');
   assert.equal(status, 200);
   assert.equal(typeof body.loggedIn, 'boolean');

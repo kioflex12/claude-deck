@@ -117,6 +117,21 @@ export function openWorkspaceForFile(file, title){
 
 function gotoWorkspace(){ setView('workspace'); }   // напрямую, не через симуляцию клика по вкладке — надёжнее
 
+// Закрыть все вкладки, указывающие на файл (сессия удалена). Зовётся из диалога удаления верхнего окна и по сообщению
+// от пани (удаление из бокового рейла внутри iframe).
+export function closeWorkspaceTabsForFile(file){
+  if (!file) return;
+  let changed = false, hit;
+  while ((hit = tabByFile(file))){
+    const leaf = hit.leaf, id = leaf.tabs[hit.i].id;
+    leaf.tabs.splice(hit.i, 1); delDesc(id); mounted.delete(id);
+    const f = layer && layer.querySelector(`.ws-frame[data-tab="${cssq(id)}"]`); if (f) f.remove();
+    if (!leaf.tabs.length) collapseLeaf(leaf); else if (leaf.active >= leaf.tabs.length) leaf.active = leaf.tabs.length - 1;
+    changed = true;
+  }
+  if (changed){ saveWS(); renderWorkspace(); }
+}
+
 // ── рендер: структура (перестраиваемая) + слой iframe'ов (постоянный) ─────────
 export function renderWorkspace(){
   const host = document.getElementById('viewWorkspace'); if (!host) return;
@@ -325,6 +340,7 @@ if (typeof window !== 'undefined' && window.addEventListener) window.addEventLis
   if (m.type === 'deck-pane-file') onPaneFile(m.pane, m.file, m.title);
   else if (m.type === 'deck-pane-title') onPaneTitle(m.pane, m.title);
   else if (m.type === 'deck-pane-focus') onPaneFocus(m.pane);
+  else if (m.type === 'deck-pane-delete') closeWorkspaceTabsForFile(m.file);
 });
 // Новая сессия обрела файл (первый промт создал .jsonl) → фиксируем в дереве и дескрипторе, чтобы перезаход iframe
 // перецепился к реальной сессии. iframe НЕ перезагружаем — сессия в нём уже открыта.
