@@ -26,9 +26,9 @@ for (const k of ['JIRA_HOST', 'JIRA_EMAIL', 'JIRA_TOKEN', 'TEAMCITY_HOST', 'TEAM
 let srv, base, mod, core, sdk;
 before(async () => {
   const dir = path.dirname(fileURLToPath(import.meta.url));
-  mod = await import(pathToFileURL(path.join(dir, '..', 'server.mjs')).href);
-  core = await import(pathToFileURL(path.join(dir, '..', 'core.mjs')).href);
-  sdk = await import(pathToFileURL(path.join(dir, '..', 'sdk.mjs')).href);
+  mod = await import(pathToFileURL(path.join(dir, '..', 'server', 'server.mjs')).href);
+  core = await import(pathToFileURL(path.join(dir, '..', 'server', 'core.mjs')).href);
+  sdk = await import(pathToFileURL(path.join(dir, '..', 'server', 'sdk.mjs')).href);
   srv = await mod.startServer();
   base = srv.url;
 });

@@ -65,7 +65,7 @@ if (!app.requestSingleInstanceLock()) {
 async function start() {
   loadState();
   // server.mjs — ESM; грузим динамическим import() из CommonJS-main.
-  const mod = await import(pathToFileURL(path.join(__dirname, '..', 'server.mjs')).href);
+  const mod = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'server.mjs')).href);
   // СТАБИЛЬНЫЙ порт (переиспользуем прошлый, дефолт 4317): origin = localhost:<порт> постоянен → localStorage
   // (режим/модель/effort/уведомления) переживает перезапуск. Раньше был listen(0) → новый порт каждый раз →
   // новый origin → пустой localStorage → настройки «сбрасывались». Порт занят → startServer падает на свободный.

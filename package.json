@@ -1,13 +1,13 @@
 {
   "name": "claude-deck",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "description": "Deck — локальный менеджер контекстов Claude Code: доска сессий + рабочая консоль (десктоп-приложение на Electron).",
   "author": "kioflex",
   "main": "electron/main.cjs",
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node server/server.mjs",
     "test": "node --test test/*.test.mjs",
     "app": "electron .",
     "dist": "electron-builder --win",
@@ -34,7 +34,7 @@
     },
     "files": [
       "electron/**",
-      "*.mjs",
+      "server/**",
       "index.html",
       "web/**",
       "node_modules/@anthropic-ai/**",

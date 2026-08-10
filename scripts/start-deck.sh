@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deck — запуск локального сервера на macOS / Linux.
-# Работает из любой папки: переходит в каталог самого скрипта (корень репозитория).
+# Работает из любой папки: переходит в корень репозитория (родитель scripts/).
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 if ! command -v node >/dev/null 2>&1; then
   echo "[Deck] Node.js не найден. Установи Node 20+ с https://nodejs.org и запусти снова."
@@ -20,4 +20,4 @@ case "$OSTYPE" in
   darwin*) open "$URL" >/dev/null 2>&1 || true ;;
   linux*)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
 esac
-node server.mjs
+node server/server.mjs

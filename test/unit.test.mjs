@@ -6,11 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../sessions.mjs';
-import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../core.mjs';
-import { firstString, lastString, lastUsageWindow } from '../text.mjs';
+import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
+import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 
-const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href;
+const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'server.mjs')).href;
 // Динамический импорт server.mjs — ДО объявления тестов: node:test может начать выполнять уже объявленные тесты,
 // не дождавшись top-level await ниже (так CI на Node 20 падал с «Cannot access 'buildSessionBlocks' before initialization»).
 const {

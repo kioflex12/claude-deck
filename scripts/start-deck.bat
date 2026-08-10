@@ -1,9 +1,9 @@
 @echo off
 rem Deck — запуск локального сервера на Windows (двойной клик).
-rem Работает из любой папки: переходит в каталог самого .bat (корень репозитория).
+rem Работает из любой папки: переходит в корень репозитория (родитель scripts/).
 chcp 65001 >nul
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -24,6 +24,6 @@ if not exist "node_modules\@anthropic-ai\claude-agent-sdk\package.json" (
 
 echo [Deck] Запускаю сервер: http://localhost:4317  ^(Ctrl+C — остановить^)
 start "" "http://localhost:4317"
-node server.mjs
+node server\server.mjs
 echo [Deck] Сервер остановлен.
 pause

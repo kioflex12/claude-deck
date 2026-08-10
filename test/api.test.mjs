@@ -40,7 +40,7 @@ for (const k of ['JIRA_HOST', 'JIRA_EMAIL', 'JIRA_TOKEN', 'TEAMCITY_HOST', 'TEAM
 
 let srv, base, mod;
 before(async () => {
-  mod = await import(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs')).href);
+  mod = await import(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'server.mjs')).href);
   srv = await mod.startServer();
   base = srv.url;
 });

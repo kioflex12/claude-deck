@@ -9,7 +9,9 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 
-export const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Корень репо/приложения (на уровень выше server/). От него резолвятся статика (index.html, web/), node_modules и .env —
+// они лежат в корне, а серверные модули — в server/. В упакованном asar та же раскладка (server/ + корневые ассеты).
+export const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // zero-dep .env парсер: простой KEY=VALUE, игнор #/пустых, trim, снятие кавычек. Возвращает объект пар.
 export function parseEnvText(raw) {
