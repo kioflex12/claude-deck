@@ -652,8 +652,15 @@ async function tailTick(file){
     for (const b of d.blocks){ const el = appendHTML(cons, blockHTML(b)); if (el) cons.insertBefore(el, anchor); }   // anchor=null → в конец
     // «ожидает» снимаем у КАЖДОГО промта, чей текст долетел в транскрипт (несколько — независимо, не только первый: иначе
     // второй «зависал»). Раньше времени (от ЧУЖОГО вывода) не снимаем — только по совпадению своего user-блока.
-    const userTexts = new Set(d.blocks.filter(b => b.kind === 'user').map(b => String(b.text || '').trim()));
-    for (const q of [...cons.querySelectorAll('.cx-queued')]){ const md = q.querySelector('.cx-md'); const tx = md ? (md.textContent || '').trim() : ''; if (tx && userTexts.has(tx)){ q.remove(); try { removePending(file, tx); } catch {} } }
+    // Совпадение устойчивое к усечению (в транскрипте текст обрезан cap() с хвостом «…») и к markdown-рендеру: нормализуем
+    // пробелы, снимаем хвостовое «…» и считаем совпавшим, если один текст — префикс другого. Иначе длинный подкинутый
+    // промт не финализировался на tail (совпадение по точному равенству ломалось) — «в ожидании» висел до перезахода.
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().replace(/…$/, '').trim();
+    const userTexts = d.blocks.filter(b => b.kind === 'user').map(b => norm(b.text)).filter(Boolean);
+    for (const q of [...cons.querySelectorAll('.cx-queued')]){
+      const md = q.querySelector('.cx-md'); const tx = norm(md ? md.textContent : '');
+      if (tx && userTexts.some(ut => ut === tx || tx.startsWith(ut) || ut.startsWith(tx))){ q.remove(); try { removePending(file, tx); } catch {} }
+    }
     S.tailStepStart = Date.now();   // новый шаг/команда → таймер индикатора считает С ЭТОГО МОМЕНТА, а не общий тайминг хода
     if (typeof d.count === 'number') S.tailCount = d.count;
   } else if (typeof d.count === 'number') { S.tailCount = d.count; }

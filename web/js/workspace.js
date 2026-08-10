@@ -19,6 +19,7 @@ import { S, SESSION_CACHE } from './store.js';
 import { esc } from './util.js';
 import { openNewSessionDialog } from './dialogs.js';
 import { setView } from './nav.js';
+import { notifyDone, notifyInput } from './notify.js';
 
 const WS_KEY = 'deckWorkspace';
 const PANE_PREFIX = 'deckPane:';
@@ -54,6 +55,7 @@ function findLeaf(id){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.
 function leafOfTab(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.tabs.some(t=>t.id===tid)) r = n; }); return r; }
 function tabById(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const t = n.tabs.find(x=>x.id===tid); if (t) r = t; } }); return r; }
 function tabByFile(file){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const i = n.tabs.findIndex(t => t.file === file); if (i >= 0) r = { leaf:n, i }; } }); return r; }
+function titleForTab(file){ const hit = tabByFile(file); if (hit) return hit.leaf.tabs[hit.i].title || ''; const s = (S.SESSIONS || []).find(x => x.file === file); return (s && s.title) || ''; }
 // Родительский сплит узла + сторона ('a'|'b'); null для корня.
 function parentOf(target){ let res = null; walk(WS.root, n => { if (n.t==='split'){ if (n.a===target) res={ split:n, side:'a' }; else if (n.b===target) res={ split:n, side:'b' }; } }); return res; }
 function firstLeaf(node){ if (!node) return null; if (node.t==='leaf') return node; return firstLeaf(node.a) || firstLeaf(node.b); }
@@ -367,6 +369,8 @@ if (typeof window !== 'undefined' && window.addEventListener) window.addEventLis
   else if (m.type === 'deck-pane-title') onPaneTitle(m.pane, m.title);
   else if (m.type === 'deck-pane-focus') onPaneFocus(m.pane);
   else if (m.type === 'deck-pane-delete') closeWorkspaceTabsForFile(m.file);
+  else if (m.type === 'deck-notify-done') notifyDone(m.file, m.title || titleForTab(m.file), m.heading);   // паня закончила ход → уведомление из верхнего окна (работает и в фоне)
+  else if (m.type === 'deck-notify-input') notifyInput(m.file, m.id, m.title || titleForTab(m.file));       // паня ждёт ответа → уведомление
 });
 // Новая сессия обрела файл (первый промт создал .jsonl) → фиксируем в дереве и дескрипторе, чтобы перезаход iframe
 // перецепился к реальной сессии. iframe НЕ перезагружаем — сессия в нём уже открыта.

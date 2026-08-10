@@ -43,15 +43,18 @@ export async function ensureNotifyPermission(){        // тихий запро�
   if (perm === 'granted' && localStorage.getItem('deckNotify') !== 'off') S.notifyEnabled = true;
   paintNotifyBtn();
 }
+function postParent(m){ try { if (window.parent && window.parent !== window) window.parent.postMessage(m, location.origin); } catch {} }
 export function notifyDone(file, title, heading){       // одно уведомление на рабочий эпизод (дедуп по sessionId)
+  // Сессия работает в iframe-пане (notifyEnabled там выкл, чтобы не дублировать) — форвардим событие в ВЕРХНЕЕ окно,
+  // оно и шлёт нативное уведомление (и когда Deck свёрнут/в фоне). Дедуп/подавление применяет уже родитель.
+  if (S.paneMode){ postParent({ type:'deck-notify-done', file, title, heading }); return; }
   if (notifiedDone.has(file)) return;            // и Deck-finish, и poll-переход — одно и то же завершение
   notifiedDone.add(file);
   if (!S.notifyEnabled) return;                    // уважаем выключатель уведомлений в приложении
-  // Подавляем ТОЛЬКО когда юзер реально смотрит именно эту сессию: окно в фокусе И видимо И открыт этот контекст.
-  // Раньше проверяли лишь !document.hidden — но при открытом контексте с невыключенным окном (Deck на фоне, юзер занят
-  // другим приложением) hidden=false, и завершение не пинговалось. hasFocus() ловит «окно не активно» → уведомляем.
+  // Подавляем ТОЛЬКО когда Deck прямо сейчас активен (окно в фокусе И видимо) — тогда пользователь всё видит сам.
+  // Свёрнут/в фоне/на другом приложении → уведомляем ВСЕГДА (это и есть просьба «присылай, когда работа завершена»).
   const focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
-  if (focused && !document.hidden && S.currentFile === file) return;
+  if (focused && !document.hidden) return;
   const head = (heading || 'Claude завершил') + (title ? ' · ' + title : '');
   if (window.deckNative && window.deckNative.notify){   // Electron: через main — сработает и из свёрнутого в трей окна, клик сфокусит + откроет сессию
     window.deckNative.notify({ title: head, body: 'Открыть сессию в Deck', file });
@@ -66,9 +69,11 @@ export function notifyDone(file, title, heading){       // одно уведом
 // Уведомление «требуется ответ» (вопрос/аппрув повис). Дедуп по id вопроса; помечаем ТОЛЬКО когда реально шлём —
 // если сейчас выключено/юзер смотрит, id не помечаем, чтобы уведомить позже, когда он отойдёт.
 export function notifyInput(file, id, title){
+  if (S.paneMode){ postParent({ type:'deck-notify-input', file, id, title }); return; }   // из пани — в верхнее окно (см. notifyDone)
   if (!id || notifiedInput.has(id)) return;
   if (!S.notifyEnabled) return;
-  if (!document.hidden && S.currentFile === file) return;   // смотрит эту сессию в фокусе — карточку вопроса и так видно
+  const focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+  if (focused && !document.hidden) return;   // Deck активен на переднем плане — карточку вопроса видно; иначе уведомляем (в т.ч. в фоне)
   notifiedInput.add(id);
   const head = 'Требуется ответ' + (title ? ' · ' + title : '');
   if (window.deckNative && window.deckNative.notify){ window.deckNative.notify({ title: head, body: 'Claude ждёт вашего ответа', file }); return; }
