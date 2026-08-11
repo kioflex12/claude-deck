@@ -289,12 +289,31 @@ function zoneForLeaf(leafEl, x, y){
   for (const k of ['left','right','top','bottom']) if (d[k] < mv){ mv = d[k]; z = k; }
   return z;
 }
+// Позиция вставки в таб-баре листа под курсором (переупорядочивание внутри группы / точное вложение в чужую группу).
+// null — курсор не над таб-баром. index — куда вставить (по серединам существующих вкладок); markX — экранная X линии-курсора.
+function tabBarTarget(leafEl, x, y){
+  const bar = leafEl.querySelector('.ws-tabs'); if (!bar) return null;
+  const br = bar.getBoundingClientRect();
+  if (x < br.left || x > br.right || y < br.top || y > br.bottom) return null;
+  const tabs = [...bar.querySelectorAll('.ws-tab')];
+  let index = tabs.length, markX = br.left + 4;
+  for (let i = 0; i < tabs.length; i++){ const r = tabs[i].getBoundingClientRect(); if (x < r.left + r.width / 2){ index = i; markX = r.left; break; } }
+  if (index >= tabs.length && tabs.length){ markX = tabs[tabs.length - 1].getBoundingClientRect().right; }
+  return { leafId: leafEl.dataset.leaf, index, barTop: br.top, barH: br.height, markX };
+}
 function wireDragOverlay(ov){
   ov.addEventListener('dragover', e => {
     if (!DRAG) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move';
     const host = document.getElementById('viewWorkspace'); const hr = host.getBoundingClientRect();
     const leafEl = leafElAt(e.clientX, e.clientY); const hi = ov.querySelector('.ws-dz-hi');
     if (!leafEl){ CUR_TARGET = null; if (hi) hi.style.display = 'none'; return; }
+    // Курсор над таб-баром → вставка МЕЖДУ вкладками (реордер/вложение в позицию), а не грубый «center» в конец.
+    const tabT = tabBarTarget(leafEl, e.clientX, e.clientY);
+    if (tabT){
+      CUR_TARGET = { leafId: tabT.leafId, tabIndex: tabT.index };
+      if (hi){ hi.style.display = 'block'; hi.style.left = (tabT.markX - hr.left - 1) + 'px'; hi.style.top = (tabT.barTop - hr.top) + 'px'; hi.style.width = '3px'; hi.style.height = tabT.barH + 'px'; }
+      return;
+    }
     const zone = zoneForLeaf(leafEl, e.clientX, e.clientY);
     CUR_TARGET = { leafId: leafEl.dataset.leaf, zone };
     const lr = leafEl.getBoundingClientRect(); const br = leafEl.querySelector('.ws-body').getBoundingClientRect();
@@ -309,8 +328,28 @@ function wireDragOverlay(ov){
   ov.addEventListener('drop', e => {
     if (!DRAG) return; e.preventDefault();
     const tgt = CUR_TARGET, id = DRAG; hideDragOverlay(); DRAG = null;
-    if (tgt){ const leaf = findLeaf(tgt.leafId); if (leaf) dropTab(id, leaf, tgt.zone); }
+    if (tgt){ const leaf = findLeaf(tgt.leafId); if (leaf){ if (typeof tgt.tabIndex === 'number') reorderTab(id, leaf, tgt.tabIndex); else dropTab(id, leaf, tgt.zone); } }
   });
+}
+// Вставка вкладки в конкретную позицию таб-бара: тот же лист → переупорядочивание; чужой лист → вложение в позицию.
+function reorderTab(tid, targetLeaf, index){
+  const srcLeaf = leafOfTab(tid); if (!srcLeaf) return;
+  if (srcLeaf === targetLeaf){
+    const from = srcLeaf.tabs.findIndex(t => t.id === tid); if (from < 0) return;
+    let to = index; if (to > from) to--;                        // после изъятия индекс правее сдвигается на 1
+    to = Math.max(0, Math.min(to, srcLeaf.tabs.length - 1));
+    if (to === from) return;                                    // позиция не изменилась — ничего не делаем (без лишнего ре-рендера)
+    const [tab] = srcLeaf.tabs.splice(from, 1);
+    srcLeaf.tabs.splice(to, 0, tab);
+    srcLeaf.active = to;
+    saveWS(); renderWorkspace(); return;
+  }
+  const tab = takeTab(tid, srcLeaf);
+  const to = Math.max(0, Math.min(index, targetLeaf.tabs.length));
+  targetLeaf.tabs.splice(to, 0, tab);
+  targetLeaf.active = to;
+  if (!srcLeaf.tabs.length) collapseLeaf(srcLeaf);
+  WS.lastLeaf = targetLeaf.id; saveWS(); renderWorkspace();
 }
 function dropTab(tid, targetLeaf, zone){
   const srcLeaf = leafOfTab(tid); if (!srcLeaf) return;
