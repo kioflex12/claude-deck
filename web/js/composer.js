@@ -1,7 +1,7 @@
 // Deck — поле ввода сессии: автокомплит «/»-скиллов, поповер режима/модели/effort, вложения (пикер/drag/вставка),
 // очередь промтов во время стрима и отправка. Состояние — в store (S); запуск стрима — через stream.runPrompt.
 import { S, SESSION_CACHE, SKILLS_CACHE, attachDraft, promptQueue, MODE_ORDER, MODE_LABEL, ATTACH_MAX_BYTES, normMode } from './store.js';
-import { esc } from './util.js';
+import { esc, normText, textMatches } from './util.js';
 import { toast } from './ui.js';
 import { requireAuth } from './auth.js';
 import { loadModelsCatalog } from './app.js';
@@ -427,7 +427,7 @@ export function armPending(file){
   if (!file || S.currentFile !== file || S.streaming) return;   // Deck сам стримит — reconcile не нужен
   const pend = loadPending(file); if (!pend.length) return;
   const cons = document.querySelector('.cx-console');
-  const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && (md.textContent || '').trim() === tx) return b; } return null; };
+  const bubbleFor = (tx) => { if (!cons) return null; for (const b of cons.querySelectorAll('.cx-queued')){ const md = b.querySelector('.cx-md'); if (md && textMatches(md.textContent, tx)) return b; } return null; };   // устойчиво к cap()/«…»/markdown-пробелам — иначе финализация бабла промахивалась
   let queued = false;
   for (const it of pend){
     const text = String(it.text || '');
@@ -436,12 +436,17 @@ export function armPending(file){
     const pid = it.pid || newPid();
     const attachments = (it.atts || []).filter(a => a && a.kind === 'image' && a.preview).map(a => { const s = String(a.preview); return { name:a.name, mediaType:(s.match(/^data:([^;]+)/) || [])[1] || 'image/png', kind:'image', dataB64: s.slice(s.indexOf(',') + 1), preview:s }; });
     if (S.serverBusy){
+      // pendingHandled здесь — IN-FLIGHT-guard (запрос в полёте), НЕ «обработан навсегда»: снимаем его по приходу
+      // ответа, чтобы СЛЕДУЮЩИЙ тик перепроверил доставку. Раньше ключ оставался навсегда (снимался лишь при сетевом
+      // сбое) → первый POST возвращал ok (принят, но ещё не consumed SDK) → dup=false → бабл не финализировался, а
+      // перепроверок больше не было → «в ожидании» висел до перезахода. Сервер отмечает доставку (dup=true) позже —
+      // в момент реальной выдачи промта SDK, и мы ловим это на очередном тике.
       S.pendingHandled.add(key);
       addShown(file, text, attachments, pid);   // подкидываем в живой ход → фиксируем для показа (SDK может не записать в .jsonl)
       const slim = attachments.map(a => ({ name:a.name, mediaType:a.mediaType, kind:a.kind, dataB64:a.dataB64, text:a.text }));
       fetch('/api/chat-input', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ file, pid, prompt: text, attachments: slim }) })
         .then(r => r.json())
-        .then(d => { if (d && d.dup){ removePending(file, text); finalizeQueuedBubble(bubbleFor(text.trim())); } })   // уже доставлен → финализируем бабл (не удаляем)
+        .then(d => { S.pendingHandled.delete(key); if (d && d.dup){ removePending(file, text); finalizeQueuedBubble(bubbleFor(text)); } })   // consumed SDK → dup → финализируем; иначе снимаем in-flight и перепроверим на след. тике
         .catch(() => S.pendingHandled.delete(key));   // сеть моргнула — повторим на следующем тике
     } else {
       S.pendingHandled.add(key);
@@ -457,7 +462,7 @@ export function addPending(file, text, attachments, pid){
   if (!file || (!tx.trim() && !atts.length)) return;
   const a = loadPending(file); a.push({ text: tx, atts, ts: Date.now(), pid: pid || newPid() }); savePending(file, a);   // pid — для exactly-once доставки после перезахода
 }
-export function removePending(file, text){ if (!file) return; const t = String(text || '').trim(); savePending(file, loadPending(file).filter((x) => String(x && x.text || '').trim() !== t)); }
+export function removePending(file, text){ if (!file) return; const t = normText(text); savePending(file, loadPending(file).filter((x) => normText(x && x.text) !== t)); }   // нормализуем обе стороны (устойчиво к cap()/«…»/пробелам), без префикса — чтобы не снести другой pending с общим началом
 
 // Персистентный лог ПОДКИНУТЫХ (steered) промтов для показа. Их SDK не всегда пишет в .jsonl (streaming-input), поэтому
 // после перезахода в транскрипте их нет — единственная надёжная запись клиентская. Держим текст/скрины/pid, рендерим

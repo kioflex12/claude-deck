@@ -50,13 +50,18 @@ test('armPending: занято → один push в живой ход (dup сн�
   let pushes = 0; let dupResp = false;
   setFetch(async () => { pushes++; return { ok:true, status:200, json: async () => ({ ok:true, dup:dupResp }), text: async () => '', headers:{ get(){ return null; } } }; });
 
-  // 1) занято (serverBusy=true): один push в живой канал; повторный тик в этом заходе не спамит (pendingHandled).
-  // Идемпотентность обеспечивает СЕРВЕР по pid — клиент лишь снижает лишние запросы.
+  // 1) занято (serverBusy=true): КАЖДЫЙ тик перепроверяет доставку (push на тик), пока сервер не ответит dup —
+  // сервер отмечает доставку (dup) в момент реальной выдачи промта SDK, позже первого POST. Раньше ключ оставался
+  // в pendingHandled навсегда → перепроверок не было → «в ожидании» висел до перезахода. В пределах ОДНОГО тика
+  // (запрос в полёте) повторный armPending не спамит. Идемпотентность по pid добивает СЕРВЕР.
   S.currentFile = 'fbusy'; S.pendingHandled = new Set(); S.serverBusy = true;
   addPending('fbusy', 'в живой ход', []);
-  armPending('fbusy'); await new Promise(r=>setTimeout(r,10));
-  armPending('fbusy'); await new Promise(r=>setTimeout(r,10));
-  assert.equal(pushes, 1, 'занято → один push на текст в этом заходе (без спама каждые 4с)');
+  armPending('fbusy');   // тик 1 → push, запрос в полёте
+  armPending('fbusy');   // тот же тик, запрос ещё в полёте → не дублируем
+  assert.equal(pushes, 1, 'в пределах тика (запрос в полёте) — один push, без спама');
+  await new Promise(r=>setTimeout(r,10));   // ответ (dup:false) пришёл → in-flight снят
+  armPending('fbusy'); await new Promise(r=>setTimeout(r,10));   // тик 2 → перепроверяем доставку
+  assert.equal(pushes, 2, 'следующий тик перепроверяет доставку (не «обработан навсегда») — иначе dup никогда не поймать');
   assert.equal(promptQueue.length, 0, 'занято → новый ход в очередь не ставим');
   assert.equal(loadPending('fbusy').length, 1, 'pending держим — снимется по транскрипту или dup-ответу');
 

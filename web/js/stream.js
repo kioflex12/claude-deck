@@ -1,7 +1,7 @@
 // Deck — движок живого ответа: SSE-стрим Agent SDK (runPrompt), inline-аппрувы инструментов,
 // обрыв по Стоп, live-tail ленты при перезаходе и периодический рефреш правого рейла. Состояние — в store (S).
 import { S, notifiedDone, notifiedInput, SESSION_CACHE, promptQueue } from './store.js';
-import { esc, mdToHtml, ctxColor, kTok } from './util.js';
+import { esc, mdToHtml, ctxColor, kTok, textMatches } from './util.js';
 import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wireConsole } from './transcript.js';
 import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue, saveSessionSettings, armPending } from './composer.js';
 import { renderCtxTabs } from './nav.js';
@@ -670,11 +670,10 @@ async function tailTick(file){
     // Совпадение устойчивое к усечению (в транскрипте текст обрезан cap() с хвостом «…») и к markdown-рендеру: нормализуем
     // пробелы, снимаем хвостовое «…» и считаем совпавшим, если один текст — префикс другого. Иначе длинный подкинутый
     // промт не финализировался на tail (совпадение по точному равенству ломалось) — «в ожидании» висел до перезахода.
-    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().replace(/…$/, '').trim();
-    const userTexts = d.blocks.filter(b => b.kind === 'user').map(b => norm(b.text)).filter(Boolean);
+    const userTexts = d.blocks.filter(b => b.kind === 'user').map(b => b.text).filter(Boolean);
     for (const q of [...cons.querySelectorAll('.cx-queued')]){
-      const md = q.querySelector('.cx-md'); const tx = norm(md ? md.textContent : '');
-      if (tx && userTexts.some(ut => ut === tx || tx.startsWith(ut) || ut.startsWith(tx))){ q.remove(); try { removePending(file, tx); } catch {} }
+      const md = q.querySelector('.cx-md'); const tx = md ? md.textContent : '';
+      if (userTexts.some(ut => textMatches(ut, tx))){ q.remove(); try { removePending(file, tx); } catch {} }
     }
     S.tailStepStart = Date.now();   // новый шаг/команда → таймер индикатора считает С ЭТОГО МОМЕНТА, а не общий тайминг хода
     if (typeof d.count === 'number') S.tailCount = d.count;
