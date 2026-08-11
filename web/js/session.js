@@ -131,6 +131,7 @@ export function renderRail(t){
   const side = document.getElementById('sessionSide'); if (!side) return;
   if (document.activeElement && document.activeElement.id === 'tagsInput') return;
   side.innerHTML = sideHTML(t);
+  side.dataset.railWo = t.wo || '';   // маркер: под какой WO собран рейл — refresh-цикл сравнивает и делает полный ре-рендер при смене (секции Jira/Деплои гейтятся на wo)
   side.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
   wireTags(); wireSideActions(t); wireRailTabs();
   loadBuilds(t); loadDeploys(t); loadMrs(t); loadJira(t);

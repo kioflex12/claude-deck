@@ -59,6 +59,7 @@ export function setView(v){
   document.getElementById('viewSession').style.display = 'none';
   document.getElementById('q').placeholder = 'Поиск…';   // фильтр — на доске; поиск — единый
   document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.v===v)));
+  try { if (['board','status','workspace','attention'].includes(v)) localStorage.setItem('deckView', v); } catch {}   // запоминаем «домашний» вид — чтобы Ctrl+R/рефреш возвращал в воркспейс, а не ронял на доску
   if (v==='skills') renderSkills(); else if (v==='mcp'){ renderMcp(); loadUnityInstances(); } else if (v==='attention') renderAttention(); else if (v==='workspace') renderWorkspace(); else renderBoard(true);
   renderCtxTabs();
   if (boardish && leavingSession) pollSessions(true);   // форс-рефреш: свежий список сессий + live MR/Jira сразу после выхода из контекста (не ждём 7с-поллинг)

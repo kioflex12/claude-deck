@@ -589,8 +589,12 @@ export function startRailRefresh(file){
     try { const r = await fetch('/api/session?file=' + encodeURIComponent(file), { cache:'no-store' }); t2 = await r.json(); } catch {}
     if (!t2 || t2.error || S.currentFile !== file) return;
     SESSION_CACHE[file] = t2;
-    refreshRailFields(t2);                          // описание=последний промт + чипы скоупа/clientCu — появляются/меняются по мере накопления контекста
-    loadMrs(t2); loadJira(t2); loadBuilds(t2); loadDeploys(t2);      // live-секции обновляют свои боксы на месте (без мигания)
+    // Обычная сессия могла обрести WO по ходу (dev-workflow/бранч WO-...). Секции Jira/Деплои в sideHTML гейтятся на
+    // t.wo, а refreshRailFields их НЕ создаёт → без полного ре-рендера они (и их ссылки) не появлялись до переоткрытия.
+    const side = document.getElementById('sessionSide');
+    const shownWo = side ? (side.dataset.railWo || '') : '';
+    if (side && shownWo !== (t2.wo || '')){ renderRail(t2); }        // wo сменился → полный ре-рендер (renderRail сам дёргает loadMrs/loadJira/loadBuilds/loadDeploys)
+    else { refreshRailFields(t2); loadMrs(t2); loadJira(t2); loadBuilds(t2); loadDeploys(t2); }   // описание/чипы на месте + live-секции без мигания
     if (!t2.active && !t2.serverActive && !S.streaming){ stopRailRefresh(); }   // затихла, хода на сервере нет, Deck не стримит → рефреш не нужен
   }, 15000);
 }
