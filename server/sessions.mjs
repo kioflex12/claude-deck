@@ -171,9 +171,16 @@ export function detectClientCuFromText(text) {
   const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
   return top ? 'cu' + top : '';
 }
-// Целевой сквад НЕ детектим из текста переписки: любое упоминание squad-N (в промте, выводе инструмента, RAG, логе,
-// вставленном JSON-конфиге) — это обсуждение, а не скоуп сессии. Источник истины — только dev-workflow-состояние
-// (st.targetEnv в scopeInfo), которое пишет сам воркфлоу под конкретную WO. Нет состояния → сквад не показываем.
+// Целевой сквад из текста берём ТОЛЬКО по достоверному маркеру деплой-таргета, который пишет install/deploy-тулинг:
+// версия статики окружения (v<N>-squad-M) либо поля targetEnv/squadStaticVersion в JSON. Голые упоминания squad-N
+// (в промте/выводе/RAG/обсуждении конфига) НЕ считаем — это разговор, а не скоуп. Берём последнее вхождение (свежее
+// решение). Применяется лишь как фолбэк к state.targetEnv и ТОЛЬКО для сессий с WO (реальная задача) — см. вызовы.
+export function detectSquadMarkerFromText(text) {
+  let out = '', m;
+  const re = /(?:"(?:targetEnv|squadStaticVersion)"\s*:\s*"[^"]*?|v\d+-)squad-?(\d+)/gi;
+  while ((m = re.exec(String(text)))) out = 'squad-' + m[1];
+  return out;
+}
 export function detectBranchFromText(text, wo) {
   // Только ветки, начинающиеся с WO САМОЙ сессии — иначе рискуем взять ветку чужой задачи, упомянутой в переписке чаще.
   const w = String(wo || '').toUpperCase();
@@ -299,7 +306,7 @@ function textSummary(f) {
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
-  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo) };
+  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo), squadMarker: wo ? detectSquadMarkerFromText(text) : '' };
   _summaryCache.set(key, c);
   return c;
 }
@@ -322,6 +329,7 @@ function buildSessionSummary(f, wfStates) {
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, c.cwd);
   if (!scope.clientCu && c.clientCuText) scope.clientCu = c.clientCuText;   // копия из cwd/путей правок сессии (bugfix правит копию не из своего cwd)
+  if (!scope.targetEnv && c.squadMarker) scope.targetEnv = c.squadMarker;   // сквад по достоверному маркеру деплоя (только сессии с WO), если state.targetEnv не заполнен
   const workBranch = (c.gitBranch && !isBaseBranch(c.gitBranch)) ? c.gitBranch : (c.branchText || c.gitBranch);   // кастомная ветка из текста, если cwd на базовой
   const baseBranch = c.baseBranchText || scope.targetEnv || '';
   return {
@@ -539,6 +547,7 @@ export function apiSession(relFile) {
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
   if (!scope.clientCu){ const cu = detectClientCuFromText(text); if (cu) scope.clientCu = cu; }   // копия из cwd/путей правок (правит копию не из своего cwd)
+  if (!scope.targetEnv && wo){ const sm = detectSquadMarkerFromText(text); if (sm) scope.targetEnv = sm; }   // сквад по достоверному маркеру деплоя (только сессии с WO), если state.targetEnv не заполнен
   const workBranch = (gitBranch && !isBaseBranch(gitBranch)) ? gitBranch : (detectBranchFromText(text, wo) || gitBranch);   // кастомная ветка (по WO сессии), если cwd на базовой
   const baseBranch = pickBaseBranch(branches) || scope.targetEnv || '';
   const notes = notesFromClarifications(st && st.userClarifications);

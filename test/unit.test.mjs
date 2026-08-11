@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, detectSquadMarkerFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 import { extractBuildIds } from '../server/services.mjs';
@@ -37,6 +37,13 @@ test('extractBuildIds: buildId из TeamCity-ссылок транскрипта
   const t = 'log https://wo-teamcity/viewLog.html?buildId=146877&buildTypeId=Wo_Backend_K8sNewCluster_OneServiceBuildAndUpdate ... снова buildId=146877 ... и ещё viewLog.html?buildId=2820';
   assert.deepEqual(extractBuildIds(t), ['146877', '2820'], 'дедуп + порядок появления');
   assert.deepEqual(extractBuildIds('нет ссылок'), []);
+});
+test('detectSquadMarkerFromText: сквад ТОЛЬКО по достоверному маркеру деплоя, не по голому упоминанию', () => {
+  assert.equal(detectSquadMarkerFromText('версия статики v10554-squad-40 после install'), 'squad-40', 'v<N>-squad-M — достоверный маркер');
+  assert.equal(detectSquadMarkerFromText('"squadStaticVersion": "v9001-squad-7"'), 'squad-7', 'поле squadStaticVersion');
+  assert.equal(detectSquadMarkerFromText('"targetEnv": "squad-15"'), 'squad-15', 'поле targetEnv');
+  assert.equal(detectSquadMarkerFromText('деплоим на squad40, обсуждаем squad-12 squad-12'), '', 'голые упоминания squad-N — не маркер (обсуждение ≠ скоуп)');
+  assert.equal(detectSquadMarkerFromText('раскатал v10-squad-3, потом v20-squad-9'), 'squad-9', 'последнее вхождение = свежее решение');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');
