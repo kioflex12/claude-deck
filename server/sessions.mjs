@@ -467,10 +467,24 @@ export function sessionArtifacts(relFile) {
   const wo = firstUserWo(text) || '';
   const DOC_EXT = /\.(md|markdown|sql|txt|json|ya?ml|html|csv)$/i;
   const touched = new Set();
+  const attached = new Set();
+  // Пути файлов, приложенных ПОЛЬЗОВАТЕЛЕМ (kind:'path' — дампы/логи/любой тип): buildUserMessage кладёт их в текст
+  // user-сообщения блоком «Прикреплённые файлы (…):\n- <path>». Достаём построчно из распарсенного текста (в JSON-строке
+  // это реальные \n), чтобы показать в артефактах наравне с правками.
+  const MARK = 'Прикреплённые файлы (прочитай через Read';
+  const grabAttached = (ut) => {
+    const i = String(ut).indexOf(MARK); if (i < 0) return;
+    for (const ln of String(ut).slice(i).split('\n').slice(1)) { const m = ln.match(/^-\s+(.+\S)\s*$/); if (m) attached.add(m[1]); else break; }
+  };
   for (const line of text.split('\n')) {
     const s = line.trim(); if (!s || s[0] !== '{') continue;
     let o; try { o = JSON.parse(s); } catch { continue; }
     const content = o && o.message && o.message.content;
+    const isUser = (o && o.type === 'user') || (o && o.message && o.message.role === 'user');
+    if (isUser) {
+      if (typeof content === 'string') grabAttached(content);
+      else if (Array.isArray(content)) for (const c of content) if (c && c.type === 'text' && typeof c.text === 'string') grabAttached(c.text);
+    }
     if (!Array.isArray(content)) continue;
     for (const c of content) {
       if (!c || c.type !== 'tool_use' || !/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(c.name || '')) continue;
@@ -498,18 +512,21 @@ export function sessionArtifacts(relFile) {
     return ext ? ext.toUpperCase() : 'файл';
   };
   const seen = new Set(), out = [];
-  const addAbs = (abs, fromFeature) => {
+  const addAbs = (abs, fromFeature, isAttached) => {
     const norm = path.resolve(abs);
     if (seen.has(norm)) return;
     let st; try { st = statSync(norm); if (!st.isFile()) return; } catch { return; }
     const name = path.basename(norm);
     const ext = (name.match(/\.([^.]+)$/) || [])[1] || '';
-    const rel = cwd ? path.relative(cwd, norm).split(path.sep).join('/') : name;
+    // Для вложений отдаём АБСОЛЮТНЫЙ путь (они часто вне cwd — дампы/логи из Temp/Downloads): openFileViewer тогда
+    // корректно откроет их внешним приложением ОС. Правки/доки — относительно cwd (открываются встроенным просмотрщиком).
+    const rel = isAttached ? norm.split(path.sep).join('/') : (cwd ? path.relative(cwd, norm).split(path.sep).join('/') : name);
     seen.add(norm);
-    out.push({ name, rel, ext, kind: kindOf(name, ext), touched: touched.has(abs), feature: !!fromFeature, mtime: st.mtimeMs });
+    out.push({ name, rel, ext, kind: isAttached ? 'вложение' : kindOf(name, ext), touched: touched.has(abs), feature: !!fromFeature, attached: !!isAttached, mtime: st.mtimeMs });
   };
-  for (const abs of featureAbs) addAbs(abs, true);
-  for (const abs of touched) if (DOC_EXT.test(abs)) addAbs(abs, false);
+  for (const abs of featureAbs) addAbs(abs, true, false);
+  for (const abs of touched) if (DOC_EXT.test(abs)) addAbs(abs, false, false);
+  for (const abs of attached) addAbs(abs, false, true);
   out.sort((a, b) => (a.feature ? 0 : 1) - (b.feature ? 0 : 1) || b.mtime - a.mtime);
   return { cwd, wo, artifacts: out.slice(0, 80) };
 }

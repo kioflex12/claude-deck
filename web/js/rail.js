@@ -115,8 +115,9 @@ function artifactsHTML(){
   const row = (a) => `<button class="rail-artifact${a.feature?' is-feature':''}" data-path="${esc(a.rel)}" data-cwd="${esc(S.artifactsCwd)}" title="${esc(a.rel)}"><span class="ra-name">${esc(a.name)}</span><span class="ra-kind">${esc(a.kind)}</span></button>`;
   const group = (label, arr) => arr.length ? `<div class="ra-grouphd">${label}</div>` + arr.map(row).join('') : '';
   const feat = S.artifacts.filter(a => a.feature);
-  const rest = S.artifacts.filter(a => !a.feature);
-  return `<div class="sec">` + group('Папка фичи', feat) + group('Изменено в сессии', rest) + `</div>`;
+  const att = S.artifacts.filter(a => !a.feature && a.attached);
+  const rest = S.artifacts.filter(a => !a.feature && !a.attached);
+  return `<div class="sec">` + group('Папка фичи', feat) + group('Изменено в сессии', rest) + group('Приложено пользователем', att) + `</div>`;
 }
 
 function wireArtifactRows(){
