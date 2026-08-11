@@ -41,6 +41,11 @@ test('detectTargetEnvFromText: целевой сквад из текста (са
   assert.equal(detectTargetEnvFromText('squad-7 и squad-7 против squad-12'), 'squad-7');
   assert.equal(detectTargetEnvFromText('деплой на preprod'), '', 'preprod — базовая ветка, не сквад');
   assert.equal(detectTargetEnvFromText('нет окружения'), '');
+  const noisy = '{"type":"user","message":{"content":"используй скоуп squad40"}}\n'
+    + '{"type":"assistant","message":{"content":[{"type":"text","text":"смотрю squad-12 squad-12 squad-12"}]}}';
+  assert.equal(detectTargetEnvFromText(noisy), 'squad-40', 'сквад из промта человека перебивает частый шум squad-12 из вывода');
+  assert.equal(detectTargetEnvFromText('план: "squadStaticVersion": "v10554-squad-40", а вокруг squad-12 squad-12 squad-12 squad-12'), 'squad-40', 'версия статики окружения — достоверный таргет, перебивает частый squad-12');
+  assert.equal(detectTargetEnvFromText('"targetEnv": "squad-7" ... squad-12 squad-12'), 'squad-7', 'явное поле targetEnv авторитетнее частоты');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');

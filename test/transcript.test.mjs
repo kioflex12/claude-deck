@@ -60,13 +60,15 @@ test('addShown: лог подкинутых промтов — дедуп по p
   localStorage.clear();
 });
 
-test('renderThread со shown-логом подкинутых промтов не падает и не теряет лог (null-DOM)', async () => {
+test('renderThread со shown-логом: доставленный вычищается, осиротевший остаётся (null-DOM)', async () => {
   const w = watchBrokenRefs();
   localStorage.clear();
-  addShown('finj', 'мой подкинутый промт', [], 'pid-x');   // steered, в .jsonl не попал
-  addShown('finj', 'этот уже в транскрипте', [], 'pid-y');
+  addShown('finj', 'мой подкинутый промт', [], 'pid-x');   // steered, в .jsonl не попал → осиротевший, показываем и держим
+  addShown('finj', 'этот уже в транскрипте  ', [], 'pid-y');   // хвостовые пробелы: точное равенство бы промазало
   assert.doesNotThrow(() => renderThread({ file:'finj', active:false, blocks:[ { kind:'user', text:'этот уже в транскрипте' }, { kind:'assistant', text:'ответ' } ] }));
-  assert.equal(loadShown('finj').length, 2, 'лог показа не стирается рендером (это персистентная история подкинутого)');
+  const log = loadShown('finj');
+  assert.equal(log.length, 1, 'доставленный (есть в транскрипте) вычищен из стора — не залипает внизу на каждом заходе');
+  assert.equal(log[0].pid, 'pid-x', 'остался только реально осиротевший steered-промт');
   localStorage.clear();
   await new Promise((r) => setTimeout(r, 20));
   w.stop();

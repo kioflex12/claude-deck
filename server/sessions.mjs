@@ -170,12 +170,37 @@ export function detectClientCuFromText(text) {
 // targetEnv может быть ещё не записан — а сквад уже назван в промте. Берём самое частое упоминание squad-N. preprod/
 // preupdate/prod не ловим (они базовые ветки, показываются отдельным чипом).
 export function detectTargetEnvFromText(text) {
-  const hits = String(text).match(/\bsquad-?\d+/gi) || [];
-  if (!hits.length) return '';
-  const cnt = {};
-  for (const h of hits) { const n = h.match(/(\d+)/)[1]; cnt[n] = (cnt[n] || 0) + 1; }
-  const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
-  return top ? 'squad-' + top : '';
+  const s = String(text);
+  // 1) Достоверный маркер деплой-таргета: версия статики окружения (v<N>-squad-M) либо явные поля targetEnv/
+  //    squadStaticVersion в JSON — их пишет install/deploy-тулинг, они ОДНОЗНАЧНО называют сквад. Берём последнее
+  //    вхождение (свежее решение) и не отдаём его на откуп частотности, где чужой squad-N перебивает реальный таргет.
+  let auth = '', m;
+  const authRe = /(?:"(?:targetEnv|squadStaticVersion)"\s*:\s*"[^"]*?|v\d+-)squad-?(\d+)/gi;
+  while ((m = authRe.exec(s))) auth = 'squad-' + m[1];
+  if (auth) return auth;
+  const topSquad = (str) => {
+    const hits = str.match(/\bsquad-?\d+/gi) || [];
+    if (!hits.length) return '';
+    const cnt = {};
+    for (const h of hits) { const n = h.match(/(\d+)/)[1]; cnt[n] = (cnt[n] || 0) + 1; }
+    const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
+    return top ? 'squad-' + top : '';
+  };
+  // 2) Приоритет — сквад из ЧЕЛОВЕЧЕСКИХ промтов (явно указанный таргет), а не из вывода инструментов/RAG/логов: там
+  //    случайный чужой squad-N встречается чаще и перебивал реальное намерение (юзер задал squad40, а панель брала шумный squad-12).
+  let human = '';
+  for (const line of s.split('\n')) {
+    if (line.indexOf('"type":"user"') < 0) continue;
+    let ev; try { ev = JSON.parse(line); } catch { continue; }
+    if (ev.type !== 'user' || ev.isMeta === true) continue;
+    const c = ev.message && ev.message.content;
+    let t = typeof c === 'string' ? c
+      : Array.isArray(c) ? c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ') : '';
+    t = t.replace(SYSREM, '').trim();
+    if (!t || t.startsWith('Caveat:') || t.includes('<local-command-stdout>')) continue;
+    human += ' ' + t;
+  }
+  return topSquad(human) || topSquad(s);
 }
 export function detectBranchFromText(text, wo) {
   // Только ветки, начинающиеся с WO САМОЙ сессии — иначе рискуем взять ветку чужой задачи, упомянутой в переписке чаще.

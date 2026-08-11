@@ -3,7 +3,7 @@
 import { S } from './store.js';
 import { esc, mdToHtml, fmtTok } from './util.js';
 import { startTail, stopTail, appendTerminalNote } from './stream.js';
-import { loadPending, removePending, armPending, loadShown } from './composer.js';
+import { loadPending, removePending, armPending, loadShown, saveShown } from './composer.js';
 
 const INITIAL_WINDOW = 300;   // сколько последних блоков рендерим сразу; остальные — по кнопке «более ранние»
 const EARLIER_CHUNK = 400;    // сколько догружаем за один клик
@@ -132,13 +132,14 @@ export function renderThread(t){
     const pend = loadPending(t.file);
     if (pend.length){
       const cons = document.querySelector('.cx-console');
-      const seen = new Set(blocks.filter((b) => b.kind === 'user').map((b) => String(b.text || '').trim()));
+      const normP = (s) => String(s || '').replace(/\s+/g, ' ').trim().replace(/…$/, '').trim();   // как в tailTick: точное равенство мажет (cap/«…»/пробелы) → «зомби»-бабл
+      const seenNorm = blocks.filter((b) => b.kind === 'user').map((b) => normP(b.text)).filter(Boolean);
       if (cons) for (const it of pend){
-        const tx = String(it && it.text || '').trim();
+        const tx = normP(it && it.text);
         const atts = (it && it.atts) || [];
         if (!tx && !atts.length){ removePending(t.file, it && it.text || ''); continue; }   // пустой промт без вложений — чистим и пропускаем
         if (it && it.ts && (Date.now() - it.ts) > PENDING_TTL_MS){ removePending(t.file, it.text || ''); continue; }   // протух (не доставлен за PENDING_TTL_MS) — не воскрешаем «зомби»-бабл
-        if (tx && seen.has(tx)){ removePending(t.file, tx); continue; }   // уже долетел в транскрипт — не дублируем
+        if (tx && seenNorm.some((ut) => ut === tx || tx.startsWith(ut) || ut.startsWith(tx))){ removePending(t.file, it.text || ''); continue; }   // уже долетел в транскрипт — не дублируем
         const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
         if (el){
           if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // восстановить приложенные скрины (кликабельны → лайтбокс)
@@ -154,16 +155,25 @@ export function renderThread(t){
     const shown = loadShown(t.file);
     if (shown.length){
       const cons = document.querySelector('.cx-console');
-      const inTranscript = new Set(blocks.filter((b) => b.kind === 'user').map((b) => String(b.text || '').trim()));
-      const pendingTexts = new Set(loadPending(t.file).map((x) => String(x && x.text || '').trim()));
+      // Сверка с транскриптом — устойчивая (нормализация пробелов + префикс, как в tailTick): блоки транскрипта
+      // обрезаются cap()/«…», а SDK мог записать промт с иным форматированием. При точном равенстве совпадение мажет,
+      // shown-запись считается недоставленной и дописывалась в самый низ на КАЖДОМ заходе (залипший промт внизу).
+      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().replace(/…$/, '').trim();
+      const userNorm = blocks.filter((b) => b.kind === 'user').map((b) => norm(b.text)).filter(Boolean);
+      const pendingNorm = new Set(loadPending(t.file).map((x) => norm(x && x.text)).filter(Boolean));
+      const delivered = (tx) => userNorm.some((ut) => ut === tx || tx.startsWith(ut) || ut.startsWith(tx));
+      const keep = [];
       if (cons) for (const it of shown){
-        const tx = String(it && it.text || '').trim();
+        const raw = String(it && it.text || '');
+        const tx = norm(raw);
         const atts = (it && it.atts) || [];
-        if (!tx && !atts.length) continue;
-        if (tx && (inTranscript.has(tx) || pendingTexts.has(tx))) continue;   // уже показан транскриптом или «в ожидании»-баблом
-        const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
+        if (!tx && !atts.length) continue;                                   // мусорная запись → выкидываем из стора
+        if (tx && (delivered(tx) || pendingNorm.has(tx))) continue;          // долетел в транскрипт / висит «в ожидании» → из стора убираем, не воскрешаем
+        keep.push(it);                                                       // действительно осиротевший (SDK не записал) — оставляем и показываем
+        const el = appendHTML(cons, blockHTML({ kind: 'user', text: raw }));
         if (el && atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // обычное сообщение, без метки «подкинуто»
       }
+      if (keep.length !== shown.length) saveShown(t.file, keep);             // подчистили доставленные/мусор → перестанут залипать внизу на каждом заходе
     }
   } catch {}
   setTimeout(() => { try { if (S.currentFile === t.file) armPending(t.file); } catch {} }, 900);   // авто-дослать пережившие перезаход промты (после 1-го tailTick — чтобы верно понять, идёт ход или свободно)

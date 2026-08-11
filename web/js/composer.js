@@ -464,6 +464,15 @@ export function removePending(file, text){ if (!file) return; const t = String(t
 // в ленте, если такого текста нет в транскрипте (renderThread). Так пользователь ВСЕГДА видит, что промт был подкинут.
 const SHOWN_PREFIX = 'deckShown:';
 export function loadShown(file){ try { return JSON.parse(localStorage.getItem(SHOWN_PREFIX + file) || '[]'); } catch { return []; } }
+export function saveShown(file, arr){
+  if (!file) return;
+  try {
+    if (!arr || !arr.length){ localStorage.removeItem(SHOWN_PREFIX + file); return; }
+    const slim = arr.slice(-50);
+    try { localStorage.setItem(SHOWN_PREFIX + file, JSON.stringify(slim)); }
+    catch { localStorage.setItem(SHOWN_PREFIX + file, JSON.stringify(slim.map(x => ({ text:x.text, ts:x.ts, pid:x.pid })))); }
+  } catch {}
+}
 export function addShown(file, text, attachments, pid){
   const tx = String(text || ''); const atts = (attachments || []).map(a => ({ kind:a.kind, name:a.name, preview: a.kind==='image' ? (a.preview || '') : '' }));
   if (!file || (!tx.trim() && !atts.length)) return;
