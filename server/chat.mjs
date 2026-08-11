@@ -284,8 +284,12 @@ export async function apiChat(req, res, u) {
       canUseTool,                     // read-only → авто-allow; мутирующее → SSE approval + ожидание решения
       hooks: {
         PostToolUse: [
-          { matcher: 'AskUserQuestion', hooks: [askQuestionHook] },   // вопрос с вариантами — всегда ждём ответ пользователя
-          { matcher: 'ExitPlanMode', hooks: [exitPlanHook] },         // выход из плана — принять/оставить, решает пользователь
+          // timeout — в СЕКУНДАХ на весь matcher. БЕЗ него SDK применяет дефолт (~60с) и по нему БРОСАЕТ наш хук, беря
+          // исходный авто-вывод AskUserQuestion (там дефолтный вариант) → «сессия сама выбрала ответ», если человек не
+          // ответил за минуту. Ставим сутки — вопрос ждёт /api/answer практически бесконечно (heartbeat держит SSE живым),
+          // отменяется только Стопом (ac.abort). Без крупного timeout ожидание ответа в awaitUserInput бессмысленно.
+          { matcher: 'AskUserQuestion', hooks: [askQuestionHook], timeout: 86400 },   // вопрос с вариантами — всегда ждём ответ пользователя
+          { matcher: 'ExitPlanMode', hooks: [exitPlanHook], timeout: 86400 },         // выход из плана — принять/оставить, решает пользователь
         ],
       },
       settingSources: ['user', 'project', 'local'],   // как настоящая CC-сессия: скиллы (/dev-workflow…), CLAUDE.md, агенты
