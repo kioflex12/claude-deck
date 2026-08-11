@@ -612,7 +612,9 @@
     .ws-body{ position:relative; flex:1; min-height:0; }
     .ws-dragover{ position:absolute; inset:0; z-index:20; display:none; pointer-events:none; }   /* только визуальная подсветка зон во время drag; drag ведут pointer-события вкладки (pointer capture поверх iframe'ов), сами пани ВИДНЫ */
     .ws-dragover.on{ display:block; }
-    .ws-dz-hi{ position:absolute; display:none; background:color-mix(in srgb, var(--accent) 22%, transparent); border:2px solid var(--accent); border-radius:8px; pointer-events:none; }
+    .ws-dz-hi{ position:absolute; display:none; background:color-mix(in srgb, var(--accent) 22%, transparent); border:2px solid var(--accent); border-radius:8px; pointer-events:none; transition:left .09s ease, top .09s ease, width .09s ease, height .09s ease; }   /* плавный переезд зоны между четвертями/вкладками — не «дёргано» */
+    .ws-tab-dragging{ opacity:.35; }   /* исходная вкладка приглушена, пока её «призрак» летит за курсором */
+    .ws-drag-ghost{ position:fixed; z-index:9999; pointer-events:none; transform:translate(12px,10px); max-width:210px; padding:5px 10px; border-radius:7px; background:var(--surface); color:var(--text); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:1px solid var(--accent); box-shadow:0 6px 18px rgba(0,0,0,.4); opacity:.96; }
     .ws-empty{ display:flex; flex:1; align-items:center; justify-content:center; }
     .ws-empty-in{ max-width:460px; text-align:center; }
     .ws-empty-t{ font-size:16px; font-weight:700; color:var(--text); }

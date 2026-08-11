@@ -194,15 +194,17 @@ function makeTabButton(leaf, t){
   // при заходе на панель. Захват указателя (как у сплиттера-дивайдера) доводит pointermove даже поверх iframe'ов.
   tb.addEventListener('pointerdown', e => {
     if (e.button !== 0 || (e.target.closest && e.target.closest('.ws-tx'))) return;   // не левый клик / крестик — не drag
-    const sx = e.clientX, sy = e.clientY; let dragging = false;
+    const sx = e.clientX, sy = e.clientY; let dragging = false; let ghost = null;
     try { tb.setPointerCapture(e.pointerId); } catch {}
     const onMove = ev => {
-      if (!dragging){ if (Math.abs(ev.clientX - sx) < 5 && Math.abs(ev.clientY - sy) < 5) return; dragging = true; DRAG = t.id; showDragOverlay(); }   // порог, чтобы клик не превращался в drag
+      if (!dragging){ if (Math.abs(ev.clientX - sx) < 5 && Math.abs(ev.clientY - sy) < 5) return; dragging = true; DRAG = t.id; showDragOverlay(); tb.classList.add('ws-tab-dragging'); ghost = makeDragGhost(t.title || 'сессия'); }   // порог, чтобы клик не превращался в drag
+      if (ghost){ ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; }   // «призрак» вкладки летит за курсором — наглядность перетаскивания
       updateDropTarget(ev.clientX, ev.clientY);
     };
     const onUp = () => {
       tb.removeEventListener('pointermove', onMove); tb.removeEventListener('pointerup', onUp); tb.removeEventListener('pointercancel', onUp);
       try { tb.releasePointerCapture(e.pointerId); } catch {}
+      if (ghost) ghost.remove(); tb.classList.remove('ws-tab-dragging');
       if (dragging) performDrop();
       else activate(leaf, leaf.tabs.findIndex(x => x.id === t.id));   // без сдвига — это обычный клик: активируем вкладку
     };
@@ -286,6 +288,8 @@ function wireDivider(div, wrap, node, a, b){
 
 // ── докинг вкладок (drag&drop) через прозрачный оверлей ──────────────────────
 let DRAG = null;   // id перетаскиваемой вкладки
+// «Призрак» перетаскиваемой вкладки — плавающий ярлык под курсором (pointer-events:none, чтобы не мешать hit-тесту).
+function makeDragGhost(title){ const g = document.createElement('div'); g.className = 'ws-drag-ghost'; g.textContent = title; document.body.appendChild(g); return g; }
 function showDragOverlay(){ if (dragOv){ dragOv.classList.add('on'); } }
 function hideDragOverlay(){ if (dragOv){ dragOv.classList.remove('on'); const hi = dragOv.querySelector('.ws-dz-hi'); if (hi) hi.style.display = 'none'; } CUR_TARGET = null; }
 
