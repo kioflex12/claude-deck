@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, detectTargetEnvFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 
@@ -29,6 +29,12 @@ test('detectBranchFromText: только ветка WO самой сессии (
   assert.equal(detectBranchFromText(txt, 'WO-13887'), 'WO-13887-chat-r4-r5-realtime-preprod');
   assert.equal(detectBranchFromText(txt, ''), '', 'без WO сессии не угадываем');
   assert.equal(detectBranchFromText('нет веток', 'WO-1'), '');
+});
+test('detectTargetEnvFromText: целевой сквад из текста (самое частое упоминание), preprod не ловим', () => {
+  assert.equal(detectTargetEnvFromText('окружение: squad40 ... раскатываю squad40 на squad40'), 'squad-40');
+  assert.equal(detectTargetEnvFromText('squad-7 и squad-7 против squad-12'), 'squad-7');
+  assert.equal(detectTargetEnvFromText('деплой на preprod'), '', 'preprod — базовая ветка, не сквад');
+  assert.equal(detectTargetEnvFromText('нет окружения'), '');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');

@@ -172,6 +172,7 @@
     .pill.mr-closed{ color:var(--bad); border-color:var(--bad-soft); background:var(--bad-soft); }
     .chip.sc-cu{ color:var(--accent-ink); border-color:var(--accent-soft); background:var(--accent-soft); }
     .chip.sc-be{ color:var(--info); border-color:var(--info-soft); background:var(--info-soft); }
+    .chip.sc-env{ color:var(--good); border-color:var(--good-soft); background:var(--good-soft); font-family:var(--mono); }
     .chip.sc-st{ color:var(--warn); border-color:var(--warn-soft); background:var(--warn-soft); }
     .chip.sc-base{ color:var(--text-muted); border-color:var(--border-strong); font-family:var(--mono); }
     .chip.sc-tag{ color:var(--accent-ink); border-color:var(--accent-soft); background:var(--accent-soft); }

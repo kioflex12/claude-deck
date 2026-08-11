@@ -10,6 +10,7 @@ import { S } from './store.js';
 // Чипы скоупа (clientCu/backend/статика/базовая ветка) — общий рендер для рейла и его surgical-обновления по ходу сессии.
 export function scopeChipsHTML(t){
   return (t.clientCu?`<span class="chip sc-cu sc-cu-run" data-cu="${esc(t.clientCu)}" data-cwd="${esc(t.cwd||'')}" title="Открыть/запустить Unity (${esc(t.clientCu)})">${esc(t.clientCu)}</span>`:'')
+    + (t.targetEnv?`<span class="chip sc-env" title="целевое окружение/сквад">${esc(t.targetEnv)}</span>`:'')
     + (t.backend?`<span class="chip sc-be">backend</span>`:'')
     + (t.statics?`<span class="chip sc-st">статика</span>`:'')
     + (t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:'');
