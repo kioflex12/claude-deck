@@ -90,7 +90,7 @@ export function sideHTML(t){
     </div>
     <div class="sec"><div class="sec-label">Merge Requests</div>${mrSection}</div>
     <div class="sec"><div class="sec-label">Сборки</div>${buildSection}</div>
-    <div class="sec"><div class="sec-label">Деплои</div><div id="deployBox"><div class="rail-hint">проверяю TeamCity…</div></div></div>
+    ${(t.backend || t.statics)?`<div class="sec"><div class="sec-label">Деплои</div><div id="deployBox"><div class="rail-hint">проверяю TeamCity…</div></div></div>`:''}
     ${notesSection}
     <div class="sec"><div class="sec-label">Файл сессии</div><div class="rail-hint"><code>${esc(t.file)}</code></div>
       <div class="side-actions">${jiraBtn}${forkBtn}${delBtn}</div>

@@ -29,6 +29,7 @@ export function isWorking(s){ return !!s && (s.working === true || (s.bgRunning|
 function scopeChipsHTML(s){   // скоуп: cuN · backend · статика · ЕДИНЫЙ тег базовой ветки (форк-источник ≈ таргет, ✓ если влито)
   const out = [];
   if (s.clientCu) out.push(`<span class="chip sc-cu sc-cu-run" data-cu="${esc(s.clientCu)}" data-cwd="${esc(s.cwd||'')}" title="Запустить Unity (${esc(s.clientCu)})">${esc(s.clientCu)}</span>`);
+  if (s.targetEnv) out.push(`<span class="chip sc-env" title="целевое окружение/сквад">${esc(s.targetEnv)}</span>`);
   if (s.backend)  out.push(`<span class="chip sc-be">backend</span>`);
   if (s.statics)  out.push(`<span class="chip sc-st">статика</span>`);
   if (s.baseBranch) out.push(`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(s.baseBranch)}${s.merged?' ✓':''}</span>`);

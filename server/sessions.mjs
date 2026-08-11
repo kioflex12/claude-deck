@@ -156,52 +156,24 @@ export function scopeInfo(st, cwd) {
 // Fallback-детект из ТЕКСТА сессии: bugfix-сессии стартуют из центрального репо (cwd=vibecode, gitBranch=preprod), а правят
 // клиентскую копию по абсолютным путям и в кастомной ветке — это видно только в переписке. Берём самое частое упоминание.
 export function detectClientCuFromText(text) {
-  // Приоритет — поля "cwd" записей (реальная рабочая папка Claude Code, менявшаяся по ходу на client-unity-N); частота
-  // упоминаний в тексте — лишь фолбэк. Так тег = копия, где РЕАЛЬНО шла работа, а не которую вскользь упомянули.
-  const cwdHits = String(text).match(/"cwd"\s*:\s*"[^"]*client-unity-(\d+)/g);
-  const src = (cwdHits && cwdHits.length) ? cwdHits : (String(text).match(/client-unity-(\d+)/g) || []);
-  if (!src.length) return '';
+  // Копию берём ТОЛЬКО из структурных сигналов сессии: реальной рабочей папки ("cwd") и путей правок инструментами
+  // ("file_path" у Edit/Write/MultiEdit — bugfix правит копию не из своего cwd, а по абсолютному пути). Прозаические
+  // упоминания client-unity-N в переписке НЕ считаем скоупом: обсуждение копии ≠ работа в ней (иначе любая болтовня
+  // про cu1 вешала тег cu1 на несвязанную сессию).
+  const s = String(text);
+  const hits = [
+    ...(s.match(/"cwd"\s*:\s*"[^"]*client-unity-(\d+)/g) || []),
+    ...(s.match(/"file_path"\s*:\s*"[^"]*client-unity-(\d+)/g) || []),
+  ];
+  if (!hits.length) return '';
   const cnt = {};
-  for (const h of src) { const n = h.match(/client-unity-(\d+)/)[1]; cnt[n] = (cnt[n] || 0) + 1; }
+  for (const h of hits) { const n = h.match(/client-unity-(\d+)/)[1]; cnt[n] = (cnt[n] || 0) + 1; }
   const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
   return top ? 'cu' + top : '';
 }
-// Fallback-детект целевого окружения-сквада из ТЕКСТА сессии (dev-workflow: «окружение: squad40»). workflow-state с
-// targetEnv может быть ещё не записан — а сквад уже назван в промте. Берём самое частое упоминание squad-N. preprod/
-// preupdate/prod не ловим (они базовые ветки, показываются отдельным чипом).
-export function detectTargetEnvFromText(text) {
-  const s = String(text);
-  // 1) Достоверный маркер деплой-таргета: версия статики окружения (v<N>-squad-M) либо явные поля targetEnv/
-  //    squadStaticVersion в JSON — их пишет install/deploy-тулинг, они ОДНОЗНАЧНО называют сквад. Берём последнее
-  //    вхождение (свежее решение) и не отдаём его на откуп частотности, где чужой squad-N перебивает реальный таргет.
-  let auth = '', m;
-  const authRe = /(?:"(?:targetEnv|squadStaticVersion)"\s*:\s*"[^"]*?|v\d+-)squad-?(\d+)/gi;
-  while ((m = authRe.exec(s))) auth = 'squad-' + m[1];
-  if (auth) return auth;
-  const topSquad = (str) => {
-    const hits = str.match(/\bsquad-?\d+/gi) || [];
-    if (!hits.length) return '';
-    const cnt = {};
-    for (const h of hits) { const n = h.match(/(\d+)/)[1]; cnt[n] = (cnt[n] || 0) + 1; }
-    const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
-    return top ? 'squad-' + top : '';
-  };
-  // 2) Приоритет — сквад из ЧЕЛОВЕЧЕСКИХ промтов (явно указанный таргет), а не из вывода инструментов/RAG/логов: там
-  //    случайный чужой squad-N встречается чаще и перебивал реальное намерение (юзер задал squad40, а панель брала шумный squad-12).
-  let human = '';
-  for (const line of s.split('\n')) {
-    if (line.indexOf('"type":"user"') < 0) continue;
-    let ev; try { ev = JSON.parse(line); } catch { continue; }
-    if (ev.type !== 'user' || ev.isMeta === true) continue;
-    const c = ev.message && ev.message.content;
-    let t = typeof c === 'string' ? c
-      : Array.isArray(c) ? c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ') : '';
-    t = t.replace(SYSREM, '').trim();
-    if (!t || t.startsWith('Caveat:') || t.includes('<local-command-stdout>')) continue;
-    human += ' ' + t;
-  }
-  return topSquad(human) || topSquad(s);
-}
+// Целевой сквад НЕ детектим из текста переписки: любое упоминание squad-N (в промте, выводе инструмента, RAG, логе,
+// вставленном JSON-конфиге) — это обсуждение, а не скоуп сессии. Источник истины — только dev-workflow-состояние
+// (st.targetEnv в scopeInfo), которое пишет сам воркфлоу под конкретную WO. Нет состояния → сквад не показываем.
 export function detectBranchFromText(text, wo) {
   // Только ветки, начинающиеся с WO САМОЙ сессии — иначе рискуем взять ветку чужой задачи, упомянутой в переписке чаще.
   const w = String(wo || '').toUpperCase();
@@ -327,7 +299,7 @@ function textSummary(f) {
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
-  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo), targetEnvText: detectTargetEnvFromText(text) };
+  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo) };
   _summaryCache.set(key, c);
   return c;
 }
@@ -349,8 +321,7 @@ function buildSessionSummary(f, wfStates) {
   const st = c.wo ? wfStates.get(c.wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, c.cwd);
-  if (!scope.clientCu && c.clientCuText) scope.clientCu = c.clientCuText;   // копия из путей сессии (bugfix правит копию не из своего cwd)
-  if (!scope.targetEnv && c.targetEnvText) scope.targetEnv = c.targetEnvText;   // сквад из текста, если workflow-state ещё без targetEnv
+  if (!scope.clientCu && c.clientCuText) scope.clientCu = c.clientCuText;   // копия из cwd/путей правок сессии (bugfix правит копию не из своего cwd)
   const workBranch = (c.gitBranch && !isBaseBranch(c.gitBranch)) ? c.gitBranch : (c.branchText || c.gitBranch);   // кастомная ветка из текста, если cwd на базовой
   const baseBranch = c.baseBranchText || scope.targetEnv || '';
   return {
@@ -567,8 +538,7 @@ export function apiSession(relFile) {
   const st = wo ? loadWfStates().get(wo) : null;
   const wf = wfInfo(st, active);
   const scope = scopeInfo(st, cwd);
-  if (!scope.clientCu){ const cu = detectClientCuFromText(text); if (cu) scope.clientCu = cu; }   // копия из путей сессии (правит копию не из своего cwd)
-  if (!scope.targetEnv){ const env = detectTargetEnvFromText(text); if (env) scope.targetEnv = env; }   // сквад из текста, если state ещё без targetEnv
+  if (!scope.clientCu){ const cu = detectClientCuFromText(text); if (cu) scope.clientCu = cu; }   // копия из cwd/путей правок (правит копию не из своего cwd)
   const workBranch = (gitBranch && !isBaseBranch(gitBranch)) ? gitBranch : (detectBranchFromText(text, wo) || gitBranch);   // кастомная ветка (по WO сессии), если cwd на базовой
   const baseBranch = pickBaseBranch(branches) || scope.targetEnv || '';
   const notes = notesFromClarifications(st && st.userClarifications);

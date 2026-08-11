@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { watchBrokenRefs, makeEl } from './dom-stub.mjs';
 import { S } from '../web/js/store.js';
 import { renderThread, blockHTML, appendHTML } from '../web/js/transcript.js';
-import { addShown, loadShown } from '../web/js/composer.js';
+import { addShown, loadShown, addPending } from '../web/js/composer.js';
 
 test('transcript.js: blockHTML всех видов + renderThread + appendHTML в null-DOM', async () => {
   const w = watchBrokenRefs();
@@ -60,15 +60,17 @@ test('addShown: лог подкинутых промтов — дедуп по p
   localStorage.clear();
 });
 
-test('renderThread со shown-логом: доставленный вычищается, осиротевший остаётся (null-DOM)', async () => {
+test('renderThread со shown-логом: отработавшие НЕ рисуются внизу, в сторе остаётся только «в ожидании» (null-DOM)', async () => {
   const w = watchBrokenRefs();
   localStorage.clear();
-  addShown('finj', 'мой подкинутый промт', [], 'pid-x');   // steered, в .jsonl не попал → осиротевший, показываем и держим
-  addShown('finj', 'этот уже в транскрипте  ', [], 'pid-y');   // хвостовые пробелы: точное равенство бы промазало
+  addShown('finj', 'отработал, SDK не записал', [], 'pid-x');   // не в транскрипте и не в pending → уже отработал, чистим (не рисуем внизу)
+  addShown('finj', 'этот уже в транскрипте  ', [], 'pid-y');    // хвостовые пробелы: точное равенство бы промазало → доставлен, чистим
+  addPending('finj', 'ещё висит в ожидании', [], 'pid-z');
+  addShown('finj', 'ещё висит в ожидании', [], 'pid-z');        // есть в pending → его рисует pending-loop, в сторе держим
   assert.doesNotThrow(() => renderThread({ file:'finj', active:false, blocks:[ { kind:'user', text:'этот уже в транскрипте' }, { kind:'assistant', text:'ответ' } ] }));
   const log = loadShown('finj');
-  assert.equal(log.length, 1, 'доставленный (есть в транскрипте) вычищен из стора — не залипает внизу на каждом заходе');
-  assert.equal(log[0].pid, 'pid-x', 'остался только реально осиротевший steered-промт');
+  assert.equal(log.length, 1, 'отработавшие (нет в транскрипте и в pending) выкинуты — не залипают внизу');
+  assert.equal(log[0].pid, 'pid-z', 'в сторе остался только реально ожидающий (есть в pending)');
   localStorage.clear();
   await new Promise((r) => setTimeout(r, 20));
   w.stop();

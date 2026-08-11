@@ -149,29 +149,18 @@ export function renderThread(t){
       }
     }
   } catch {}
-  try {   // ПОДКИНУТЫЕ (steered) промты, которых нет в транскрипте (SDK их не записал) и нет среди «в ожидании» — показать
-    // как обычные доставленные сообщения, чтобы пользователь видел, что промт реально был подкинут (а не пропал).
+  try {   // ПОДКИНУТЫЕ (steered) промты, которые SDK не записал в .jsonl, БОЛЬШЕ не дорисовываем внизу: если промта нет
+    // ни в транскрипте, ни в pending — он уже отработал (доставка снимает pending), а дописывание в конец показывало
+    // старый промт как «последнее» сообщение (жалоба: «отработавшие висят внизу»). Видимый след работы — ответ Claude
+    // в транскрипте на своём месте. Стор лишь чистим: держим только то, что реально ещё «в ожидании» (есть в pending,
+    // его рисует pending-loop выше); остальное — resolved, выкидываем, чтобы не залипало.
     const shown = loadShown(t.file);
     if (shown.length){
-      const cons = document.querySelector('.cx-console');
-      // Сверка с транскриптом — устойчивая (нормализация пробелов + префикс, как в tailTick): блоки транскрипта
-      // обрезаются cap()/«…», а SDK мог записать промт с иным форматированием. При точном равенстве совпадение мажет,
-      // shown-запись считается недоставленной и дописывалась в самый низ на КАЖДОМ заходе (залипший промт внизу).
       const userTexts = blocks.filter((b) => b.kind === 'user').map((b) => b.text).filter(Boolean);
       const pendingNorm = new Set(loadPending(t.file).map((x) => normText(x && x.text)).filter(Boolean));
-      const delivered = (tx) => userTexts.some((ut) => textMatches(ut, tx));
-      const keep = [];
-      if (cons) for (const it of shown){
-        const raw = String(it && it.text || '');
-        const tx = normText(raw);
-        const atts = (it && it.atts) || [];
-        if (!tx && !atts.length) continue;                                   // мусорная запись → выкидываем из стора
-        if (tx && (delivered(tx) || pendingNorm.has(tx))) continue;          // долетел в транскрипт / висит «в ожидании» → из стора убираем, не воскрешаем
-        keep.push(it);                                                       // действительно осиротевший (SDK не записал) — оставляем и показываем
-        const el = appendHTML(cons, blockHTML({ kind: 'user', text: raw }));
-        if (el && atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // обычное сообщение, без метки «подкинуто»
-      }
-      if (keep.length !== shown.length) saveShown(t.file, keep);             // подчистили доставленные/мусор → перестанут залипать внизу на каждом заходе
+      const inTranscript = (tx) => userTexts.some((ut) => textMatches(ut, tx));
+      const keep = shown.filter((it) => { const tx = normText(it && it.text); return tx && !inTranscript(tx) && pendingNorm.has(tx); });
+      if (keep.length !== shown.length) saveShown(t.file, keep);
     }
   } catch {}
   setTimeout(() => { try { if (S.currentFile === t.file) armPending(t.file); } catch {} }, 900);   // авто-дослать пережившие перезаход промты (после 1-го tailTick — чтобы верно понять, идёт ход или свободно)

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, detectTargetEnvFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 import { extractBuildIds } from '../server/services.mjs';
@@ -20,9 +20,11 @@ const {
   isReadOnlyTool, briefArg, woOf, buildUserMessage, makeInputChannel,
 } = await import(SRV);
 
-test('detectClientCuFromText: копия из cwd-полей (реальная рабочая папка), а не из вскользь-упоминаний', () => {
+test('detectClientCuFromText: копия из структурных сигналов (cwd/file_path), НЕ из прозаических упоминаний', () => {
   const txt = '"cwd":"D:/wo/client-unity-2/Assets" ... "cwd":"D:/wo/client-unity-2" ... а в тексте client-unity-1 client-unity-1 client-unity-1';
-  assert.equal(detectClientCuFromText(txt), 'cu2', 'cwd-поля указывают на 2, хоть 1 упомянут чаще');
+  assert.equal(detectClientCuFromText(txt), 'cu2', 'cwd-поля указывают на 2, прозаический client-unity-1 игнорим');
+  assert.equal(detectClientCuFromText('"file_path":"D:/wo/client-unity-3/Assets/A.cs"'), 'cu3', 'копия из пути правки инструментом (bugfix правит по абсолютному пути)');
+  assert.equal(detectClientCuFromText('обсуждаем client-unity-1 и client-unity-4, но не работаем в них'), '', 'одни упоминания в прозе → копии нет (обсуждение ≠ скоуп)');
   assert.equal(detectClientCuFromText('без копий'), '');
 });
 test('detectBranchFromText: только ветка WO самой сессии (чужую задачу отсекает даже если чаще)', () => {
@@ -35,17 +37,6 @@ test('extractBuildIds: buildId из TeamCity-ссылок транскрипта
   const t = 'log https://wo-teamcity/viewLog.html?buildId=146877&buildTypeId=Wo_Backend_K8sNewCluster_OneServiceBuildAndUpdate ... снова buildId=146877 ... и ещё viewLog.html?buildId=2820';
   assert.deepEqual(extractBuildIds(t), ['146877', '2820'], 'дедуп + порядок появления');
   assert.deepEqual(extractBuildIds('нет ссылок'), []);
-});
-test('detectTargetEnvFromText: целевой сквад из текста (самое частое упоминание), preprod не ловим', () => {
-  assert.equal(detectTargetEnvFromText('окружение: squad40 ... раскатываю squad40 на squad40'), 'squad-40');
-  assert.equal(detectTargetEnvFromText('squad-7 и squad-7 против squad-12'), 'squad-7');
-  assert.equal(detectTargetEnvFromText('деплой на preprod'), '', 'preprod — базовая ветка, не сквад');
-  assert.equal(detectTargetEnvFromText('нет окружения'), '');
-  const noisy = '{"type":"user","message":{"content":"используй скоуп squad40"}}\n'
-    + '{"type":"assistant","message":{"content":[{"type":"text","text":"смотрю squad-12 squad-12 squad-12"}]}}';
-  assert.equal(detectTargetEnvFromText(noisy), 'squad-40', 'сквад из промта человека перебивает частый шум squad-12 из вывода');
-  assert.equal(detectTargetEnvFromText('план: "squadStaticVersion": "v10554-squad-40", а вокруг squad-12 squad-12 squad-12 squad-12'), 'squad-40', 'версия статики окружения — достоверный таргет, перебивает частый squad-12');
-  assert.equal(detectTargetEnvFromText('"targetEnv": "squad-7" ... squad-12 squad-12'), 'squad-7', 'явное поле targetEnv авторитетнее частоты');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');
