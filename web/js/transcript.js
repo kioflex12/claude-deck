@@ -162,10 +162,7 @@ export function renderThread(t){
         if (!tx && !atts.length) continue;
         if (tx && (inTranscript.has(tx) || pendingTexts.has(tx))) continue;   // уже показан транскриптом или «в ожидании»-баблом
         const el = appendHTML(cons, blockHTML({ kind: 'user', text: it.text || '' }));
-        if (el){
-          if (atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));
-          el.insertAdjacentHTML('beforeend', '<div class="cx-injected-tag">подкинуто</div>');   // метка: промт доставлен подкидыванием (в истории CLI его может не быть)
-        }
+        if (el && atts.length) el.insertAdjacentHTML('beforeend', attachThumbsHTML(atts));   // обычное сообщение, без метки «подкинуто»
       }
     }
   } catch {}

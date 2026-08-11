@@ -52,7 +52,7 @@ S.paneMode = PANE_MODE;   // читает session.js: в пане openSession р
 if (PANE_MODE) document.documentElement.classList.add('pane-mode');
 
 /* Deck — реальные сессии Claude Code. Данные: /api/sessions (список) + /api/session (транскрипт блоками) + /api/skills (скиллы по cwd). */
-export const UI_BUILD = '0.2.10';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
+export const UI_BUILD = '0.2.11';   // версия ИМЕННО статики (index.html/app.js). Показывается в «Обновлениях»; расхождение с версией asar = жива старая статика (побитое обновление)
 export const jiraUrl = (wo) => S.JIRA_HOST_CFG ? ("https://" + S.JIRA_HOST_CFG + "/browse/" + wo) : "";
 const GL = "https://gitlab.wo/";
 const TC = "https://teamcity.wo/viewLog.html?buildId=";
@@ -189,6 +189,9 @@ if (!PANE_MODE){
   ensureStatusTab();
   initNotifyToggle();
   wireTopbar();
+  // состояние входа в Claude (чип/гейт) — иначе чип по дефолту красный до первого тапа. Если первый ответ «не вошёл»
+  // (холодный CLI на старте), одноразово перепроверяем через 2.5с — чип сам позеленеет, без тапа.
+  loadAuth().then(() => { if (!(S.AUTH && S.AUTH.loggedIn)) setTimeout(loadAuth, 2500); });
   loadServicesGate();
   // Electron: клик по нативному уведомлению приходит сюда мостом → открываем сессию.
   if (window.deckNative && window.deckNative.onOpenSession) window.deckNative.onOpenSession((file)=>{ if (file) openSession(file); });
