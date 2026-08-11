@@ -610,7 +610,7 @@
     .ws-add{ border:0; background:transparent; color:var(--text-faint); font-size:16px; line-height:1; cursor:pointer; padding:2px 7px; }
     .ws-add:hover{ color:var(--text); }
     .ws-body{ position:relative; flex:1; min-height:0; }
-    .ws-dragover{ position:absolute; inset:0; z-index:20; display:none; }   /* во время drag ловит dragover/drop поверх iframe'ов (те «съедают» события), сами пани ВИДНЫ (не гасим в чёрное) */
+    .ws-dragover{ position:absolute; inset:0; z-index:20; display:none; pointer-events:none; }   /* только визуальная подсветка зон во время drag; drag ведут pointer-события вкладки (pointer capture поверх iframe'ов), сами пани ВИДНЫ */
     .ws-dragover.on{ display:block; }
     .ws-dz-hi{ position:absolute; display:none; background:color-mix(in srgb, var(--accent) 22%, transparent); border:2px solid var(--accent); border-radius:8px; pointer-events:none; }
     .ws-empty{ display:flex; flex:1; align-items:center; justify-content:center; }
