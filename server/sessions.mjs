@@ -190,6 +190,15 @@ export function detectBranchFromText(text, wo) {
   for (const h of hits) { if (!h.toUpperCase().startsWith(w + '-')) continue; cnt[h] = (cnt[h] || 0) + 1; }
   return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '';
 }
+// WO, над которой сессия РЕАЛЬНО работает, когда её не видно ни в ветке cwd (сессия на базовой preprod, а WO-ветка — в
+// отдельном worktree), ни в заголовке, ни в первых промтах (обычная задача, ставшая workflow-задачей ПОЗЖЕ). Берём из
+// git-команды создания/переключения ветки в tool_use (`checkout -b` / `switch -c` / `branch -m …` / `worktree add …`
+// WO-N) — авторитетный структурный сигнал. НЕ ловим прозу/память: WO-имена в тексте инжектов не лежат в поле "command".
+export function detectWorkedWo(text) {
+  const re = /"command"\s*:\s*"[^"]*?\bgit\b[^"]*?\b(?:checkout|switch|branch|worktree)\b[^"]*?(WO-\d+)/gi;
+  const m = re.exec(String(text));
+  return m ? m[1].toUpperCase() : '';
+}
 
 // -------- сбор списка сессий --------
 
@@ -305,7 +314,7 @@ function textSummary(f) {
   const model = prettyModel(lastRealModel(text));
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
-  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);   // WO: ветка → заголовок → первичный WO из первого промпта
+  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text) || detectWorkedWo(text);   // WO: ветка → заголовок → первый промт → git-ветка WO-… созданная сессией (обычная задача, ставшая workflow позже)
   const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo), squadMarker: wo ? detectSquadMarkerFromText(text) : '' };
   _summaryCache.set(key, c);
   return c;
@@ -533,8 +542,8 @@ export function apiSession(relFile) {
   if (!title){ const firstPrompt = firstString(text, 'lastPrompt') || lastPrompt; title = firstPrompt.split('\n')[0].slice(0, 80) || '(без заголовка)'; }
   const gitBranch = pickWorkingBranch(branches);
   const mtime = (() => { try { return statSync(rp.resolved).mtimeMs; } catch { return 0; } })();
-  // WO: рабочая ветка → заголовок → первичный WO из первого промпта
-  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text);
+  // WO: рабочая ветка → заголовок → первый промт → git-ветка WO-… созданная сессией (обычная задача, ставшая workflow позже)
+  const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text) || detectWorkedWo(text);
   const projDir = path.basename(path.dirname(rp.resolved));
   const sessionId = path.basename(rp.resolved).replace(/\.jsonl$/, '');
   const agents = sessionAgentsDetail(projDir, sessionId);   // деталь: label/activity/tokens (открытая сессия — парсить можно)

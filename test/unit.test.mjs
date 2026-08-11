@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, detectSquadMarkerFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, detectSquadMarkerFromText, detectWorkedWo, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 import { extractBuildIds } from '../server/services.mjs';
@@ -44,6 +44,14 @@ test('detectSquadMarkerFromText: сквад ТОЛЬКО по достоверн
   assert.equal(detectSquadMarkerFromText('"targetEnv": "squad-15"'), 'squad-15', 'поле targetEnv');
   assert.equal(detectSquadMarkerFromText('деплоим на squad40, обсуждаем squad-12 squad-12'), '', 'голые упоминания squad-N — не маркер (обсуждение ≠ скоуп)');
   assert.equal(detectSquadMarkerFromText('раскатал v10-squad-3, потом v20-squad-9'), 'squad-9', 'последнее вхождение = свежее решение');
+});
+test('detectWorkedWo: WO из git-команды создания ветки (не из прозы/памяти)', () => {
+  const branchCmd = '{"type":"tool_use","name":"Bash","input":{"command":"cd /d/wo/wt && git branch -m perf-x WO-14495-quiet-device-logging-preprod && echo ok"}}';
+  assert.equal(detectWorkedWo(branchCmd), 'WO-14495', 'git branch -m … WO-N → авторитетно');
+  assert.equal(detectWorkedWo('{"command":"git checkout -b WO-777-fix"}'), 'WO-777');
+  assert.equal(detectWorkedWo('{"command":"git worktree add ../wt WO-42-thing"}'), 'WO-42');
+  assert.equal(detectWorkedWo('в памяти есть ветка WO-14495-quiet-device-logging-preprod, но это проза'), '', 'упоминание вне поля command → не WO сессии');
+  assert.equal(detectWorkedWo('{"command":"git status"}'), '', 'обычная git-команда без WO-ветки → пусто');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');
