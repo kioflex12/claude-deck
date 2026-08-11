@@ -176,8 +176,11 @@ export function detectClientCuFromText(text) {
 // (в промте/выводе/RAG/обсуждении конфига) НЕ считаем — это разговор, а не скоуп. Берём последнее вхождение (свежее
 // решение). Применяется лишь как фолбэк к state.targetEnv и ТОЛЬКО для сессий с WO (реальная задача) — см. вызовы.
 export function detectSquadMarkerFromText(text) {
+  // ТОЛЬКО JSON-поля targetEnv/squadStaticVersion (их пишет workflow-state / план сессии). Голый маркер v<N>-squad-M
+  // НЕ ловим: он есть в CLAUDE.md проекта как пример (`v10156-squad-9`) и инжектится в контекст КАЖДОЙ сессии → давал
+  // ложный squad-9 повсюду. JSON-поле в боилерплейте не встречается — только в реальном стейте/плане самой сессии.
   let out = '', m;
-  const re = /(?:"(?:targetEnv|squadStaticVersion)"\s*:\s*"[^"]*?|v\d+-)squad-?(\d+)/gi;
+  const re = /"(?:targetEnv|squadStaticVersion)"\s*:\s*"[^"]*?squad-?(\d+)/gi;
   while ((m = re.exec(String(text)))) out = 'squad-' + m[1];
   return out;
 }

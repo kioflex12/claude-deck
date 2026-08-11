@@ -38,12 +38,13 @@ test('extractBuildIds: buildId из TeamCity-ссылок транскрипта
   assert.deepEqual(extractBuildIds(t), ['146877', '2820'], 'дедуп + порядок появления');
   assert.deepEqual(extractBuildIds('нет ссылок'), []);
 });
-test('detectSquadMarkerFromText: сквад ТОЛЬКО по достоверному маркеру деплоя, не по голому упоминанию', () => {
-  assert.equal(detectSquadMarkerFromText('версия статики v10554-squad-40 после install'), 'squad-40', 'v<N>-squad-M — достоверный маркер');
+test('detectSquadMarkerFromText: сквад ТОЛЬКО из JSON-поля стейта/плана, не из прозы/боилерплейта', () => {
   assert.equal(detectSquadMarkerFromText('"squadStaticVersion": "v9001-squad-7"'), 'squad-7', 'поле squadStaticVersion');
   assert.equal(detectSquadMarkerFromText('"targetEnv": "squad-15"'), 'squad-15', 'поле targetEnv');
-  assert.equal(detectSquadMarkerFromText('деплоим на squad40, обсуждаем squad-12 squad-12'), '', 'голые упоминания squad-N — не маркер (обсуждение ≠ скоуп)');
-  assert.equal(detectSquadMarkerFromText('раскатал v10-squad-3, потом v20-squad-9'), 'squad-9', 'последнее вхождение = свежее решение');
+  assert.equal(detectSquadMarkerFromText('план: "targetEnv":"squad-3" ... позже "squadStaticVersion":"v20-squad-9"'), 'squad-9', 'последнее вхождение = свежее решение');
+  assert.equal(detectSquadMarkerFromText('версия статики v10554-squad-40 после install'), '', 'голый v<N>-squad-M — НЕ маркер (это форма примера из CLAUDE.md, инжектится всюду)');
+  assert.equal(detectSquadMarkerFromText('пример из доки v10156-squad-9 для apply-sql-patch'), '', 'боилерплейт CLAUDE.md не должен давать squad-9');
+  assert.equal(detectSquadMarkerFromText('деплоим на squad40, обсуждаем squad-12'), '', 'голые упоминания squad-N — не маркер');
 });
 test('detectWorkedWo: WO из git-команды создания ветки (не из прозы/памяти)', () => {
   const branchCmd = '{"type":"tool_use","name":"Bash","input":{"command":"cd /d/wo/wt && git branch -m perf-x WO-14495-quiet-device-logging-preprod && echo ok"}}';
