@@ -1,8 +1,10 @@
 // Deck — интеграции с внешними сервисами: live-статус клиентских сборок TeamCity, MR по ветке из GitLab
 // и статус задачи в Jira. Хосты/токены резолвятся в applyConfig (core); нет токена → мягкая деградация.
 
-import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, sendJSON, readJsonBody, fetchRetry, markHealth, svcHealth, loadConfig } from './core.mjs';
+import { TC_HOST, TC_TOKEN, GL_HOST, GL_TOKEN, JIRA_ENABLED, JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN, BASE_BRANCHES, PROJECTS_DIR, sendJSON, readJsonBody, fetchRetry, markHealth, svcHealth, loadConfig } from './core.mjs';
 import { isBaseBranch } from './text.mjs';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 // TECH-4: /api/health — сводка здоровья интеграций для топбар-индикатора (какой сервис деградирует и почему).
 export function apiHealth(res) { sendJSON(res, { services: svcHealth }); }
@@ -144,6 +146,56 @@ export async function apiBuild(res, u) {
     const reason = (e && e.message) || String(e);
     markHealth('teamcity', { ok: false, reason });
     sendJSON(res, { available: false, reason, host: TC_HOST });
+  }
+}
+
+// -------- Деплои сессии: любые бэкенд-/env-/статика-джобы TeamCity, которые сессия триггерила (в транскрипте остаётся
+// ссылка viewLog.html?buildId=N). Показываем статус ПОСЛЕДНИХ по buildId — покрывает ЛЮБОЙ сервис/раскатку сквада без
+// хардкода конфигов и без угадывания параметров: buildId конкретен, статус берём напрямую. Сервис/окружение —
+// best-effort из resultingProperties. Клиентские сборки (Wo_Client_*) сюда НЕ берём — они в секции «Сборки» по ветке.
+export function extractBuildIds(text) {
+  const ids = []; const seen = new Set(); const re = /buildId=(\d+)/g; let m;
+  while ((m = re.exec(String(text || '')))) { const id = m[1]; if (!seen.has(id)) { seen.add(id); ids.push(id); } }
+  return ids;
+}
+const DEPLOY_RE = /OneService|BuildAndUpdate|BuildAndDeploy|InstallSquad|Statics/i;   // бэкенд/env/статика (клиент — отдельно)
+function deployLabel(btId) {
+  const s = String(btId || '');
+  if (/OneServiceBuildAndUpdate/i.test(s)) return 'сервис';
+  if (/InstallSquadEnv/i.test(s)) return 'раскатка окружения';
+  if (/BuildAndUpdate|BuildAndDeploy/i.test(s)) return 'бэкенд';
+  if (/Statics/i.test(s)) return 'статика';
+  return s.split('_').pop() || 'деплой';
+}
+async function deployProps(id) {
+  try {
+    const j = await tcJson('/app/rest/builds/id:' + id + '/resultingProperties?locator=count:400&fields=property(name,value)');
+    const props = (j && j.property) || [];
+    const find = (re) => { const p = props.find((x) => re.test(x.name || '') && String(x.value || '').trim()); return p ? String(p.value).trim() : ''; };
+    return { service: find(/service.?name|(^|_)service($|_)|micro.?service/i), env: find(/namespace|(^|_)env($|_)|environment|squad/i) };
+  } catch { return { service: '', env: '' }; }
+}
+export async function apiSessionDeploys(res, u) {
+  if (!TC_TOKEN || !TC_HOST) { sendJSON(res, { available: false, reason: 'TeamCity не настроен (host/token)' }); return; }
+  const rel = String(u.searchParams.get('file') || '');
+  const base = path.resolve(PROJECTS_DIR);
+  const resolved = path.resolve(base, rel);
+  if ((resolved !== base && !resolved.startsWith(base + path.sep)) || !resolved.endsWith('.jsonl')) { sendJSON(res, { available: true, deploys: [], reason: 'bad file' }); return; }
+  let text = ''; try { text = readFileSync(resolved, 'utf8'); } catch { sendJSON(res, { available: true, deploys: [] }); return; }
+  const last = extractBuildIds(text).slice(-12).reverse();   // последние упомянутые (свежие внизу файла) — вверх списка
+  try {
+    const deploys = [];
+    for (const id of last) {
+      if (deploys.length >= 6) break;
+      let b; try { b = await tcJson('/app/rest/builds/id:' + id + '?fields=id,number,status,state,buildTypeId,webUrl,finishDate'); } catch { continue; }
+      if (!b || !b.id || !DEPLOY_RE.test(b.buildTypeId || '')) continue;   // не деплой (клиентская сборка / чужой билд) — пропускаем
+      const p = await deployProps(id);
+      deploys.push({ id: b.id, number: b.number || '', status: b.status || '', state: b.state || '', buildTypeId: b.buildTypeId || '', webUrl: b.webUrl || '', label: deployLabel(b.buildTypeId), service: p.service, env: p.env });
+    }
+    markHealth('teamcity', { ok: true, reason: '' });
+    sendJSON(res, { available: true, host: TC_HOST, deploys });
+  } catch (e) {
+    sendJSON(res, { available: false, reason: (e && e.message) || String(e), host: TC_HOST });
   }
 }
 

@@ -5,7 +5,7 @@ import { esc, mdToHtml, ctxColor, kTok } from './util.js';
 import { appendHTML, blockHTML, attachThumbsHTML, scrollBottom, isNearBottom, wireConsole } from './transcript.js';
 import { clearQueue, setComposerBusy, updateQueueIndicator, drainQueue, saveSessionSettings, armPending } from './composer.js';
 import { renderCtxTabs } from './nav.js';
-import { loadBuilds, loadMrs, loadJira, wireTags, stopAgentsPoll } from './services.js';
+import { loadBuilds, loadMrs, loadJira, loadDeploys, wireTags, stopAgentsPoll } from './services.js';
 import { ensureNotifyPermission, titleOf, notifyDone, notifyInput } from './notify.js';
 import { sideHTML, wireRailTabs } from './rail.js';
 import { launchUnity } from './unity.js';
@@ -31,6 +31,7 @@ export function stopStream(){
   if (S.streamTimer){ clearInterval(S.streamTimer); S.streamTimer = null; }
   if (S.currentES){ try { S.currentES.close(); } catch {} S.currentES = null; }
   if (S.buildTimer){ clearInterval(S.buildTimer); S.buildTimer = null; }
+  if (S.deployTimer){ clearInterval(S.deployTimer); S.deployTimer = null; }
   stopTail();
   stopRailRefresh();
   stopAgentsPoll();
@@ -419,7 +420,7 @@ export async function runPrompt(payload){
         if (t && !t.error && Array.isArray(t.blocks) && t.blocks.length){ if (S.currentFile === f) openSession(f); return; }
         if (t && !t.error && S.currentFile === f){   // пусто — консоль не трогаем, обновим правый рейл
           SESSION_CACHE[f] = t;
-          const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); wireRailTabs(); loadBuilds(t); loadMrs(t); loadJira(t); }
+          const side = document.getElementById('sessionSide'); if (side){ side.innerHTML = sideHTML(t); document.querySelectorAll('#sessionSide .sc-cu-run').forEach(el=>el.addEventListener('click',()=>launchUnity(el.dataset.cu,el.dataset.cwd))); wireTags(); wireSideActions(t); wireRailTabs(); loadBuilds(t); loadDeploys(t); loadMrs(t); loadJira(t); }
           appendHTML(cons, '<div class="cx-note">Запуск не дал ответа — сообщений в сессии нет. Если это упакованное приложение и ошибка повторяется, пришлите текст ошибки выше.</div>');
         }
       }, 700);
@@ -589,7 +590,7 @@ export function startRailRefresh(file){
     if (!t2 || t2.error || S.currentFile !== file) return;
     SESSION_CACHE[file] = t2;
     refreshRailFields(t2);                          // описание=последний промт + чипы скоупа/clientCu — появляются/меняются по мере накопления контекста
-    loadMrs(t2); loadJira(t2); loadBuilds(t2);      // live-секции обновляют свои боксы на месте (без мигания)
+    loadMrs(t2); loadJira(t2); loadBuilds(t2); loadDeploys(t2);      // live-секции обновляют свои боксы на месте (без мигания)
     if (!t2.active && !t2.serverActive && !S.streaming){ stopRailRefresh(); }   // затихла, хода на сервере нет, Deck не стримит → рефреш не нужен
   }, 15000);
 }

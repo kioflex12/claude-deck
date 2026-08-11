@@ -53,6 +53,7 @@ export const S = {
 
   // поллинг / notify / таймеры-хэндлы
   buildTimer: null,
+  deployTimer: null,
   notifyEnabled: false,
   prevWorkingFiles: new Set(),  // «работающие» сессии на прошлый опрос (детект working→idle)
   pendingDone: new Set(),       // простаивают 1 опрос — гасим ложное «готово» на долгом tool-call

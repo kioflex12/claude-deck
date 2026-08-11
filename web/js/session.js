@@ -6,7 +6,7 @@ import { openWoJira, toast } from './ui.js';
 import { isWorking, renderBoard } from './board.js';
 import { setView, renderCtxTabs } from './nav.js';
 import { launchUnity } from './unity.js';
-import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira } from './services.js';
+import { wireTags, startAgentsPoll, loadBuilds, loadMrs, loadJira, loadDeploys } from './services.js';
 import { wireSideActions } from './dialogs.js';
 import { sideHTML, wireRailTabs, scopeChipsHTML } from './rail.js';
 import { renderThread, appendHTML } from './transcript.js';
@@ -133,7 +133,7 @@ export function renderRail(t){
   side.innerHTML = sideHTML(t);
   side.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
   wireTags(); wireSideActions(t); wireRailTabs();
-  loadBuilds(t); loadMrs(t); loadJira(t);
+  loadBuilds(t); loadDeploys(t); loadMrs(t); loadJira(t);
 }
 
 // Surgical-обновление статичных полей рейла по ходу сессии (описание=последний промт, чипы скоупа/clientCu появляются по

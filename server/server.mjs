@@ -21,7 +21,7 @@ import { collectSkills, collectAllSkills, apiMcp, apiMcpStatus, apiMcpLogin, api
 import { apiUnityInstances } from './unity.mjs';
 import { apiUsage, apiModels } from './sdk.mjs';
 import { apiChatPrepare, apiChat, apiChatInput, apiApprove, apiAnswer, apiPendingQuestions, apiPendingApprovals, apiStop } from './chat.mjs';
-import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest, apiJiraComment, apiCreateMr, apiTriggerBuild, apiEnvStatus } from './services.mjs';
+import { apiBuild, apiMrs, apiJira, apiHealth, apiConfigTest, apiJiraComment, apiCreateMr, apiTriggerBuild, apiEnvStatus, apiSessionDeploys } from './services.mjs';
 import { apiConfig, apiImportTokens, apiConfigExport, apiConfigImport, apiAuth, apiAuthLogin, apiAuthCode, apiAuthCancel, apiAuthLogout, autoImportOnFirstRun } from './auth.mjs';
 
 // -------- статика web/ (D4c: клиент разбит на ES-модули + deck.css). Path-safe: только из web/. --------
@@ -106,6 +106,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/pending-approvals') { apiPendingApprovals(res, u); return; }
   if (u.pathname === '/api/stop') { apiStop(res, u); return; }
   if (u.pathname === '/api/build') { apiBuild(res, u); return; }
+  if (u.pathname === '/api/session-deploys') { apiSessionDeploys(res, u).catch((e) => sendJSON(res, { available: false, reason: String(e && e.message || e) }, 500)); return; }
   if (u.pathname === '/api/mrs') { apiMrs(res, u); return; }
   if (u.pathname === '/api/jira') { apiJira(res, u); return; }
   if (u.pathname === '/api/jira-comment') { apiJiraComment(req, res).catch((e) => sendJSON(res, { ok: false, error: String(e && e.message || e) }, 500)); return; }

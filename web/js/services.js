@@ -53,6 +53,32 @@ export async function loadBuilds(t){
   }
 }
 
+// Деплои сессии (бэкенд-сервисы/раскатка окружения/статика): TeamCity-джобы, которые сессия триггерила. Данные —
+// /api/session-deploys (парсит buildId из транскрипта, спрашивает статус). Живой рефреш, пока что-то катится.
+export async function loadDeploys(t){
+  if (S.deployTimer){ clearInterval(S.deployTimer); S.deployTimer = null; }
+  const box0 = document.getElementById('deployBox'); if (!box0 || !t.file) return;
+  const url = '/api/session-deploys?file=' + encodeURIComponent(t.file);
+  const render = async () => {
+    let d; try { const r = await fetch(url, { cache:'no-store' }); d = await r.json(); } catch { probeFailed('deployBox', 'проверка деплоев недоступна'); return false; }
+    const box = document.getElementById('deployBox'); if (!box) return false;
+    if (!d.available){ box.innerHTML = `<div class="rail-hint">TeamCity недоступен: ${esc(d.reason||'нет доступа')}</div>`; return false; }
+    if (!d.deploys || !d.deploys.length){ box.innerHTML = `<div class="rail-empty">— деплоев нет —</div>`; return false; }
+    let running = false;
+    box.innerHTML = d.deploys.map(b => {
+      const s = buildDot(b); if (s.run) running = true;
+      const who = [b.service, b.env].filter(Boolean).join(' → ') || b.label;
+      const link = b.webUrl ? aReal(b.webUrl, '#'+esc(b.number||'—'), 'plain') : `<span class="ri-v">#${esc(b.number||'—')}</span>`;
+      return `<div class="build-row"><span class="plat" title="${esc(b.buildTypeId||'')}">${esc(who)}</span><span class="build-state"><span class="d ${s.cls}"></span>${s.label}</span><span class="bl-link">${link}</span></div>`;
+    }).join('');
+    return running;
+  };
+  const running = await render();
+  if (running && !S.deployTimer){
+    S.deployTimer = setInterval(async () => { const r = await render(); if (!r && S.deployTimer){ clearInterval(S.deployTimer); S.deployTimer = null; } }, 15000);
+  }
+}
+
 function mrPillHTML(m){
   const cls = m.state==='merged' ? 'mr-merged' : m.state==='closed' ? 'mr-closed' : 'mr-open';
   const lbl = m.state==='merged' ? 'влит' : m.state==='closed' ? 'закрыт' : 'открыт';

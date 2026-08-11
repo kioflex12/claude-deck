@@ -9,6 +9,7 @@ import os from 'node:os';
 import { detectClientCuFromText, detectBranchFromText, detectTargetEnvFromText, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
+import { extractBuildIds } from '../server/services.mjs';
 
 const SRV = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'server.mjs')).href;
 // Динамический импорт server.mjs — ДО объявления тестов: node:test может начать выполнять уже объявленные тесты,
@@ -29,6 +30,11 @@ test('detectBranchFromText: только ветка WO самой сессии (
   assert.equal(detectBranchFromText(txt, 'WO-13887'), 'WO-13887-chat-r4-r5-realtime-preprod');
   assert.equal(detectBranchFromText(txt, ''), '', 'без WO сессии не угадываем');
   assert.equal(detectBranchFromText('нет веток', 'WO-1'), '');
+});
+test('extractBuildIds: buildId из TeamCity-ссылок транскрипта, уникальные в порядке появления', () => {
+  const t = 'log https://wo-teamcity/viewLog.html?buildId=146877&buildTypeId=Wo_Backend_K8sNewCluster_OneServiceBuildAndUpdate ... снова buildId=146877 ... и ещё viewLog.html?buildId=2820';
+  assert.deepEqual(extractBuildIds(t), ['146877', '2820'], 'дедуп + порядок появления');
+  assert.deepEqual(extractBuildIds('нет ссылок'), []);
 });
 test('detectTargetEnvFromText: целевой сквад из текста (самое частое упоминание), preprod не ловим', () => {
   assert.equal(detectTargetEnvFromText('окружение: squad40 ... раскатываю squad40 на squad40'), 'squad-40');
