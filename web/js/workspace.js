@@ -159,6 +159,8 @@ export function renderWorkspace(){
 function ensureLayer(host){
   if (!(layer && host.contains(layer))){ layer = document.createElement('div'); layer.className = 'ws-frame-layer'; host.appendChild(layer); }
   if (!(dragOv && host.contains(dragOv))){ dragOv = document.createElement('div'); dragOv.className = 'ws-dragover'; dragOv.innerHTML = '<i class="ws-dz-hi"></i>'; host.appendChild(dragOv); }   // оверлей — только визуальная подсветка зон; drag ведут pointer-события вкладки (updateDropTarget/performDrop)
+  // «+ Новая сессия» — ВСЕГДА видна в воркспейсе (глобальная кнопка в now-баре живёт в #viewBoard, который в этом виде скрыт).
+  if (!host.querySelector('.ws-newbtn')){ const nb = document.createElement('button'); nb.className = 'ws-newbtn'; nb.type = 'button'; nb.title = 'Новая сессия'; nb.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg><span>Новая сессия</span>'; nb.addEventListener('click', () => openNewSessionDialog({ target:'workspace' })); host.appendChild(nb); }
 }
 
 function emptyState(){

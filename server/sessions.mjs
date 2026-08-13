@@ -202,6 +202,16 @@ export function detectWorkedWo(text) {
   const m = re.exec(String(text));
   return m ? m[1].toUpperCase() : '';
 }
+// Ссылка на управляющую таблицу (УТ, Google Sheet), с которой работает сессия (statics-маппинг): берём самый частый
+// spreadsheet-id из текста и собираем каноничный URL. Для чипа «УТ» с переходом в таблицу.
+export function detectControlTableUrl(text) {
+  const hits = String(text).match(/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]{20,}/g) || [];
+  if (!hits.length) return '';
+  const cnt = {};
+  for (const u of hits) { const m = u.match(/\/d\/([a-zA-Z0-9_-]{20,})/); if (m) cnt[m[1]] = (cnt[m[1]] || 0) + 1; }
+  const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
+  return top ? 'https://docs.google.com/spreadsheets/d/' + top : '';
+}
 
 // -------- сбор списка сессий --------
 
@@ -318,7 +328,7 @@ function textSummary(f) {
   const winTokens = lastUsageWindow(text);
   const project = cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) : f.projDir;
   const wo = woOf(gitBranch) || woOf(title) || firstUserWo(text) || detectWorkedWo(text);   // WO: ветка → заголовок → первый промт → git-ветка WO-… созданная сессией (обычная задача, ставшая workflow позже)
-  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo), squadMarker: wo ? detectSquadMarkerFromText(text) : '' };
+  const c = { cwd, gitBranch, baseBranchText, title, lastPrompt, model, winTokens, msgs: countMessages(text), project, wo, clientCuText: detectClientCuFromText(text), branchText: detectBranchFromText(text, wo), squadMarker: wo ? detectSquadMarkerFromText(text) : '', utUrl: detectControlTableUrl(text) };
   _summaryCache.set(key, c);
   return c;
 }
@@ -360,6 +370,7 @@ function buildSessionSummary(f, wfStates) {
     wfHasState: !!st,   // есть ли dev-workflow-состояние (спеккит) для этой WO — иначе Jira одна не двигает в продвинутые колонки
     column: columnByAge(f.mtime),
     tags: getTags(f.rel),                            // пользовательские теги (Deck-side)
+    utUrl: c.utUrl,                                  // ссылка на управляющую таблицу (чип «УТ»)
     ...wf,
     ...scope,
   };
@@ -601,6 +612,7 @@ export function apiSession(relFile) {
     count: msgCount,
     notes,
     tags: getTags(relFile),
+    utUrl: detectControlTableUrl(text),   // ссылка на управляющую таблицу (чип «УТ»)
     terminal: terminalFor(sessionId, lastUserTs, maxTurnsTs, serverActive),   // R5: причина финиша (лимит/ошибка/осиротело) для видимого маркера + «Продолжить»
     ...wf,
     ...scope,

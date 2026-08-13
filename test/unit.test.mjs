@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { detectClientCuFromText, detectBranchFromText, detectSquadMarkerFromText, detectWorkedWo, tailActivity, terminalFor } from '../server/sessions.mjs';
+import { detectClientCuFromText, detectBranchFromText, detectSquadMarkerFromText, detectWorkedWo, detectControlTableUrl, tailActivity, terminalFor } from '../server/sessions.mjs';
 import { fetchRetry, isTransientStatus, runStatus, writeJsonAtomic } from '../server/core.mjs';
 import { firstString, lastString, lastUsageWindow } from '../server/text.mjs';
 import { extractBuildIds } from '../server/services.mjs';
@@ -53,6 +53,11 @@ test('detectWorkedWo: WO из git-команды создания ветки (н
   assert.equal(detectWorkedWo('{"command":"git worktree add ../wt WO-42-thing"}'), 'WO-42');
   assert.equal(detectWorkedWo('в памяти есть ветка WO-14495-quiet-device-logging-preprod, но это проза'), '', 'упоминание вне поля command → не WO сессии');
   assert.equal(detectWorkedWo('{"command":"git status"}'), '', 'обычная git-команда без WO-ветки → пусто');
+});
+test('detectControlTableUrl: каноничная ссылка на УТ по самому частому spreadsheet-id', () => {
+  const t = 'открой https://docs.google.com/spreadsheets/d/1AbC_dEfG-hIjKlMnOpQrStUvWxYz012345/edit#gid=0 ... снова https://docs.google.com/spreadsheets/d/1AbC_dEfG-hIjKlMnOpQrStUvWxYz012345/edit';
+  assert.equal(detectControlTableUrl(t), 'https://docs.google.com/spreadsheets/d/1AbC_dEfG-hIjKlMnOpQrStUvWxYz012345');
+  assert.equal(detectControlTableUrl('нет таблиц'), '');
 });
 test('tailActivity: «что делает» из последнего блока ленты', () => {
   assert.equal(tailActivity([{ kind: 'tool', name: 'Bash', arg: 'git commit', result: '' }]), '⚙ Bash · git commit', 'инструмент без result → выполняется');

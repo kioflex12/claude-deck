@@ -2,7 +2,7 @@
 // Кластер сессии/чата разнесён по rail/transcript/composer/stream; здесь — только точка сборки.
 import { S, SESSION_CACHE } from './store.js';
 import { esc, SIDE_TOGGLE } from './util.js';
-import { openWoJira, toast } from './ui.js';
+import { openWoJira, toast, openExternal } from './ui.js';
 import { isWorking, renderBoard } from './board.js';
 import { setView, renderCtxTabs } from './nav.js';
 import { launchUnity } from './unity.js';
@@ -133,6 +133,7 @@ export function renderRail(t){
   side.innerHTML = sideHTML(t);
   side.dataset.railWo = t.wo || '';   // маркер: под какой WO собран рейл — refresh-цикл сравнивает и делает полный ре-рендер при смене (секции Jira/Деплои гейтятся на wo)
   side.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
+  wireUtChips(side);
   wireTags(); wireSideActions(t); wireRailTabs();
   loadBuilds(t); loadDeploys(t); loadMrs(t); loadJira(t);
 }
@@ -147,8 +148,11 @@ export function refreshRailFields(t){
   if (chips){
     chips.innerHTML = scopeChipsHTML(t);
     chips.querySelectorAll('.sc-cu-run').forEach(el => el.addEventListener('click', () => launchUnity(el.dataset.cu, el.dataset.cwd)));
+    wireUtChips(chips);
   }
 }
+// Чип «УТ» — переход в управляющую Google-таблицу сессии (внешним приложением/браузером).
+function wireUtChips(root){ root.querySelectorAll('.sc-ut').forEach(el => el.addEventListener('click', () => { if (el.dataset.ut) openExternal(el.dataset.ut); })); }
 
 // Ре-сёрфейс висящих вопросов при перезаходе: пока ход в фоне ждёт ответа человека, карточку надо дорисовать в ленту
 // и снова принять выбор (сервер держит вопрос в pendingQuestions до /api/answer). Пусто/ошибка — тихо ничего.

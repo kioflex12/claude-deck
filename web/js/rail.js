@@ -13,6 +13,7 @@ export function scopeChipsHTML(t){
     + (t.targetEnv?`<span class="chip sc-env" title="целевое окружение/сквад">${esc(t.targetEnv)}</span>`:'')
     + (t.backend?`<span class="chip sc-be">backend</span>`:'')
     + (t.statics?`<span class="chip sc-st">статика</span>`:'')
+    + (t.utUrl?`<span class="chip sc-ut" data-ut="${esc(t.utUrl)}" title="Открыть управляющую таблицу (Google Sheet)">УТ</span>`:'')
     + (t.baseBranch?`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(t.baseBranch)}${t.merged?' ✓':''}</span>`:'');
 }
 export function sideHTML(t){

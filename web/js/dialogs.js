@@ -27,7 +27,7 @@ export function modalBack(id){
 
 // Клиентские копии (cuN → рабочая копия client-N, как в аргументах /bugfix-*) и сквады — для форм режимов.
 const CLIENT_COPIES = [1, 2, 3, 4];
-const SQUADS = Array.from({ length: 30 }, (_, i) => i + 1);
+const SQUADS = Array.from({ length: 50 }, (_, i) => i + 1);
 
 // Собрать первый промт для режима bugfix: /bugfix-<env> <задача> <target>, где target = client-N [server] | server.
 function buildBugfixPrompt(f){

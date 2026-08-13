@@ -5,7 +5,7 @@
 import { S, JIRA_CACHE, MR_CACHE, SESSION_CACHE, COLUMNS } from './store.js';
 import { esc, ctxColor, pctOf, timeAgo } from './util.js';
 import { searchableText, effectiveColumn, cardStatus, WF_COLUMNS, WF_LABEL, mrKey } from './columns.js';
-import { openWoJira, toast } from './ui.js';
+import { openWoJira, toast, openExternal } from './ui.js';
 import { launchUnity } from './unity.js';
 import { contextSession } from './usage.js';
 import { openNewSessionDialog, openRenameDialog, openDeleteDialog, openForkDialog, openQuickJiraDialog, openCreateMrDialog, openDeployDialog } from './dialogs.js';
@@ -32,6 +32,7 @@ function scopeChipsHTML(s){   // скоуп: cuN · backend · статика ·
   if (s.targetEnv) out.push(`<span class="chip sc-env" title="целевое окружение/сквад">${esc(s.targetEnv)}</span>`);
   if (s.backend)  out.push(`<span class="chip sc-be">backend</span>`);
   if (s.statics)  out.push(`<span class="chip sc-st">статика</span>`);
+  if (s.utUrl)    out.push(`<span class="chip sc-ut" data-ut="${esc(s.utUrl)}" title="Открыть управляющую таблицу (Google Sheet)">УТ</span>`);
   if (s.baseBranch) out.push(`<span class="chip sc-base" title="базовая ветка (форк-источник ≈ таргет мерджа)">⎇ ${esc(s.baseBranch)}${s.merged?' ✓':''}</span>`);
   return out.join('');
 }
@@ -125,6 +126,9 @@ export function renderBoard(animate){
   });
   board.querySelectorAll('.sc-cu-run').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); launchUnity(el.dataset.cu, el.dataset.cwd); });   // тап по cu-тегу → Unity, НЕ открывать карточку
+  });
+  board.querySelectorAll('.sc-ut').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); if (el.dataset.ut) openExternal(el.dataset.ut); });   // тап по «УТ» → управляющая таблица, НЕ открывать карточку
   });
   board.querySelectorAll('.card-wo').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); openWoJira(el.dataset.wo); });   // тап по тегу задачи → Jira, НЕ открывать карточку
