@@ -19,6 +19,10 @@ import { setName } from './sessions.mjs';
 // permissions.allow (Bash(*)/Write(*)/mcp__*…), которые пропускали бы мутирующее мимо canUseTool. Managed-ask имеет
 // высший приоритет (deny>ask>allow) и возвращает их под страж; read-only-часть mcp__* отсеет isReadOnlyTool в canUseTool.
 const MANAGED_ASK = ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__*'];
+// Старые версии Claude CLI не знают флаг --managed-settings (его порождает опция managedSettings) → спавн падает с
+// «unknown option '--managed-settings'», и промты не уходят. Флаг флипается в false на первом таком отказе и дальше
+// managedSettings не передаём: canUseTool остаётся основным стражем (managed-ask — лишь доп. слой поверх project-allow).
+let MANAGED_SETTINGS_OK = true;
 export function isReadOnlyTool(name) {
   if (READ_ONLY_TOOLS.has(name)) return true;
   const bare = String(name || '').replace(/^mcp__.+?__/, '').toLowerCase();   // mcp__server__tool -> tool
@@ -191,7 +195,7 @@ export async function apiChat(req, res, u) {
     }
   }
 
-  const channel = makeInputChannel({ message: buildUserMessage(prompt, attachments), pid });   // steering: первый промт (+pid) + канал для подкидываемых
+  let channel = makeInputChannel({ message: buildUserMessage(prompt, attachments), pid });   // steering: первый промт (+pid) + канал для подкидываемых; let — пересоздаётся при retry без managedSettings
   channel.setOnConsume((p) => { if (sessionKey) markPid(sessionKey, p); });   // pid отмечается доставленным в момент реальной выдачи сообщения SDK
   const ac = new AbortController();
   let closed = false;
@@ -294,7 +298,6 @@ export async function apiChat(req, res, u) {
       },
       settingSources: ['user', 'project', 'local'],   // как настоящая CC-сессия: скиллы (/dev-workflow…), CLAUDE.md, агенты
       skills: 'all',                                   // явно включаем все найденные скиллы
-      managedSettings: { permissions: { ask: MANAGED_ASK } },   // страж поверх project-allow (см. MANAGED_ASK)
       includePartialMessages: true,   // дельты текста ассистента
       abortController: ac,
       maxTurns: 200,   // автономность: дефолт 24 обрывал длинные ходы (bugfix с Read/Grep/Bash легко >24 шагов) — SDK молча
@@ -306,11 +309,19 @@ export async function apiChat(req, res, u) {
     if (!isNew) options.resume = sessionId;   // существующая сессия / форк — resume; новая — без resume
     if (isFork) options.forkSession = true;   // форк: resume создаёт НОВЫЙ session_id (контекст исходной), оригинал не трогаем
     options.systemPrompt = { type: 'preset', preset: 'claude_code' };   // CLAUDE.md грузится нативно через settingSources('project')
-    const q = query({ prompt: channel.gen(), options });
-    let lastWin, lastCtx, lastSub, lastErr = false;
-    const toolBufs = {};   // индекс content-блока → { name, buf } для сборки tool-input из input_json_delta (показ команды live)
-    let turnOutTok = 0, msgOutTok = 0;   // сгенерировано токенов: закрытыми сообщениями хода + текущим (для живого счётчика в индикаторе)
-    for await (const m of q) {
+    // Retry-обёртка: старый CLI без --managed-settings падает на первом же спавне (до выдачи промта) — тогда флипаем
+    // MANAGED_SETTINGS_OK, пересоздаём канал (промт ещё не выдан) и повторяем без managedSettings.
+    let includeManaged = MANAGED_SETTINGS_OK, attempt = 0;
+    while (true) {
+     attempt++;
+     if (includeManaged) options.managedSettings = { permissions: { ask: MANAGED_ASK } }; else delete options.managedSettings;
+     if (attempt > 1) { channel = makeInputChannel({ message: buildUserMessage(prompt, attachments), pid }); channel.setOnConsume((p) => { if (sessionKey) markPid(sessionKey, p); }); streamEntry.push = channel.push; }
+     const q = query({ prompt: channel.gen(), options });
+     let lastWin, lastCtx, lastSub, lastErr = false;
+     const toolBufs = {};   // индекс content-блока → { name, buf } для сборки tool-input из input_json_delta (показ команды live)
+     let turnOutTok = 0, msgOutTok = 0;   // сгенерировано токенов: закрытыми сообщениями хода + текущим (для живого счётчика в индикаторе)
+     try {
+      for await (const m of q) {
       if (m.type === 'result') {   // конец ОДНОГО хода — обрабатываем ВСЕГДА (в т.ч. при closed), иначе канал не закроется и query зависнет
         const u = m.usage || {};
         const win = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -355,10 +366,20 @@ export async function apiChat(req, res, u) {
       } else if (m.type === 'assistant' && m.error) {
         send({ type: 'error', message: String(m.error) });
       }
+      }
+      if (!closed) send({ type: 'done', subtype: lastSub, isError: lastErr, winTokens: lastWin || undefined, ctxPct: lastCtx });   // весь query завершился (канал закрыт и осушен)
+      const state = lastSub === 'error_max_turns' ? 'max_turns' : (lastErr ? 'error' : 'done');
+      markRun(state, lastSub, lastErr, state === 'max_turns' ? 'Достигнут лимит ходов (maxTurns)' : (state === 'error' ? 'Ход завершился ошибкой' : ''));
+      break;   // успех — выходим из retry-цикла
+     } catch (inner) {
+      if (includeManaged && /unknown option '--managed-settings'/i.test(String(inner && inner.message))) {
+        MANAGED_SETTINGS_OK = false; includeManaged = false;   // CLI без флага → повтор без managedSettings, запоминаем на процесс
+        dbgLog('chat MANAGED-SETTINGS-UNSUPPORTED stream=' + streamId + ' → повтор без managedSettings');
+        continue;
+      }
+      throw inner;   // прочие ошибки → внешний catch
+     }
     }
-    if (!closed) send({ type: 'done', subtype: lastSub, isError: lastErr, winTokens: lastWin || undefined, ctxPct: lastCtx });   // весь query завершился (канал закрыт и осушен)
-    const state = lastSub === 'error_max_turns' ? 'max_turns' : (lastErr ? 'error' : 'done');
-    markRun(state, lastSub, lastErr, state === 'max_turns' ? 'Достигнут лимит ходов (maxTurns)' : (state === 'error' ? 'Ход завершился ошибкой' : ''));
   } catch (e) {
     channel.end();   // прекратить ожидание ввода на ошибке/аборте
     const aborted = ac.signal.aborted;   // Стоп (/api/stop → ac.abort) — намеренная остановка, не сбой
