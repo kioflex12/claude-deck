@@ -75,13 +75,16 @@ export function firstUserWo(text) {
     idx = nl === -1 ? text.length : nl + 1;
     if (!line.includes('"type":"user"')) continue;
     let ev; try { ev = JSON.parse(line); } catch { continue; }
-    if (ev.type !== 'user') continue;
+    if (ev.type !== 'user' || ev.isMeta === true) continue;   // isMeta = служебная вставка (загрузка скилла/ре-инвок) — не человек
     const c = ev.message && ev.message.content;
     let s = '';
     if (typeof c === 'string') s = c;
     else if (Array.isArray(c)) s = c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ');
     s = s.replace(SYSREM, '').trim();
     if (!s) continue;                 // пропускаем user-события с одними tool_result
+    // Блок загрузки скилла / вызов команды — не человеческий промт: несёт ПРИМЕРЫ WO из доки скилла (в dev-workflow —
+    // «WO-10300»), которые иначе принимались за WO задачи. Пропускаем, не считая за реплику.
+    if (/^Base directory for this skill:/.test(s) || s.includes('<command-name>')) continue;
     seen++;
     const m = s.match(/WO-\d+/);
     if (m) return m[0];

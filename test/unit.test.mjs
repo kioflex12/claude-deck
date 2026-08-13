@@ -46,13 +46,15 @@ test('detectSquadMarkerFromText: сквад ТОЛЬКО из JSON-поля ст
   assert.equal(detectSquadMarkerFromText('пример из доки v10156-squad-9 для apply-sql-patch'), '', 'боилерплейт CLAUDE.md не должен давать squad-9');
   assert.equal(detectSquadMarkerFromText('деплоим на squad40, обсуждаем squad-12'), '', 'голые упоминания squad-N — не маркер');
 });
-test('detectWorkedWo: WO из git-команды создания ветки (не из прозы/памяти)', () => {
-  const branchCmd = '{"type":"tool_use","name":"Bash","input":{"command":"cd /d/wo/wt && git branch -m perf-x WO-14495-quiet-device-logging-preprod && echo ok"}}';
-  assert.equal(detectWorkedWo(branchCmd), 'WO-14495', 'git branch -m … WO-N → авторитетно');
-  assert.equal(detectWorkedWo('{"command":"git checkout -b WO-777-fix"}'), 'WO-777');
-  assert.equal(detectWorkedWo('{"command":"git worktree add ../wt WO-42-thing"}'), 'WO-42');
-  assert.equal(detectWorkedWo('в памяти есть ветка WO-14495-quiet-device-logging-preprod, но это проза'), '', 'упоминание вне поля command → не WO сессии');
-  assert.equal(detectWorkedWo('{"command":"git status"}'), '', 'обычная git-команда без WO-ветки → пусто');
+test('detectWorkedWo: WO-ветка из git-команды tool_use (не из прозы/доки скиллов)', () => {
+  const line = (cmd) => JSON.stringify({ type:'assistant', message:{ role:'assistant', content:[{ type:'tool_use', name:'Bash', input:{ command: cmd } }] } });
+  assert.equal(detectWorkedWo(line('cd /d/wo/wt && git branch -m perf-x WO-14495-quiet-device-logging-preprod && echo ok')), 'WO-14495', 'git branch -m … WO-N-slug');
+  assert.equal(detectWorkedWo(line('cd "D:\\\\wo\\\\vibecode" && git show origin/WO-13774-docs:docs/x.sql')), 'WO-13774', 'git show origin/WO-N-slug (кавычки в Windows-пути не мешают)');
+  assert.equal(detectWorkedWo(line('git checkout -b WO-777-fix')), 'WO-777');
+  assert.equal(detectWorkedWo(line('git worktree add ../wt WO-42-thing')), 'WO-42');
+  assert.equal(detectWorkedWo(line('git status')), '', 'git без WO-ветки → пусто');
+  assert.equal(detectWorkedWo(line('echo WO-10300')), '', 'голый WO-N без slug (пример из доки) → не WO сессии');
+  assert.equal(detectWorkedWo('в памяти есть ветка WO-14495-quiet-device-logging-preprod, но это проза'), '', 'вне tool_use → не WO сессии');
 });
 test('detectControlTableUrl: каноничная ссылка на УТ по самому частому spreadsheet-id', () => {
   const t = 'открой https://docs.google.com/spreadsheets/d/1AbC_dEfG-hIjKlMnOpQrStUvWxYz012345/edit#gid=0 ... снова https://docs.google.com/spreadsheets/d/1AbC_dEfG-hIjKlMnOpQrStUvWxYz012345/edit';

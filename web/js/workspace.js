@@ -54,7 +54,10 @@ function walk(node, cb){ if (!node) return; cb(node); if (node.t === 'split'){ w
 function findLeaf(id){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.id===id) r = n; }); return r; }
 function leafOfTab(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf' && n.tabs.some(t=>t.id===tid)) r = n; }); return r; }
 function tabById(tid){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const t = n.tabs.find(x=>x.id===tid); if (t) r = t; } }); return r; }
-function tabByFile(file){ let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const i = n.tabs.findIndex(t => t.file === file); if (i >= 0) r = { leaf:n, i }; } }); return r; }
+// Сравнение rel-файлов регистронезависимо: одна сессия бывает с разным регистром буквы диска в projDir (новая
+// резолвится из cwd как «D--wo-…», а в списке с диска — «d--wo-…»). Регистрозависимый === промахивался → дубль-вкладки.
+const normFile = (f) => String(f || '').toLowerCase();
+function tabByFile(file){ const nf = normFile(file); if (!nf) return null; let r = null; walk(WS.root, n => { if (n.t==='leaf'){ const i = n.tabs.findIndex(t => t.file && normFile(t.file) === nf); if (i >= 0) r = { leaf:n, i }; } }); return r; }
 function titleForTab(file){ const hit = tabByFile(file); if (hit) return hit.leaf.tabs[hit.i].title || ''; const s = (S.SESSIONS || []).find(x => x.file === file); return (s && s.title) || ''; }
 // Родительский сплит узла + сторона ('a'|'b'); null для корня.
 function parentOf(target){ let res = null; walk(WS.root, n => { if (n.t==='split'){ if (n.a===target) res={ split:n, side:'a' }; else if (n.b===target) res={ split:n, side:'b' }; } }); return res; }
@@ -74,7 +77,7 @@ function collapseLeaf(leaf){
 // Возвращает true, если что-то удалили. Layer/DOM могут ещё не существовать (зов на loadWS) — тогда чистим только модель.
 function removeDuplicateTabs(){
   const seen = new Set(); const dupes = [];
-  walk(WS.root, n => { if (n.t === 'leaf') n.tabs.forEach(t => { if (t.file){ if (seen.has(t.file)) dupes.push(t.id); else seen.add(t.file); } }); });
+  walk(WS.root, n => { if (n.t === 'leaf') n.tabs.forEach(t => { if (t.file){ const k = normFile(t.file); if (seen.has(k)) dupes.push(t.id); else seen.add(k); } }); });
   if (!dupes.length) return false;
   for (const id of dupes){
     const leaf = leafOfTab(id); if (leaf){ const i = leaf.tabs.findIndex(t => t.id === id); if (i >= 0){ leaf.tabs.splice(i, 1); if (leaf.active >= leaf.tabs.length) leaf.active = Math.max(0, leaf.tabs.length - 1); if (!leaf.tabs.length) collapseLeaf(leaf); } }

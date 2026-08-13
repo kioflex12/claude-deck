@@ -198,9 +198,25 @@ export function detectBranchFromText(text, wo) {
 // git-команды создания/переключения ветки в tool_use (`checkout -b` / `switch -c` / `branch -m …` / `worktree add …`
 // WO-N) — авторитетный структурный сигнал. НЕ ловим прозу/память: WO-имена в тексте инжектов не лежат в поле "command".
 export function detectWorkedWo(text) {
-  const re = /"command"\s*:\s*"[^"]*?\bgit\b[^"]*?\b(?:checkout|switch|branch|worktree)\b[^"]*?(WO-\d+)/gi;
-  const m = re.exec(String(text));
-  return m ? m[1].toUpperCase() : '';
+  // WO-ВЕТКА (WO-N-slug) в git-команде tool_use — авторитетно и отсекает голые WO-N из примеров в доках скиллов
+  // (в dev-workflow-доке пример «WO-10300» БЕЗ slug'а — не матчится). Ловит любой git-подглагол (checkout/switch/
+  // branch/worktree/show/fetch/push…), важна связка «git … WO-N-slug». Парсим построчно и берём РАСПАРСЕННУЮ команду:
+  // regex по сырому JSON спотыкался об экранированные кавычки внутри Windows-путей (`cd "D:\…" && git …`). Самая частая WO.
+  const cnt = {};
+  for (const line of String(text).split('\n')) {
+    if (line.indexOf('"tool_use"') < 0 || line.indexOf('WO-') < 0) continue;   // дешёвый пре-фильтр
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    const content = o && o.message && o.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const c of content) {
+      if (!c || c.type !== 'tool_use') continue;
+      const inp = c.input || {};
+      const cmd = String(inp.command || inp.file_path || inp.path || '');
+      const m = cmd.match(/\bgit\b[\s\S]*?\b(WO-\d+)-[a-z0-9]/i);
+      if (m) { const w = m[1].toUpperCase(); cnt[w] = (cnt[w] || 0) + 1; }
+    }
+  }
+  return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '';
 }
 // Ссылка на управляющую таблицу (УТ, Google Sheet), с которой работает сессия (statics-маппинг): берём самый частый
 // spreadsheet-id из текста и собираем каноничный URL. Для чипа «УТ» с переходом в таблицу.
